@@ -7,6 +7,7 @@
 
 class wxBoxSizer;
 class wxPanel;
+class wxSizer;
 class wxStaticText;
 class wxWindow;
 
@@ -22,6 +23,7 @@ public:
     wxWindow* content_parent() const;
     void set_title(const wxString& title);
     void set_content(wxWindow* content);
+    void set_content(wxSizer* content);
     void set_header_action(wxWindow* action);
 
 private:

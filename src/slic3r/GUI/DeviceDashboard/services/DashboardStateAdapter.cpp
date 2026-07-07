@@ -9,9 +9,73 @@
 #include <algorithm>
 #include <cmath>
 
+#include <wx/filename.h>
+
 namespace Slic3r {
 namespace GUI {
 namespace DeviceDashboard {
+
+namespace {
+
+wxString display_file_name(const MachineObject* machine)
+{
+    if (machine == nullptr)
+        return wxString();
+
+    auto clean_name = [](wxString name) {
+        name.Trim(true);
+        name.Trim(false);
+        if (name.empty() || name == "N/A")
+            return wxString();
+
+        name.Replace("\\", "/");
+        if (name.StartsWith("file://"))
+            name = name.Mid(7);
+
+        const wxString lower = name.Lower();
+        const int gcodes_pos = lower.Find("/gcodes/");
+        if (gcodes_pos != wxNOT_FOUND)
+            name = name.Mid(gcodes_pos + 8);
+        else if (lower.StartsWith("gcodes/"))
+            name = name.Mid(7);
+        else if (wxFileName(name).IsAbsolute())
+            name = wxFileName(name).GetFullName();
+
+        while (name.StartsWith("/"))
+            name = name.Mid(1);
+        return name;
+    };
+
+    if (!machine->subtask_name.empty())
+        return clean_name(from_u8(machine->subtask_name));
+    if (machine->subtask_ != nullptr && !machine->subtask_->task_name.empty())
+        return clean_name(from_u8(machine->subtask_->task_name));
+    if (machine->slice_info != nullptr && !machine->slice_info->gcode_name.empty())
+        return clean_name(from_u8(machine->slice_info->gcode_name));
+    if (machine->slice_info != nullptr && !machine->slice_info->title.empty())
+        return clean_name(from_u8(machine->slice_info->title));
+    if (!machine->m_gcode_file.empty())
+        return clean_name(from_u8(machine->m_gcode_file));
+    if (machine->model_task != nullptr && !machine->model_task->profile_name.empty())
+        return clean_name(from_u8(machine->model_task->profile_name));
+    if (machine->model_task != nullptr && !machine->model_task->model_name.empty())
+        return clean_name(from_u8(machine->model_task->model_name));
+
+    return wxString();
+}
+
+int predicted_seconds(const MachineObject* machine)
+{
+    if (machine == nullptr)
+        return -1;
+    if (machine->slice_info != nullptr && machine->slice_info->prediction > 0)
+        return machine->slice_info->prediction;
+    if (machine->subtask_ != nullptr && machine->subtask_->slice_info.prediction > 0)
+        return machine->subtask_->slice_info.prediction;
+    return -1;
+}
+
+} // namespace
 
 DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
 {
@@ -90,7 +154,7 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
 
             if (!fan_available) {
                 const int raw_speed = static_cast<int>(std::round(fan->GetCoolingFanSpeed() / 25.5f));
-                if (raw_speed > 0) {
+                if (fan->GetFanGear() != 0 || fan->GetCoolingFanSpeed() > 0) {
                     fan_available = true;
                     fan_percent = std::clamp(raw_speed, 0, 100);
                 }
@@ -104,18 +168,41 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
         }
     }
 
-    if (!machine->subtask_name.empty())
-        state.print_job.file_name = from_u8(machine->subtask_name);
-    else if (!machine->m_gcode_file.empty())
-        state.print_job.file_name = from_u8(machine->m_gcode_file);
-    if (machine->slice_info != nullptr)
-        state.print_job.thumbnail_url = from_u8(machine->slice_info->thumbnail_url);
-
     state.print_job.has_active_job = machine->is_in_printing();
-    state.print_job.progress_percent = std::clamp(machine->mc_print_percent, 0, 100);
-    state.print_job.current_layer = machine->curr_layer;
-    state.print_job.total_layers = machine->total_layers;
-    state.print_job.remaining_seconds = machine->mc_left_time;
+    if (state.print_job.has_active_job) {
+        state.print_job.file_name = display_file_name(machine);
+        if (machine->slice_info != nullptr)
+            state.print_job.thumbnail_url = from_u8(machine->slice_info->thumbnail_url);
+
+        state.print_job.progress_percent = std::clamp(machine->mc_print_percent, 0, 100);
+        state.print_job.current_layer = machine->curr_layer;
+        state.print_job.total_layers = machine->total_layers;
+        state.print_job.remaining_seconds = machine->mc_left_time > 0 ? machine->mc_left_time : -1;
+        state.print_job.elapsed_seconds = predicted_seconds(machine);
+        if (state.print_job.remaining_seconds <= 0 && state.print_job.elapsed_seconds > 0 &&
+            state.print_job.progress_percent > 0 && state.print_job.progress_percent < 100) {
+            state.print_job.remaining_seconds = std::max(0, static_cast<int>(std::round(
+                state.print_job.elapsed_seconds * (100.0 - state.print_job.progress_percent) / 100.0)));
+        }
+    }
+
+    switch (machine->GetPrintingSpeedLevel()) {
+    case SPEED_LEVEL_SILENCE:
+        state.movement.print_speed_percent = 50;
+        break;
+    case SPEED_LEVEL_NORMAL:
+        state.movement.print_speed_percent = 100;
+        break;
+    case SPEED_LEVEL_RAPID:
+        state.movement.print_speed_percent = 125;
+        break;
+    case SPEED_LEVEL_RAMPAGE:
+        state.movement.print_speed_percent = 166;
+        break;
+    default:
+        state.movement.print_speed_percent = machine->printing_speed_mag > 0 ? machine->printing_speed_mag : 100;
+        break;
+    }
 
     state.movement.can_move = state.connection.can_send_commands;
     return state;

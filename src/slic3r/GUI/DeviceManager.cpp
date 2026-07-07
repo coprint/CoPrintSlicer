@@ -3128,9 +3128,11 @@ int MachineObject::parse_json(std::string tunnel, std::string payload, bool key_
                     }
                     if (jj.contains("mc_remaining_time")) {
                         if (jj["mc_remaining_time"].is_string())
-                            mc_left_time = stoi(j["print"]["mc_remaining_time"].get<std::string>()) * 60;
+                            mc_left_time = stoi(jj["mc_remaining_time"].get<std::string>()) * 60;
                         else if (jj["mc_remaining_time"].is_number_integer())
-                            mc_left_time = j["print"]["mc_remaining_time"].get<int>() * 60;
+                            mc_left_time = jj["mc_remaining_time"].get<int>() * 60;
+                        else if (jj["mc_remaining_time"].is_number())
+                            mc_left_time = static_cast<int>(std::round(jj["mc_remaining_time"].get<double>())) * 60;
                     }
                     if (jj.contains("print_error")) {
                         if (jj["print_error"].is_number())

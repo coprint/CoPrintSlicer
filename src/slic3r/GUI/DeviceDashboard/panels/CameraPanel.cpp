@@ -22,9 +22,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Live Camera"));
-
-    auto* content = new wxPanel(m_frame->content_parent(), wxID_ANY);
-    content->SetBackgroundColour(DeviceUiStyle::card_background());
+    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
     auto* content_sizer = new wxBoxSizer(wxVERTICAL);
 
     m_refresh_btn = new wxStaticBitmap(m_frame, wxID_ANY,
@@ -35,7 +33,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
     });
     m_frame->set_header_action(m_refresh_btn);
 
-    m_viewport = new wxPanel(content, wxID_ANY);
+    m_viewport = new wxPanel(m_frame->content_parent(), wxID_ANY);
     m_viewport->SetBackgroundColour(*wxBLACK);
     m_viewport->SetMinSize(wxSize(FromDIP(420), FromDIP(410)));
     auto* viewport_sizer = new wxBoxSizer(wxVERTICAL);
@@ -48,10 +46,8 @@ CameraPanel::CameraPanel(wxWindow* parent)
     viewport_sizer->AddStretchSpacer(1);
     m_viewport->SetSizer(viewport_sizer);
 
-    content_sizer->Add(m_viewport, 1, wxEXPAND | wxTOP | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(15));
-    content->SetSizer(content_sizer);
-
-    m_frame->set_content(content);
+    content_sizer->Add(m_viewport, 1, wxEXPAND);
+    m_frame->set_content(content_sizer);
     root->Add(m_frame, 1, wxEXPAND);
     SetSizer(root);
 }

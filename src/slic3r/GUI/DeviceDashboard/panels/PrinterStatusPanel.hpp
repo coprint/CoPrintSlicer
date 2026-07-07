@@ -9,6 +9,7 @@
 #include <wx/panel.h>
 
 class wxStaticText;
+class wxStaticBitmap;
 class StaticBox;
 
 namespace Slic3r {
@@ -22,6 +23,7 @@ class PrinterStatusPanel : public wxPanel
 public:
     using ToolSelectHandler  = std::function<void(int tool_index)>;
     using NozzleTempHandler  = std::function<void(int tool_index)>;
+    using FanSpeedHandler    = std::function<void(int tool_index)>;
     using BedTempHandler     = std::function<void()>;
 
     explicit PrinterStatusPanel(wxWindow* parent);
@@ -31,12 +33,15 @@ public:
 
     void set_tool_select_handler(ToolSelectHandler handler);
     void set_nozzle_temp_handler(NozzleTempHandler handler);
+    void set_fan_speed_handler(FanSpeedHandler handler);
     void set_bed_temp_handler(BedTempHandler handler);
 
 private:
     struct ToolView {
         StaticBox*    card{nullptr};
         wxStaticText* title{nullptr};
+        wxStaticBitmap* temperature_icon{nullptr};
+        wxStaticBitmap* fan_icon{nullptr};
         wxStaticText* temperature{nullptr};
         wxStaticText* fan{nullptr};
     };
@@ -45,11 +50,13 @@ private:
 
     DeviceCardFrame* m_frame{nullptr};
     std::array<ToolView, MaxDashboardTools> m_tools;
+    wxStaticBitmap* m_bed_temperature_icon{nullptr};
     wxStaticText* m_bed_temperature{nullptr};
     int m_active_tool{0};
 
     ToolSelectHandler m_tool_select_handler;
     NozzleTempHandler m_nozzle_temp_handler;
+    FanSpeedHandler   m_fan_speed_handler;
     BedTempHandler    m_bed_temp_handler;
 };
 

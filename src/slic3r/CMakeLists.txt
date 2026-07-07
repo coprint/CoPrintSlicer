@@ -392,6 +392,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/DeviceStateStore.hpp
     GUI/DeviceDashboard/DeviceUiStyle.cpp
     GUI/DeviceDashboard/DeviceUiStyle.hpp
+    GUI/DeviceDashboard/FilamentTrackPaint.cpp
+    GUI/DeviceDashboard/FilamentTrackPaint.hpp
+    GUI/DeviceDashboard/FilamentTrackSlot.cpp
+    GUI/DeviceDashboard/FilamentTrackSlot.hpp
     GUI/DeviceDashboard/services/DashboardStateAdapter.cpp
     GUI/DeviceDashboard/services/DashboardStateAdapter.hpp
     GUI/DeviceDashboard/panels/CameraPanel.cpp
@@ -404,6 +408,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/panels/PrintStatusPanel.hpp
     GUI/DeviceDashboard/panels/PrinterStatusPanel.cpp
     GUI/DeviceDashboard/panels/PrinterStatusPanel.hpp
+    GUI/StartPrint/StartPrintDialog.cpp
+    GUI/StartPrint/StartPrintDialog.hpp
     GUI/PrinterWebView.cpp
     GUI/PrinterWebView.hpp
     GUI/PrintHostDialogs.cpp

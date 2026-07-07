@@ -48,6 +48,7 @@ Button::Button(wxWindow* parent, wxString text, wxString icon, long style, int i
 bool Button::Create(wxWindow* parent, wxString text, wxString icon, long style, int iconSize, wxWindowID btn_id)
 {
     StaticBox::Create(parent, btn_id, wxDefaultPosition, wxDefaultSize, style);
+    SetCursor(wxCursor(wxCURSOR_HAND));
     state_handler.attach({&text_color});
     state_handler.update_binds();
     //BBS set default font
@@ -139,6 +140,13 @@ void Button::SetTextColorNormal(wxColor const &color)
 
 bool Button::Enable(bool enable)
 {
+    if (!enable) {
+        pressedDown = false;
+        if (HasCapture())
+            ReleaseMouse();
+        state_handler.set_state(0, StateHandler::Pressed | StateHandler::Hovered);
+    }
+
     bool result = wxWindow::Enable(enable);
     if (result) {
         wxCommandEvent e(EVT_ENABLE_CHANGED);
@@ -435,15 +443,19 @@ void Button::mouseReleased(wxMouseEvent& event)
         pressedDown = false;
         if (HasCapture())
             ReleaseMouse();
-        if (wxRect({0, 0}, GetSize()).Contains(event.GetPosition()))
+        state_handler.set_state(0, StateHandler::Pressed);
+        wxRect hit_rect({0, 0}, GetSize());
+        hit_rect.Inflate(FromDIP(8));
+        if (hit_rect.Contains(event.GetPosition()))
             sendButtonEvent();
     }
 }
 
 void Button::mouseCaptureLost(wxMouseCaptureLostEvent &event)
 {
-    wxMouseEvent evt;
-    mouseReleased(evt);
+    pressedDown = false;
+    state_handler.set_state(0, StateHandler::Pressed);
+    Refresh();
 }
 
 void Button::keyDownUp(wxKeyEvent &event)

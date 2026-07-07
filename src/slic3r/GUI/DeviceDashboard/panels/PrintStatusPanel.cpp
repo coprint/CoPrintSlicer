@@ -36,12 +36,11 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Print Status"));
+    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
 
-    auto* content = new wxPanel(m_frame->content_parent(), wxID_ANY);
-    content->SetBackgroundColour(DeviceUiStyle::card_background());
     auto* content_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-    m_thumbnail_host = new wxPanel(content, wxID_ANY);
+    m_thumbnail_host = new wxPanel(m_frame->content_parent(), wxID_ANY);
     m_thumbnail_host->SetBackgroundColour(*wxBLACK);
     m_thumbnail_host->SetMinSize(wxSize(FromDIP(240), FromDIP(170)));
     auto* thumbnail_sizer = new wxBoxSizer(wxVERTICAL);
@@ -55,14 +54,16 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     m_thumbnail_host->SetSizer(thumbnail_sizer);
     content_sizer->Add(m_thumbnail_host, 0, wxEXPAND | wxRIGHT, FromDIP(14));
 
-    auto* details = new wxPanel(content, wxID_ANY);
-    details->SetBackgroundColour(DeviceUiStyle::card_background());
+    auto* details = new wxPanel(m_frame->content_parent(), wxID_ANY);
+    details->SetBackgroundColour(DeviceUiStyle::page_background());
     auto* details_sizer = new wxBoxSizer(wxVERTICAL);
 
     auto* printing_label = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("Printing File:"));
     printing_label->SetForegroundColour(DeviceUiStyle::accent());
-    m_file_name = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("N/A"));
+    m_file_name = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("N/A"),
+        wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
     m_file_name->SetForegroundColour(DeviceUiStyle::text_primary());
+    m_file_name->SetMinSize(wxSize(FromDIP(120), -1));
     details_sizer->Add(printing_label, 0, wxBOTTOM, FromDIP(2));
     details_sizer->Add(m_file_name, 0, wxBOTTOM, FromDIP(8));
 
@@ -70,12 +71,14 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     m_elapsed_time->SetForegroundColour(DeviceUiStyle::text_primary());
     details_sizer->Add(m_elapsed_time, 0, wxBOTTOM, FromDIP(10));
 
-    m_progress = new ProgressBar(details, wxID_ANY, 100, wxDefaultPosition, wxSize(FromDIP(360), FromDIP(28)), true);
-    m_progress->SetMinSize(wxSize(FromDIP(360), FromDIP(28)));
+    m_progress = new ProgressBar(details, wxID_ANY, 100, wxDefaultPosition, wxSize(-1, FromDIP(28)), true);
+    m_progress->SetMinSize(wxSize(-1, FromDIP(28)));
+    m_progress->SetMaxSize(wxSize(-1, FromDIP(28)));
     m_progress->SetRadius(FromDIP(14));
-    m_progress->SetProgressForedColour(wxColour(225, 231, 237));
+    m_progress->SetPadding(FromDIP(3));
+    m_progress->SetProgressForedColour(wxColour(132, 162, 188));
     m_progress->SetProgressBackgroundColour(wxColour(126, 158, 184));
-    m_progress->SetBackgroundColour(DeviceUiStyle::card_background());
+    m_progress->SetBackgroundColour(DeviceUiStyle::page_background());
     details_sizer->Add(m_progress, 0, wxEXPAND | wxBOTTOM, FromDIP(10));
 
     auto* lower_row = new wxBoxSizer(wxHORIZONTAL);
@@ -92,16 +95,40 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     m_pause_button->SetMinSize(wxSize(FromDIP(80), FromDIP(40)));
     m_pause_button->SetMaxSize(wxSize(FromDIP(80), FromDIP(40)));
     m_pause_button->SetCornerRadius(FromDIP(8));
-    m_pause_button->SetBackgroundColorNormal(wxColour(0xFF, 0xF9, 0xF1));
-    m_pause_button->SetBorderColorNormal(wxColour(0xD7, 0xA4, 0x6D));
-    m_pause_button->SetTextColorNormal(wxColour(0xD7, 0xA4, 0x6D));
+    m_pause_button->SetBackgroundColor(StateColor(
+        std::pair(wxColour(0xF2, 0xEE, 0xE8), (int) StateColor::Disabled),
+        std::pair(wxColour(0xF8, 0xE5, 0xC9), (int) StateColor::Pressed),
+        std::pair(wxColour(0xFF, 0xF2, 0xE4), (int) StateColor::Hovered),
+        std::pair(wxColour(0xFF, 0xF9, 0xF1), (int) StateColor::Normal)));
+    m_pause_button->SetBorderColor(StateColor(
+        std::pair(wxColour(0xC8, 0xC0, 0xB6), (int) StateColor::Disabled),
+        std::pair(wxColour(0xBD, 0x82, 0x3D), (int) StateColor::Pressed),
+        std::pair(wxColour(0xE2, 0xAD, 0x70), (int) StateColor::Hovered),
+        std::pair(wxColour(0xD7, 0xA4, 0x6D), (int) StateColor::Normal)));
+    m_pause_button->SetTextColor(StateColor(
+        std::pair(wxColour(0xB9, 0xB3, 0xAA), (int) StateColor::Disabled),
+        std::pair(wxColour(0xB7, 0x78, 0x2E), (int) StateColor::Pressed),
+        std::pair(wxColour(0xDE, 0x9D, 0x55), (int) StateColor::Hovered),
+        std::pair(wxColour(0xD7, 0xA4, 0x6D), (int) StateColor::Normal)));
     m_stop_button = new Button(details, _L("Stop"), "print_control_stop_red", 0, 14);
     m_stop_button->SetMinSize(wxSize(FromDIP(80), FromDIP(40)));
     m_stop_button->SetMaxSize(wxSize(FromDIP(80), FromDIP(40)));
     m_stop_button->SetCornerRadius(FromDIP(8));
-    m_stop_button->SetBackgroundColorNormal(wxColour(0xFF, 0xF9, 0xF9));
-    m_stop_button->SetBorderColorNormal(wxColour(0xFF, 0x7D, 0x72));
-    m_stop_button->SetTextColorNormal(wxColour(0xFF, 0x7D, 0x72));
+    m_stop_button->SetBackgroundColor(StateColor(
+        std::pair(wxColour(0xF2, 0xEC, 0xEC), (int) StateColor::Disabled),
+        std::pair(wxColour(0xFF, 0xDF, 0xDF), (int) StateColor::Pressed),
+        std::pair(wxColour(0xFF, 0xEF, 0xEF), (int) StateColor::Hovered),
+        std::pair(wxColour(0xFF, 0xF9, 0xF9), (int) StateColor::Normal)));
+    m_stop_button->SetBorderColor(StateColor(
+        std::pair(wxColour(0xC8, 0xB8, 0xB8), (int) StateColor::Disabled),
+        std::pair(wxColour(0xE9, 0x55, 0x4E), (int) StateColor::Pressed),
+        std::pair(wxColour(0xFF, 0x66, 0x5C), (int) StateColor::Hovered),
+        std::pair(wxColour(0xFF, 0x7D, 0x72), (int) StateColor::Normal)));
+    m_stop_button->SetTextColor(StateColor(
+        std::pair(wxColour(0xBA, 0xAD, 0xAD), (int) StateColor::Disabled),
+        std::pair(wxColour(0xE8, 0x4C, 0x45), (int) StateColor::Pressed),
+        std::pair(wxColour(0xFF, 0x5B, 0x52), (int) StateColor::Hovered),
+        std::pair(wxColour(0xFF, 0x7D, 0x72), (int) StateColor::Normal)));
     action_row->Add(m_pause_button, 0, wxRIGHT, FromDIP(10));
     action_row->Add(m_stop_button, 0);
     details_sizer->Add(action_row, 0, wxTOP, FromDIP(14));
@@ -117,28 +144,32 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
 
     details->SetSizer(details_sizer);
     content_sizer->Add(details, 1, wxEXPAND);
-    content->SetSizer(content_sizer);
-
-    m_frame->set_content(content);
+    m_frame->set_content(content_sizer);
     root->Add(m_frame, 1, wxEXPAND);
     SetSizer(root);
 }
 
 void PrintStatusPanel::apply_state(const PrintJobState& state)
 {
-    bool layout_needed = false;
+    bool file_layout_needed = false;
+    const bool active = state.has_active_job;
 
-    layout_needed |= set_label_if_changed(m_file_name, state.file_name.IsEmpty() ? wxString::FromUTF8("N/A") : state.file_name);
+    file_layout_needed |= set_label_if_changed(m_file_name, active && !state.file_name.IsEmpty() ? state.file_name : wxString::FromUTF8("N/A"));
 
-    const int progress = std::clamp(state.progress_percent, 0, 100);
+    const int progress = active ? std::clamp(state.progress_percent, 0, 100) : 0;
     if (m_progress != nullptr)
         m_progress->SetValue(progress);
 
-    layout_needed |= set_label_if_changed(m_elapsed_time, wxString::FromUTF8("Total: ") + time_text(state.elapsed_seconds));
-    layout_needed |= set_label_if_changed(m_layer_info, wxString::Format("Layer: %d/%d", state.current_layer, state.total_layers));
-    layout_needed |= set_label_if_changed(m_remaining_time, wxString::FromUTF8("Remaining: ") + time_text(state.remaining_seconds));
+    set_label_if_changed(m_elapsed_time, wxString::FromUTF8("Total: ") + time_text(active ? state.elapsed_seconds : -1));
+    wxString layer_text = wxString::FromUTF8("Layer: N/A/N/A");
+    if (active && state.total_layers > 0)
+        layer_text = wxString::Format("Layer: %d/%d", std::max(0, state.current_layer), state.total_layers);
+    else if (active && state.current_layer > 0)
+        layer_text = wxString::Format("Layer: %d/N/A", state.current_layer);
+    set_label_if_changed(m_layer_info, layer_text);
+    set_label_if_changed(m_remaining_time, wxString::FromUTF8("Remaining: ") + time_text(active ? state.remaining_seconds : -1));
 
-    if (layout_needed) {
+    if (file_layout_needed) {
         Freeze();
         Layout();
         Thaw();

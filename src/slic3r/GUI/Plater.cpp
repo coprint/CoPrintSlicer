@@ -102,6 +102,7 @@
 #include "Jobs/BoostThreadWorker.hpp"
 #include "BackgroundSlicingProcess.hpp"
 #include "SelectMachine.hpp"
+#include "StartPrint/StartPrintDialog.hpp"
 #include "SendMultiMachinePage.hpp"
 #include "SendToPrinter.hpp"
 #include "PublishDialog.hpp"
@@ -2406,21 +2407,25 @@ void Sidebar::update_all_preset_comboboxes()
             p->m_bpButton_ams_filament->Hide();
 
         auto print_btn_type = MainFrame::PrintSelectType::eExportGcode;
-        wxString url = cfg.opt_string("print_host_webui").empty() ? cfg.opt_string("print_host") : cfg.opt_string("print_host_webui");
-        wxString apikey;
-        if(url.empty())
-            url = wxString::Format("file://%s/web/orca/missing_connection.html", from_u8(resources_dir()));
-        else {
-            if (!url.Lower().starts_with("http"))
-                url = wxString::Format("http://%s", url);
-            const auto host_type = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type")->value;
-            if (cfg.has("printhost_apikey") && (host_type != htSimplyPrint))
-                apikey = cfg.opt_string("printhost_apikey");
-            print_btn_type = preset_bundle.is_bbl_vendor() ? MainFrame::PrintSelectType::ePrintPlate : MainFrame::PrintSelectType::eSendGcode;
+        if (preset_bundle.use_device_print_flow()) {
+            // Sidebar printer preset is for slicing only; Moonraker target is picked in Start Print dialog.
+            print_btn_type = MainFrame::PrintSelectType::ePrintPlate;
+        } else {
+            wxString url = cfg.opt_string("print_host_webui").empty() ? cfg.opt_string("print_host") : cfg.opt_string("print_host_webui");
+            wxString apikey;
+            if(url.empty())
+                url = wxString::Format("file://%s/web/orca/missing_connection.html", from_u8(resources_dir()));
+            else {
+                if (!url.Lower().starts_with("http"))
+                    url = wxString::Format("http://%s", url);
+                const auto host_type = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type")->value;
+                if (cfg.has("printhost_apikey") && (host_type != htSimplyPrint))
+                    apikey = cfg.opt_string("printhost_apikey");
+                print_btn_type = preset_bundle.is_bbl_vendor() ? MainFrame::PrintSelectType::ePrintPlate : MainFrame::PrintSelectType::eSendGcode;
+            }
+
+            p_mainframe->load_printer_url(url, apikey);
         }
-
-        p_mainframe->load_printer_url(url, apikey);
-
 
         p_mainframe->set_print_button_to_default(print_btn_type);
 
@@ -4216,6 +4221,7 @@ struct Plater::priv
     MenuFactory menus;
 
     SelectMachineDialog* m_select_machine_dlg = nullptr;
+    StartPrintDialog*    m_start_print_dlg    = nullptr;
     SendMultiMachinePage* m_send_multi_dlg = nullptr;
     SendToPrinterDialog* m_send_to_sdcard_dlg = nullptr;
     PublishDialog *m_publish_dlg = nullptr;
@@ -9840,12 +9846,20 @@ void Plater::priv::on_action_print_plate(SimpleEvent&)
 
     PresetBundle& preset_bundle = *wxGetApp().preset_bundle;
     if (preset_bundle.use_bbl_network()) {
-        // BBS
+        // BBS cloud print flow
         if (!m_select_machine_dlg)
             m_select_machine_dlg = new SelectMachineDialog(q);
         m_select_machine_dlg->set_print_type(PrintFromType::FROM_NORMAL);
         m_select_machine_dlg->prepare(partplate_list.get_curr_plate_index());
         m_select_machine_dlg->ShowModal();
+    } else if (preset_bundle.use_device_print_flow()) {
+        if (!m_start_print_dlg)
+            m_start_print_dlg = new StartPrintDialog(q);
+        m_start_print_dlg->prepare(partplate_list.get_curr_plate_index());
+        if (m_start_print_dlg->ShowModal() == wxID_OK) {
+            if (main_frame)
+                main_frame->request_select_tab(MainFrame::TabPosition::tpMonitor);
+        }
     } else {
         q->send_gcode_legacy(PLATE_CURRENT_IDX, nullptr, true);
     }
@@ -9960,12 +9974,16 @@ void Plater::priv::on_action_export_gcode(SimpleEvent&)
     }
 }
 
-void Plater::priv::on_action_send_gcode(SimpleEvent&)
+void Plater::priv::on_action_send_gcode(SimpleEvent& event)
 {
     if (q != nullptr) {
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received export gcode event\n" ;
-        q->send_gcode_legacy();
     }
+    if (wxGetApp().preset_bundle->use_device_print_flow()) {
+        on_action_print_plate(event);
+        return;
+    }
+    q->send_gcode_legacy();
 }
 
 void Plater::priv::on_action_export_sliced_file(SimpleEvent&)

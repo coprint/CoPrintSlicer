@@ -84,6 +84,12 @@ public:
 
     void sync_model_colors_from_plater();
 
+    /** Synchronous Moonraker filament_selections fetch; updates tool colour cache. */
+    void sync_loaded_tool_filaments(MachineObject *obj);
+
+    /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
+    bool get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const;
+
 private:
     wxString sidebar_display_name_for(const MachineObject *machine) const;
     void apply_filament_tool_selection(int tool_index);
@@ -101,6 +107,8 @@ private:
                                          const std::array<wxColour, 4> &assigned_colors);
     void set_filament_assigned_tool(int model_slot_index, int ui_tool, bool send_mapping_command);
     void send_tool_map_command(int model_slot_index, int ui_tool);
+    bool send_tool_select_command(int tool_index);
+    bool send_print_control_command(bool stop_print);
     void prompt_and_save_filament_selection_then_load();
     void save_filament_selection_to_moonraker(int ui_tool, const wxString &material, const wxString &color_hex);
     void clear_filament_selection_from_moonraker(int ui_tool);
@@ -112,6 +120,9 @@ private:
     void apply_printer_status_tool_selection(int tool_index);
     void prompt_ps_target_temperature(bool is_bed, int extruder_index);
     void show_toolhead_temperature_dialog(int active_extruder_index);
+    void show_bed_temperature_dialog();
+    void show_toolhead_fan_dialog(int active_extruder_index);
+    bool send_toolhead_fan_speed_command(int tool_index, int fan_percent);
     void show_filament_load_wizard();
     void show_add_printer_dialog();
     void show_printer_card_actions_menu(wxWindow *anchor, MachineObject *machine);
@@ -179,6 +190,7 @@ private:
     std::array<int, 4> m_filament_assigned_tool_mapping{ 1, 2, 3, 4 };
     std::array<wxColour, 4> m_filament_loaded_tool_colors;
     std::array<wxString, 4> m_filament_loaded_tool_materials;
+    std::array<bool, 4> m_filament_tool_has_color{};
     // Colors synced from the Plater at upload time — used as fallback when
     // no printer metadata is available (e.g. printer is idle after upload).
     std::array<wxColour, 4> m_plater_synced_colors;
@@ -186,10 +198,13 @@ private:
     bool m_has_plater_synced_colors{ false };
     std::array<double, 4> m_moonraker_nozzle_current{ 0.0, 0.0, 0.0, 0.0 };
     std::array<double, 4> m_moonraker_nozzle_target{ 0.0, 0.0, 0.0, 0.0 };
+    std::array<int, 4> m_moonraker_fan_percent{ 0, 0, 0, 0 };
+    std::array<bool, 4> m_moonraker_fan_available{ false, false, false, false };
     double m_moonraker_bed_current{ 0.0 };
     double m_moonraker_bed_target{ 0.0 };
-    int m_moonraker_fan_percent{ 0 };
     bool m_has_moonraker_status{ false };
+    bool m_has_moonraker_print_status{ false };
+    DeviceDashboard::PrintJobState m_moonraker_print_job;
     bool m_moonraker_status_fetch_in_progress{ false };
     std::string m_moonraker_status_machine_id;
     wxString m_filament_preview_fetch_key;

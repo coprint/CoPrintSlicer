@@ -4613,15 +4613,9 @@ void SelectMachineDialog::UpdateStatusCheckWarning_ExtensionTool(MachineObject* 
      SetDoubleBuffered(true);
 #endif //__WINDOWS__
 
-     SetBackgroundStyle(wxBG_STYLE_CUSTOM);
-     wxBoxSizer *sizer = new wxBoxSizer(wxVERTICAL);
-     m_staticbitmap    = new wxStaticBitmap(parent, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxDefaultSize);
+     SetBackgroundStyle(wxBG_STYLE_PAINT);
      m_background_bitmap = ScalableBitmap(this,"thumbnail_grid",256);
-     sizer->Add(m_staticbitmap, 1, wxEXPAND, 0);
      Bind(wxEVT_PAINT, &ThumbnailPanel::OnPaint, this);
-     SetSizer(sizer);
-     Layout();
-     Fit();
  }
 
  void ThumbnailPanel::set_thumbnail(wxImage &img)

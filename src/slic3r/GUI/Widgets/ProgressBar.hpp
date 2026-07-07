@@ -29,6 +29,7 @@ public:
     const int      miniHeight             = {14};
     double   m_radius                     = {7};
     double   m_proportion                 = {0};
+    int      m_padding                    = {1};
     wxColour m_progress_background_colour = {233, 233, 233};
     wxColour m_progress_colour            = {0, 150, 136};
     wxColour m_progress_colour_disable    = {255, 111, 0};
@@ -42,6 +43,7 @@ public:
     void         Reset();
     void         SetProgress(int step);
     void         SetRadius(double radius);
+    void         SetPadding(int padding);
     void         SetProgressForedColour(wxColour colour);
     void         SetProgressBackgroundColour(wxColour colour);
     void         Rescale();

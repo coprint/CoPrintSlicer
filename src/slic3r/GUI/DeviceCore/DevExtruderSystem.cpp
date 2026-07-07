@@ -185,6 +185,12 @@ namespace Slic3r
             system->m_extders[MAIN_EXTRUDER_ID].m_target_temp = print_json["nozzle_target_temper"].get<float>();
         }
 
+        if (print_json.contains("fan_gear") && print_json["fan_gear"].is_number_unsigned()) {
+            const auto fan_gear = print_json["fan_gear"].get<std::uint32_t>();
+            system->m_extders[MAIN_EXTRUDER_ID].m_fan_speed =
+                static_cast<float>((fan_gear & 0x000000FF) / 255.0);
+        }
+
         if (print_json.contains("ams") && print_json["ams"].contains("tray_tar"))
         {
             const std::string& tray_tar = print_json["ams"]["tray_tar"].get<std::string>();

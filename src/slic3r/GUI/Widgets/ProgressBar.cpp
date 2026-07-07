@@ -1,6 +1,7 @@
 #include "ProgressBar.hpp"
 #include "../I18N.hpp"
 #include <algorithm>
+#include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
 #include <wx/dcgraph.h>
 #include "Label.hpp"
@@ -38,6 +39,8 @@ ProgressBar::~ProgressBar() {}
 void ProgressBar::create(wxWindow *parent, wxWindowID id, const wxPoint &pos,  wxSize &size)
 {
     wxWindow::Create(parent, id, pos, size);
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
+    SetDoubleBuffered(true);
     // m_static_info = new wxStaticText(this, wxID_ANY,wxT(""),wxPoint(this->padding, 20), wxSize(GetSize().GetWidth() - this->padding * 3, -1), wxST_ELLIPSIZE_END);
     // m_static_info->Wrap(-1);
 
@@ -67,6 +70,12 @@ void ProgressBar::create(wxWindow *parent, wxWindowID id, const wxPoint &pos,  w
 
 void ProgressBar::SetRadius(double radius) {
     m_radius = radius;
+    Refresh();
+}
+
+void ProgressBar::SetPadding(int padding)
+{
+    m_padding = std::max(0, padding);
     Refresh();
 }
 
@@ -116,6 +125,7 @@ void ProgressBar::Reset()
 void ProgressBar::SetProgress(int step)
 {
     if (step < 0) return;
+    step = std::min(step, m_max);
     if (m_disable == false && m_step == step)
     {
         return;
@@ -144,36 +154,37 @@ void ProgressBar::SetMinSize(const wxSize &size)
 
 void ProgressBar::paintEvent(wxPaintEvent &evt)
 {
-
-    wxPaintDC dc(this);
+    wxAutoBufferedPaintDC dc(this);
     render(dc);
 }
 
 void ProgressBar::render(wxDC &dc)
 {
-#ifdef __WXMSW__
-    wxSize     size = GetSize();
+    wxSize size = GetSize();
+    if (size.x <= 0 || size.y <= 0)
+        return;
+
+    wxBitmap bmp(size.x, size.y);
     wxMemoryDC memdc;
-    wxBitmap   bmp(size.x, size.y);
     memdc.SelectObject(bmp);
-    memdc.Blit({0, 0}, size, &dc, {0, 0});
+    memdc.SetBackground(wxBrush(GetBackgroundColour()));
+    memdc.Clear();
 
     {
-        wxGCDC dc2(memdc);
-        doRender(dc2);
+        wxGCDC gcdc(memdc);
+        doRender(gcdc);
     }
 
     memdc.SelectObject(wxNullBitmap);
     dc.DrawBitmap(bmp, 0, 0);
-#else
-    doRender(dc);
-#endif
 }
 
 void ProgressBar::doRender(wxDC &dc)
 {
-    if (m_step >= m_max) m_step = m_max;
+    const int step = std::min(m_step, m_max);
     wxSize size = GetSize();
+    dc.SetBackground(wxBrush(GetBackgroundColour()));
+    dc.Clear();
 
     // wx DrawRoundedRectangle distorts when radius exceeds half the smaller side (pill / pinched ends).
     const double max_outer_r = std::max(0.0, std::min(static_cast<double>(size.x), static_cast<double>(size.y)) / 2.0);
@@ -189,7 +200,7 @@ void ProgressBar::doRender(wxDC &dc)
     }
 
     // Inner track: inset by pad pixels on all sides
-    int pad = FromDIP(1);
+    int pad = m_padding;
     int inner_x = pad;
     int inner_y = pad;
     int inner_w = size.x - 2 * pad;
@@ -212,7 +223,7 @@ void ProgressBar::doRender(wxDC &dc)
         }
 
         wxColour fill_colour = m_disable ? m_progress_colour_disable : m_progress_colour;
-        m_proportion = float(inner_w * float(m_step) / float(m_max));
+        m_proportion = float(inner_w * float(step) / float(m_max));
         if (m_proportion < inner_r * 2 && m_proportion != 0) { m_proportion = (float)(inner_r * 2); }
 
         if (m_proportion > 0) {
@@ -235,7 +246,7 @@ void ProgressBar::doRender(wxDC &dc)
         pt.y = (size.y - textSize.y) / 2;
         dc.DrawText(m_disable_text, pt);
     } else if (m_shownumber) {
-        auto text = wxString::Format("%d%%", m_step);
+        auto text = wxString::Format("%d%%", step);
         dc.SetFont(GetFont());
         auto textSize = dc.GetMultiLineTextExtent(text);
         dc.SetTextForeground(wxColour(200, 205, 215));

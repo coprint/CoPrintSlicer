@@ -71,6 +71,16 @@ void DeviceCardFrame::set_content(wxWindow* content)
     m_content_parent->Layout();
 }
 
+void DeviceCardFrame::set_content(wxSizer* content)
+{
+    if (content == nullptr || m_content_sizer == nullptr)
+        return;
+
+    m_content_sizer->Clear(false);
+    m_content_sizer->Add(content, 1, wxEXPAND);
+    m_content_parent->Layout();
+}
+
 void DeviceCardFrame::set_header_action(wxWindow* action)
 {
     if (m_header_row == nullptr)

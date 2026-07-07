@@ -568,6 +568,8 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
             if (m_print_enable) {
                 if (wxGetApp().preset_bundle->use_bbl_network())
                     wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_PLATE));
+                else if (wxGetApp().preset_bundle->use_device_print_flow())
+                    wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_PLATE));
                 else
                     wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_GCODE));
             }
@@ -1720,7 +1722,10 @@ wxBoxSizer* MainFrame::create_side_tools()
                 // check valid of print
                 m_print_enable = get_enable_print_status();
                 m_print_btn->Enable(m_print_enable);
-                if (m_print_enable) {
+                const bool open_start_print_dialog = m_print_select == ePrintPlate
+                    && wxGetApp().preset_bundle->use_device_print_flow()
+                    && !m_plater->get_preview_canvas3D()->is_all_plates_selected();
+                if (m_print_enable || open_start_print_dialog) {
                     if (m_print_select == ePrintAll)
                         wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_ALL));
                     if (m_print_select == ePrintPlate)
@@ -2020,11 +2025,16 @@ bool MainFrame::get_enable_print_status()
     }
     else if (m_print_select == ePrintPlate)
     {
-        if (!current_plate->is_slice_result_ready_for_print())
-        {
-            enable = false;
+        if (wxGetApp().preset_bundle->use_device_print_flow()) {
+            // Model on plate is enough; slice/printer target are confirmed in Start Print dialog.
+            enable = current_plate && current_plate->has_printable_instances() && !is_all_plates;
+        } else if (!wxGetApp().preset_bundle->use_bbl_network()) {
+            enable = !is_all_plates;
+        } else {
+            if (!current_plate->is_slice_result_ready_for_print())
+                enable = false;
+            enable = enable && !is_all_plates;
         }
-        enable = enable && !is_all_plates;
     }
     else if (m_print_select == eExportGcode)
     {
@@ -2150,8 +2160,15 @@ void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_sl
         if (m_slice_select == eSlicePlate)
             enable_slice = false;
     }
-    if (!can_print)
-        enable_print = false;
+    if (!can_print) {
+        const bool device_print_flow = wxGetApp().preset_bundle->use_device_print_flow();
+        PartPlate *plate = m_plater->get_partplate_list().get_curr_plate();
+        const bool is_all_plates = m_plater->get_preview_canvas3D()->is_all_plates_selected();
+        if (device_print_flow && m_print_select == ePrintPlate && plate && plate->has_printable_instances() && !is_all_plates)
+            enable_print = true;
+        else
+            enable_print = false;
+    }
 
 
     //process print logic

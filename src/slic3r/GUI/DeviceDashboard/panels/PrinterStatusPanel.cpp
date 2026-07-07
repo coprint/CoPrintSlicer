@@ -7,6 +7,8 @@
 
 #include <utility>
 
+#include <array>
+
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
 #include <wx/stattext.h>
@@ -23,6 +25,20 @@ bool set_label_if_changed(wxStaticText* label, const wxString& text)
         return false;
     label->SetLabelText(text);
     return true;
+}
+
+wxBitmap load_dashboard_icon(wxWindow *parent, const std::string &name, int dip)
+{
+    static const std::string k_fallback = "cp_tool_temperature";
+    for (const std::string &candidate : {name, k_fallback}) {
+        try {
+            wxBitmap bmp = create_scaled_bitmap(candidate, parent, dip);
+            if (bmp.IsOk())
+                return bmp;
+        } catch (const std::exception &) {
+        }
+    }
+    return wxBitmap(parent->FromDIP(dip), parent->FromDIP(dip));
 }
 
 } // namespace
@@ -51,7 +67,6 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
         card->SetBorderColorNormal(i == 0 ? wxColour(44, 182, 125) : wxColour(55, 58, 64));
         card->SetBackgroundColorNormal(DeviceUiStyle::control_background());
         card->SetBackgroundColour(DeviceUiStyle::control_background());
-        card->SetCursor(wxCursor(wxCURSOR_HAND));
         m_tools[i].card = card;
 
         auto* card_sizer = new wxBoxSizer(wxVERTICAL);
@@ -72,6 +87,8 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
         auto* temp_row = new wxBoxSizer(wxHORIZONTAL);
         auto* temp_icon = new wxStaticBitmap(card, wxID_ANY,
             create_scaled_bitmap("cp_tool_temperature", card, 24));
+        m_tools[i].temperature_icon = temp_icon;
+        temp_icon->SetCursor(wxCursor(wxCURSOR_HAND));
         m_tools[i].temperature = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("-- / --"));
         m_tools[i].temperature->SetForegroundColour(i == 0 ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
         m_tools[i].temperature->SetCursor(wxCursor(wxCURSOR_HAND));
@@ -84,8 +101,11 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
         auto* fan_row = new wxBoxSizer(wxHORIZONTAL);
         auto* fan_icon = new wxStaticBitmap(card, wxID_ANY,
             create_scaled_bitmap("cp_tool_fan", card, 24));
+        m_tools[i].fan_icon = fan_icon;
+        fan_icon->SetCursor(wxCursor(wxCURSOR_HAND));
         m_tools[i].fan = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("--%"));
         m_tools[i].fan->SetForegroundColour(DeviceUiStyle::text_muted());
+        m_tools[i].fan->SetCursor(wxCursor(wxCURSOR_HAND));
         fan_row->AddStretchSpacer(1);
         fan_row->Add(fan_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
         fan_row->Add(m_tools[i].fan, 0, wxALIGN_CENTER_VERTICAL);
@@ -102,22 +122,21 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
         card_sizer->AddSpacer(FromDIP(8));
         card->SetSizer(card_sizer);
 
-        // Karta tıklanınca tool seç
-        const int idx = i;
-        card->Bind(wxEVT_LEFT_DOWN, [this, idx](wxMouseEvent&) {
-            if (m_tool_select_handler) m_tool_select_handler(idx);
-        });
-        m_tools[i].title->Bind(wxEVT_LEFT_DOWN, [this, idx](wxMouseEvent&) {
-            if (m_tool_select_handler) m_tool_select_handler(idx);
-        });
-        // Sıcaklık etiketine tıklanınca hedef sıcaklık diyaloğu
-        m_tools[i].temperature->Bind(wxEVT_LEFT_DOWN, [this, idx](wxMouseEvent&) {
-            if (m_tool_select_handler)  m_tool_select_handler(idx);
-            if (m_nozzle_temp_handler)  m_nozzle_temp_handler(idx);
-        });
-        m_tools[i].fan->Bind(wxEVT_LEFT_DOWN, [this, idx](wxMouseEvent&) {
-            if (m_tool_select_handler) m_tool_select_handler(idx);
-        });
+        const auto open_temperature_popup = [this, i](wxMouseEvent& event) {
+            event.Skip(false);
+            if (m_nozzle_temp_handler)
+                m_nozzle_temp_handler(i);
+        };
+        temp_icon->Bind(wxEVT_LEFT_DOWN, open_temperature_popup);
+        m_tools[i].temperature->Bind(wxEVT_LEFT_DOWN, open_temperature_popup);
+
+        const auto open_fan_popup = [this, i](wxMouseEvent& event) {
+            event.Skip(false);
+            if (m_fan_speed_handler)
+                m_fan_speed_handler(i);
+        };
+        fan_icon->Bind(wxEVT_LEFT_DOWN, open_fan_popup);
+        m_tools[i].fan->Bind(wxEVT_LEFT_DOWN, open_fan_popup);
 
         grid->Add(card, 1, wxEXPAND);
     }
@@ -142,25 +161,35 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
         bt_font.SetWeight(wxFONTWEIGHT_BOLD);
         bed_title->SetFont(bt_font);
 
+        auto* bed_title_divider = new wxPanel(card, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(1)));
+        bed_title_divider->SetBackgroundColour(wxColour(55, 58, 64));
+
         auto* bed_temp_row = new wxBoxSizer(wxHORIZONTAL);
         auto* bed_icon = new wxStaticBitmap(card, wxID_ANY,
-            create_scaled_bitmap("bed_heating", card, 14));
+            load_dashboard_icon(card, "cp_bed_heating", 24));
+        m_bed_temperature_icon = bed_icon;
+        bed_icon->SetCursor(wxCursor(wxCURSOR_HAND));
         m_bed_temperature = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("-- / --"));
         m_bed_temperature->SetForegroundColour(DeviceUiStyle::text_muted());
         m_bed_temperature->SetCursor(wxCursor(wxCURSOR_HAND));
         bed_temp_row->AddStretchSpacer(1);
-        bed_temp_row->Add(bed_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
+        bed_temp_row->Add(bed_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
         bed_temp_row->Add(m_bed_temperature, 0, wxALIGN_CENTER_VERTICAL);
         bed_temp_row->AddStretchSpacer(1);
 
         card_sizer->AddSpacer(FromDIP(8));
         card_sizer->Add(bed_title,    0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(6));
-        card_sizer->AddSpacer(FromDIP(6));
+        card_sizer->AddSpacer(FromDIP(5));
+        card_sizer->Add(bed_title_divider, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(6));
+        card_sizer->AddStretchSpacer(1);
         card_sizer->Add(bed_temp_row, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(4));
-        card_sizer->AddSpacer(FromDIP(8));
+        card_sizer->AddStretchSpacer(1);
         card->SetSizer(card_sizer);
 
         card->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
+            if (m_bed_temp_handler) m_bed_temp_handler();
+        });
+        bed_icon->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
             if (m_bed_temp_handler) m_bed_temp_handler();
         });
         m_bed_temperature->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
@@ -179,9 +208,12 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
 void PrinterStatusPanel::apply_state(const std::array<ToolState, MaxDashboardTools>& tools, const BedState& bed)
 {
     bool layout_needed = false;
+    int active_tool = -1;
 
     for (int i = 0; i < MaxDashboardTools; ++i) {
         const ToolState& tool = tools[i];
+        if (tool.active)
+            active_tool = i;
         layout_needed |= set_label_if_changed(m_tools[i].title, tool.label.IsEmpty() ? wxString::Format("Tool %d", i + 1) : tool.label);
         layout_needed |= set_label_if_changed(m_tools[i].temperature, temperature_text(tool.nozzle));
         layout_needed |= set_label_if_changed(m_tools[i].fan, tool.fan.available ? wxString::Format("%d%%", tool.fan.percent) : wxString::FromUTF8("--%"));
@@ -196,6 +228,9 @@ void PrinterStatusPanel::apply_state(const std::array<ToolState, MaxDashboardToo
         Layout();
         Thaw();
     }
+
+    if (active_tool >= 0)
+        set_active_tool(active_tool);
 }
 
 void PrinterStatusPanel::set_active_tool(int tool_index)
@@ -221,11 +256,16 @@ void PrinterStatusPanel::set_active_tool(int tool_index)
             m_tools[i].temperature->SetForegroundColour(active ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
             m_tools[i].temperature->Refresh();
         }
+        if (m_tools[i].fan != nullptr) {
+            m_tools[i].fan->SetForegroundColour(active ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
+            m_tools[i].fan->Refresh();
+        }
     }
 }
 
 void PrinterStatusPanel::set_tool_select_handler(ToolSelectHandler handler)  { m_tool_select_handler = std::move(handler); }
 void PrinterStatusPanel::set_nozzle_temp_handler(NozzleTempHandler handler)  { m_nozzle_temp_handler = std::move(handler); }
+void PrinterStatusPanel::set_fan_speed_handler(FanSpeedHandler handler)      { m_fan_speed_handler   = std::move(handler); }
 void PrinterStatusPanel::set_bed_temp_handler(BedTempHandler handler)        { m_bed_temp_handler    = std::move(handler); }
 
 wxString PrinterStatusPanel::temperature_text(const TemperatureReading& reading)

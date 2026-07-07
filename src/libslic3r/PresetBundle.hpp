@@ -149,6 +149,8 @@ public:
 
     // Whether using bbl network for print upload
     bool use_bbl_network();
+    // CoPrint/Moonraker: print target is chosen in Start Print dialog (DeviceManager), not print_host preset.
+    bool use_device_print_flow() { return !use_bbl_network(); }
     // Whether using bbl's device tab
     bool use_bbl_device_tab();
 

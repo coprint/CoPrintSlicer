@@ -60,6 +60,8 @@
 #include <mutex>
 #include <unordered_set>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
 #include <boost/asio.hpp>
@@ -236,6 +238,19 @@ namespace {
 
 /** CoPrint printers sidebar / list icon: resources/images/cprint_printer_nav.png */
 constexpr const char *k_cprint_printer_nav_bitmap = "cprint_printer_nav";
+
+wxBitmap safe_scaled_bitmap(wxWindow *win, const std::string &name, int dip, const char *fallback = "tool_temperature_popup")
+{
+    for (const char *candidate : {name.c_str(), fallback}) {
+        try {
+            wxBitmap bmp = create_scaled_bitmap(candidate, win, dip);
+            if (bmp.IsOk())
+                return bmp;
+        } catch (const std::exception &) {
+        }
+    }
+    return wxBitmap(win->FromDIP(dip), win->FromDIP(dip));
+}
 
 std::vector<wxString> moonraker_camera_stream_urls(MachineObject *obj)
 {
@@ -553,6 +568,7 @@ struct FilamentMetadataResult {
 struct LoadedFilamentResult {
     std::array<wxColour, 4> assigned_colors;
     std::array<wxString, 4> materials;
+    std::array<bool, 4> tool_has_color{};
     bool has_colors{false};
 };
 
@@ -649,11 +665,12 @@ static FilamentMetadataResult parse_filament_metadata(nlohmann::json metadata)
     return result;
 }
 
+bool is_valid_loaded_filament_colour(const wxColour &colour);
+
 static LoadedFilamentResult parse_filament_db(nlohmann::json db)
 {
     LoadedFilamentResult result;
-    result.assigned_colors = default_filament_preview_colors();
-    result.materials       = default_filament_preview_materials();
+    result.materials.fill(wxString::FromUTF8("Empty"));
 
     if (db.contains("result"))
         db = db["result"];
@@ -676,14 +693,30 @@ static LoadedFilamentResult parse_filament_db(nlohmann::json db)
             continue;
         const auto &tool = *tool_ptr;
         if (auto it = tool.find("color_hex"); it != tool.end() && it->is_string()) {
-            result.assigned_colors[ui_tool - 1] = colour_from_hex(it->get<std::string>(), result.assigned_colors[ui_tool - 1]);
-            result.has_colors = true;
+            const wxColour parsed = colour_from_hex(it->get<std::string>(), wxColour());
+            if (is_valid_loaded_filament_colour(parsed)) {
+                result.assigned_colors[ui_tool - 1] = parsed;
+                result.tool_has_color[ui_tool - 1] = true;
+                result.has_colors = true;
+            }
         }
         if (auto it = tool.find("type"); it != tool.end() && it->is_string())
             result.materials[ui_tool - 1] = wxString::FromUTF8(it->get<std::string>());
     }
 
     return result;
+}
+
+bool is_valid_loaded_filament_colour(const wxColour &colour)
+{
+    return colour.IsOk();
+}
+
+bool is_empty_filament_material(const wxString &material)
+{
+    return material.IsEmpty()
+        || material.CmpNoCase(wxString::FromUTF8("Empty")) == 0
+        || material.CmpNoCase(wxString::FromUTF8("N/A")) == 0;
 }
 
 bool looks_like_hex_colour(wxString value)
@@ -735,6 +768,157 @@ std::string moonraker_base_url(const MachineObject *obj)
     if (host.find(':') == std::string::npos)
         host += ":7125";
     return "http://" + host;
+}
+
+int active_tool_index_from_moonraker_extruder(const std::string &extruder)
+{
+    if (extruder == "extruder")
+        return 0;
+    static const std::string prefix = "extruder";
+    if (extruder.rfind(prefix, 0) != 0 || extruder.size() <= prefix.size())
+        return -1;
+
+    const std::string suffix = extruder.substr(prefix.size());
+    if (suffix.size() != 1 || !std::isdigit(static_cast<unsigned char>(suffix[0])))
+        return -1;
+
+    const int index = suffix[0] - '0';
+    return index >= 1 && index < DeviceDashboard::MaxDashboardTools ? index : -1;
+}
+
+bool moonraker_fan_percent_from_json(const nlohmann::json &fan_obj, int &out_percent)
+{
+    if (!fan_obj.is_object())
+        return false;
+
+    if (fan_obj.contains("speed") && fan_obj["speed"].is_number()) {
+        const double speed = fan_obj["speed"].get<double>();
+        const int pwm = speed <= 1.0
+            ? static_cast<int>(speed * 255.0 + 0.5)
+            : static_cast<int>(speed + 0.5);
+        out_percent = std::clamp(static_cast<int>(std::round(pwm / 2.55)), 0, 100);
+        return true;
+    }
+
+    if (fan_obj.contains("power") && fan_obj["power"].is_number()) {
+        const int pwm = static_cast<int>(fan_obj["power"].get<double>() * 255.0 + 0.5);
+        out_percent = std::clamp(static_cast<int>(std::round(pwm / 2.55)), 0, 100);
+        return true;
+    }
+
+    return false;
+}
+
+wxString clean_moonraker_print_filename(wxString name)
+{
+    name.Trim(true);
+    name.Trim(false);
+    if (name.empty() || name == "N/A")
+        return wxString();
+
+    name.Replace("\\", "/");
+    if (name.StartsWith("file://"))
+        name = name.Mid(7);
+
+    const wxString lower = name.Lower();
+    const int gcodes_pos = lower.Find("/gcodes/");
+    if (gcodes_pos != wxNOT_FOUND)
+        name = name.Mid(gcodes_pos + 8);
+    else if (lower.StartsWith("gcodes/"))
+        name = name.Mid(7);
+    else if (wxFileName(name).IsAbsolute())
+        name = wxFileName(name).GetFullName();
+
+    while (name.StartsWith("/"))
+        name = name.Mid(1);
+    return name;
+}
+
+bool moonraker_json_number_value(const nlohmann::json &object, std::initializer_list<const char *> keys, double &value)
+{
+    if (!object.is_object())
+        return false;
+    for (const char *key : keys) {
+        if (object.contains(key) && object[key].is_number()) {
+            value = object[key].get<double>();
+            return true;
+        }
+    }
+    return false;
+}
+
+int moonraker_compute_total_estimate_seconds(int progress_percent, int estimated_total_seconds, double print_duration_seconds,
+                                             const MachineObject *obj)
+{
+    if (estimated_total_seconds > 0)
+        return estimated_total_seconds;
+
+    const int progress = std::clamp(progress_percent, 0, 100);
+    if (progress > 0 && print_duration_seconds > 0.0)
+        return std::max(0, static_cast<int>(std::round(print_duration_seconds * 100.0 / progress)));
+
+    if (obj != nullptr && obj->slice_info != nullptr && obj->slice_info->prediction > 0)
+        return obj->slice_info->prediction;
+    if (obj != nullptr && obj->subtask_ != nullptr && obj->subtask_->slice_info.prediction > 0)
+        return obj->subtask_->slice_info.prediction;
+
+    return -1;
+}
+
+int moonraker_compute_remaining_seconds(int progress_percent, int estimated_total_seconds, double print_duration_seconds,
+                                        int current_layer, int total_layers, int mc_left_time_seconds)
+{
+    if (mc_left_time_seconds > 0)
+        return mc_left_time_seconds;
+
+    const int progress = std::clamp(progress_percent, 0, 100);
+    if (progress <= 0 || progress >= 100)
+        return -1;
+
+    if (estimated_total_seconds > 0) {
+        return std::max(0, static_cast<int>(std::round(
+            estimated_total_seconds * (100.0 - progress) / 100.0)));
+    }
+
+    if (print_duration_seconds > 0.0) {
+        const double estimated_total = print_duration_seconds * 100.0 / progress;
+        return std::max(0, static_cast<int>(std::round(estimated_total - print_duration_seconds)));
+    }
+
+    if (current_layer > 0 && total_layers > current_layer && print_duration_seconds > 0.0) {
+        return std::max(0, static_cast<int>(std::round(
+            print_duration_seconds * (total_layers - current_layer) / static_cast<double>(current_layer))));
+    }
+
+    return -1;
+}
+
+wxString active_file_name_text(const MachineObject *obj);
+
+void moonraker_finalize_print_job(DeviceDashboard::PrintJobState &job, const MachineObject *obj)
+{
+    if (!job.has_active_job)
+        return;
+
+    if (job.file_name.IsEmpty()) {
+        const wxString fallback = clean_moonraker_print_filename(active_file_name_text(obj));
+        if (!fallback.IsEmpty())
+            job.file_name = fallback;
+        else if (obj != nullptr && obj->slice_info != nullptr) {
+            if (!obj->slice_info->gcode_name.empty())
+                job.file_name = clean_moonraker_print_filename(from_u8(obj->slice_info->gcode_name));
+            else if (!obj->slice_info->title.empty())
+                job.file_name = clean_moonraker_print_filename(from_u8(obj->slice_info->title));
+        }
+    }
+
+    if (job.current_layer <= 0 && obj != nullptr && obj->curr_layer > 0)
+        job.current_layer = obj->curr_layer;
+    if (job.total_layers <= 0 && obj != nullptr && obj->total_layers > 0)
+        job.total_layers = obj->total_layers;
+
+    if (job.thumbnail_url.IsEmpty() && obj != nullptr && obj->slice_info != nullptr)
+        job.thumbnail_url = from_u8(obj->slice_info->thumbnail_url);
 }
 
 double rgb_distance(const wxColour &a, const wxColour &b)
@@ -825,8 +1009,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
  {
     SetBackgroundColour(wxColour(28, 30, 34));
-    m_filament_loaded_tool_colors = default_filament_preview_colors();
-    m_filament_loaded_tool_materials = default_filament_preview_materials();
+    m_filament_loaded_tool_materials.fill(wxString::FromUTF8("Empty"));
 
     auto *main_sizer = new wxBoxSizer(wxHORIZONTAL);
     auto *preview_menu_panel = new wxPanel(this, wxID_ANY);
@@ -1061,6 +1244,9 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     });
     m_dashboard_printer_status_panel->set_nozzle_temp_handler([this](int idx) {
         prompt_ps_target_temperature(false, idx);
+    });
+    m_dashboard_printer_status_panel->set_fan_speed_handler([this](int idx) {
+        show_toolhead_fan_dialog(idx);
     });
     m_dashboard_printer_status_panel->set_bed_temp_handler([this]() {
         prompt_ps_target_temperature(true, 0);
@@ -3038,11 +3224,16 @@ void PrinterWebView::update_dashboard_filament_state(const std::array<wxColour, 
 
             state.filament.tools[i].index = i;
             state.filament.tools[i].label = wxString::Format("T%d", i + 1);
-            state.filament.tools[i].color = m_filament_loaded_tool_colors[i];
-            state.filament.tools[i].material = m_filament_loaded_tool_materials[i].empty()
-                ? wxString("PLA")
-                : m_filament_loaded_tool_materials[i];
-            state.filament.tools[i].available = true;
+            if (m_filament_tool_has_color[i]) {
+                state.filament.tools[i].color = m_filament_loaded_tool_colors[i];
+                if (m_filament_loaded_tool_materials[i].empty() || m_filament_loaded_tool_materials[i] == "N/A")
+                    state.filament.tools[i].material = wxString::FromUTF8("Empty");
+                else
+                    state.filament.tools[i].material = m_filament_loaded_tool_materials[i];
+            } else {
+                state.filament.tools[i].color = wxColour();
+                state.filament.tools[i].material = wxString::FromUTF8("Empty");
+            }
         }
         state.filament.selected_tool = std::clamp(m_selected_filament_tool, 0, 3);
         state.filament.can_load_unload = can_load_unload;
@@ -3103,6 +3294,87 @@ void PrinterWebView::send_tool_map_command(int model_slot_index, int ui_tool)
             })
             .perform_sync();
     }).detach();
+}
+
+bool PrinterWebView::send_tool_select_command(int tool_index)
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    const std::string base = moonraker_base_url(obj);
+    if (obj == nullptr || !obj->is_online() || base.empty())
+        return false;
+    if (obj->is_in_printing()) {
+        BOOST_LOG_TRIVIAL(info) << "PrinterWebView: ignoring tool select while printing";
+        return true;
+    }
+
+    const int macro_index = std::max(0, std::min(DeviceDashboard::MaxDashboardTools - 1, tool_index));
+    const std::string script = "T" + std::to_string(macro_index);
+
+    BOOST_LOG_TRIVIAL(info) << "PrinterWebView: sending tool select command: " << script;
+
+    std::thread([this, base, script]() {
+        nlohmann::json payload;
+        payload["script"] = script;
+        unsigned response_status = 0;
+        Http::post(base + "/printer/gcode/script")
+            .header("Content-Type", "application/json")
+            .set_post_body(payload.dump())
+            .timeout_connect(2)
+            .timeout_max(4)
+            .on_complete([&](std::string, unsigned status) {
+                response_status = status;
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: " << script << " status=" << status;
+            })
+            .on_error([&](std::string, std::string error, unsigned status) {
+                response_status = status;
+                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: " << script << " failed status=" << status << " error=" << error;
+            })
+            .perform_sync();
+
+        if (response_status >= 200 && response_status < 300)
+            CallAfter([this]() { refresh_moonraker_status_from_selected_machine(); });
+    }).detach();
+
+    return true;
+}
+
+bool PrinterWebView::send_print_control_command(bool stop_print)
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    const std::string base = moonraker_base_url(obj);
+    if (obj == nullptr || !obj->is_online() || base.empty())
+        return false;
+
+    const std::string action = stop_print ? "CANCEL_PRINT" : "PAUSE";
+    const std::string script = "TOOLHEAD_PARK_PAUSE_CANCEL\n" + action;
+    BOOST_LOG_TRIVIAL(info) << "PrinterWebView: sending print control command: " << action;
+
+    std::thread([this, base, script, action]() {
+        nlohmann::json payload;
+        payload["script"] = script;
+        unsigned response_status = 0;
+        Http::post(base + "/printer/gcode/script")
+            .header("Content-Type", "application/json")
+            .set_post_body(payload.dump())
+            .timeout_connect(2)
+            .timeout_max(8)
+            .on_complete([&](std::string, unsigned status) {
+                response_status = status;
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: " << action << " status=" << status;
+            })
+            .on_error([&](std::string, std::string error, unsigned status) {
+                response_status = status;
+                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: " << action << " failed status=" << status << " error=" << error;
+            })
+            .perform_sync();
+
+        if (response_status >= 200 && response_status < 300)
+            CallAfter([this]() { refresh_moonraker_status_from_selected_machine(); });
+    }).detach();
+
+    return true;
 }
 
 void PrinterWebView::apply_filament_preview_fallback()
@@ -3184,8 +3456,8 @@ void PrinterWebView::sync_model_colors_from_plater()
     // Keep the assigned (loaded tool) colors already fetched from the device,
     // or fall back to the model colors themselves when no device data is present.
     const bool has_tool_colors = std::any_of(
-        m_filament_loaded_tool_colors.begin(), m_filament_loaded_tool_colors.end(),
-        [](const wxColour &c) { return c.IsOk() && c != wxColour(0, 0, 0) && c != wxColour(255, 255, 255); });
+        m_filament_tool_has_color.begin(), m_filament_tool_has_color.end(),
+        [](bool has_color) { return has_color; });
 
     std::array<wxColour, 4> assigned_colors = has_tool_colors
         ? m_filament_loaded_tool_colors
@@ -3227,6 +3499,11 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
     if (obj == nullptr || !obj->is_online() || base.empty()) {
         m_filament_preview_fetch_key.clear();
         m_filament_preview_fetch_in_progress = false;
+        m_filament_tool_has_color.fill(false);
+        for (int i = 0; i < 4; ++i) {
+            m_filament_loaded_tool_colors[i] = wxColour();
+            m_filament_loaded_tool_materials[i] = wxString::FromUTF8("Empty");
+        }
         apply_filament_preview_fallback();
         return;
     }
@@ -3274,8 +3551,18 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
             auto meta   = parse_filament_metadata(parse_json_body(metadata_body));
             auto loaded = parse_filament_db(parse_json_body(db_body));
 
-            m_filament_loaded_tool_colors    = loaded.assigned_colors;
-            m_filament_loaded_tool_materials = loaded.materials;
+            for (int i = 0; i < 4; ++i) {
+                m_filament_tool_has_color[i] = loaded.tool_has_color[i];
+                if (loaded.tool_has_color[i]) {
+                    m_filament_loaded_tool_colors[i] = loaded.assigned_colors[i];
+                    m_filament_loaded_tool_materials[i] = loaded.materials[i].empty()
+                        ? wxString::FromUTF8("Empty")
+                        : loaded.materials[i];
+                } else {
+                    m_filament_loaded_tool_colors[i] = wxColour();
+                    m_filament_loaded_tool_materials[i] = wxString::FromUTF8("Empty");
+                }
+            }
 
             auto assigned_tools  = default_filament_preview_assigned_tools();
             auto assigned_colors = loaded.assigned_colors;
@@ -3306,6 +3593,49 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
             apply_filament_preview_rows(meta.model_colors, meta.materials, meta.weights, assigned_tools, assigned_colors);
         });
     }).detach();
+}
+
+void PrinterWebView::sync_loaded_tool_filaments(MachineObject *obj)
+{
+    const std::string base = moonraker_base_url(obj);
+    if (obj == nullptr || !obj->is_online() || base.empty())
+        return;
+
+    std::string db_body;
+    Http::get(base + "/server/database/item?namespace=coprint&key=filament_selections")
+        .timeout_connect(2)
+        .timeout_max(4)
+        .on_complete([&](std::string response, unsigned status) {
+            if (status == 200)
+                db_body = std::move(response);
+        })
+        .on_error([](std::string, std::string, unsigned) {})
+        .perform_sync();
+
+    const auto loaded = parse_filament_db(parse_json_body(db_body));
+    for (int i = 0; i < 4; ++i) {
+        m_filament_tool_has_color[i] = loaded.tool_has_color[i];
+        if (loaded.tool_has_color[i]) {
+            m_filament_loaded_tool_colors[i] = loaded.assigned_colors[i];
+            m_filament_loaded_tool_materials[i] = loaded.materials[i].empty()
+                ? wxString::FromUTF8("Empty")
+                : loaded.materials[i];
+        }
+    }
+}
+
+bool PrinterWebView::get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const
+{
+    if (tool_0based < 0 || tool_0based >= 4 || !m_filament_tool_has_color[tool_0based])
+        return false;
+    const wxColour &cached = m_filament_loaded_tool_colors[tool_0based];
+    if (!cached.IsOk())
+        return false;
+    if (color_out)
+        *color_out = cached;
+    if (material_out)
+        *material_out = m_filament_loaded_tool_materials[tool_0based];
+    return true;
 }
 
 void PrinterWebView::prompt_and_save_filament_selection_then_load()
@@ -3352,6 +3682,12 @@ void PrinterWebView::prompt_and_save_filament_selection_then_load()
 
     m_filament_loaded_tool_materials[m_selected_filament_tool] = material;
     m_filament_loaded_tool_colors[m_selected_filament_tool] = colour_from_hex(into_u8(color_hex), m_filament_loaded_tool_colors[m_selected_filament_tool]);
+    m_filament_tool_has_color[m_selected_filament_tool] = true;
+    m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
+        auto &tool = state.filament.tools[m_selected_filament_tool];
+        tool.color = m_filament_loaded_tool_colors[m_selected_filament_tool];
+        tool.material = material;
+    });
     apply_filament_tool_selection(m_selected_filament_tool);
     save_filament_selection_to_moonraker(ui_tool, material, color_hex);
     show_filament_load_wizard();
@@ -3492,6 +3828,8 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
 
     if (obj == nullptr || !obj->is_online() || base.empty()) {
         m_has_moonraker_status = false;
+        m_has_moonraker_print_status = false;
+        m_moonraker_print_job = DeviceDashboard::PrintJobState();
         m_moonraker_status_fetch_in_progress = false;
         m_moonraker_status_machine_id.clear();
         return;
@@ -3499,6 +3837,8 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
 
     if (m_moonraker_status_machine_id != machine_id) {
         m_has_moonraker_status = false;
+        m_has_moonraker_print_status = false;
+        m_moonraker_print_job = DeviceDashboard::PrintJobState();
         m_moonraker_status_fetch_in_progress = false;
         m_moonraker_status_machine_id = machine_id;
     }
@@ -3507,17 +3847,27 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         return;
 
     m_moonraker_status_fetch_in_progress = true;
-    const std::string query_url = base +
+    const std::string status_query_url = base +
         "/printer/objects/query?extruder=temperature,target"
         "&extruder1=temperature,target"
         "&extruder2=temperature,target"
         "&extruder3=temperature,target"
         "&heater_bed=temperature,target"
-        "&fan=speed";
+        "&toolhead=extruder"
+        "&print_stats=filename,state,total_duration,print_duration,info"
+        "&virtual_sdcard=progress";
+    const std::string fan_query_url = base +
+        "/printer/objects/query?fan=speed,power"
+        "&fan_generic%20fan_t0=speed,rpm"
+        "&fan_generic%20fan_t1=speed,rpm"
+        "&fan_generic%20fan_t2=speed,rpm"
+        "&fan_generic%20fan_t3=speed,rpm";
 
-    std::thread([this, machine_id, query_url]() {
+    std::thread([this, machine_id, base, status_query_url, fan_query_url]() {
         std::string body;
-        Http::get(query_url)
+        std::string fan_body;
+        std::string metadata_body;
+        Http::get(status_query_url)
             .timeout_connect(2)
             .timeout_max(4)
             .on_complete([&](std::string response, unsigned status) {
@@ -3527,7 +3877,46 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             .on_error([](std::string, std::string, unsigned) {})
             .perform_sync();
 
-        CallAfter([this, machine_id, body]() {
+        if (!body.empty()) {
+            auto parsed_status = nlohmann::json::parse(body, nullptr, false, true);
+            if (!parsed_status.is_discarded()) {
+                if (parsed_status.contains("result"))
+                    parsed_status = parsed_status["result"];
+                if (parsed_status.is_object() && parsed_status.contains("status") && parsed_status["status"].is_object()) {
+                    const auto &status = parsed_status["status"];
+                    if (status.contains("print_stats") && status["print_stats"].is_object()) {
+                        const auto &print_stats = status["print_stats"];
+                        if (print_stats.contains("filename") && print_stats["filename"].is_string()) {
+                            const std::string raw_filename = print_stats["filename"].get<std::string>();
+                            if (!raw_filename.empty()) {
+                                const std::string metadata_url = base + "/server/files/metadata?filename=" + url_encode_component(from_u8(raw_filename));
+                                Http::get(metadata_url)
+                                    .timeout_connect(2)
+                                    .timeout_max(4)
+                                    .on_complete([&](std::string response, unsigned status_code) {
+                                        if (status_code == 200)
+                                            metadata_body = std::move(response);
+                                    })
+                                    .on_error([](std::string, std::string, unsigned) {})
+                                    .perform_sync();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Http::get(fan_query_url)
+            .timeout_connect(2)
+            .timeout_max(4)
+            .on_complete([&](std::string response, unsigned status) {
+                if (status == 200)
+                    fan_body = std::move(response);
+            })
+            .on_error([](std::string, std::string, unsigned) {})
+            .perform_sync();
+
+        CallAfter([this, machine_id, body, fan_body, metadata_body]() {
             m_moonraker_status_fetch_in_progress = false;
             auto *dev_manager = wxGetApp().getDeviceManager();
             MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
@@ -3544,6 +3933,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
 
             const auto &status = parsed["status"];
             bool got_any = false;
+            int active_tool_index = -1;
             for (int i = 0; i < 4; ++i) {
                 const std::string object_name = i == 0 ? "extruder" : "extruder" + std::to_string(i);
                 if (!status.contains(object_name) || !status[object_name].is_object())
@@ -3559,6 +3949,14 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 }
             }
 
+            if (status.contains("toolhead") && status["toolhead"].is_object()) {
+                const auto &toolhead = status["toolhead"];
+                if (toolhead.contains("extruder") && toolhead["extruder"].is_string()) {
+                    active_tool_index = active_tool_index_from_moonraker_extruder(toolhead["extruder"].get<std::string>());
+                    got_any = got_any || active_tool_index >= 0;
+                }
+            }
+
             if (status.contains("heater_bed") && status["heater_bed"].is_object()) {
                 const auto &bed = status["heater_bed"];
                 if (bed.contains("temperature") && bed["temperature"].is_number()) {
@@ -3571,11 +3969,140 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 }
             }
 
-            if (status.contains("fan") && status["fan"].is_object()) {
-                const auto &fan = status["fan"];
-                if (fan.contains("speed") && fan["speed"].is_number()) {
-                    m_moonraker_fan_percent = std::clamp(
-                        static_cast<int>(std::round(fan["speed"].get<double>() * 100.0)), 0, 100);
+            DeviceDashboard::PrintJobState moonraker_print_job;
+            bool got_print_state = false;
+            double print_duration = 0.0;
+            int estimated_total_seconds = -1;
+            if (status.contains("print_stats") && status["print_stats"].is_object()) {
+                const auto &print_stats = status["print_stats"];
+                wxString print_state;
+                if (print_stats.contains("state") && print_stats["state"].is_string())
+                    print_state = from_u8(print_stats["state"].get<std::string>()).Lower();
+
+                moonraker_print_job.has_active_job = print_state == "printing" || print_state == "paused";
+                got_print_state = !print_state.empty();
+                if (moonraker_print_job.has_active_job) {
+                    if (print_stats.contains("filename") && print_stats["filename"].is_string())
+                        moonraker_print_job.file_name = clean_moonraker_print_filename(from_u8(print_stats["filename"].get<std::string>()));
+                    if (print_stats.contains("print_duration") && print_stats["print_duration"].is_number())
+                        print_duration = print_stats["print_duration"].get<double>();
+                    if (print_stats.contains("info") && print_stats["info"].is_object()) {
+                        const auto &info = print_stats["info"];
+                        double value = 0.0;
+                        if (moonraker_json_number_value(info, {"current_layer", "current_layer_num", "layer", "layer_num"}, value))
+                            moonraker_print_job.current_layer = std::max(0, static_cast<int>(value));
+                        if (moonraker_json_number_value(info, {"total_layer", "total_layers", "total_layer_num", "layer_count", "layers"}, value))
+                            moonraker_print_job.total_layers = std::max(0, static_cast<int>(value));
+                    }
+                    moonraker_print_job.thumbnail_url = obj->slice_info != nullptr ? from_u8(obj->slice_info->thumbnail_url) : wxString();
+                    got_any = true;
+                }
+            }
+
+            if (moonraker_print_job.has_active_job) {
+                if (status.contains("virtual_sdcard") && status["virtual_sdcard"].is_object()) {
+                    const auto &virtual_sdcard = status["virtual_sdcard"];
+                    if (virtual_sdcard.contains("progress") && virtual_sdcard["progress"].is_number())
+                        moonraker_print_job.progress_percent = std::clamp(
+                            static_cast<int>(std::round(virtual_sdcard["progress"].get<double>() * 100.0)), 0, 100);
+                    else
+                        moonraker_print_job.progress_percent = std::clamp(obj->mc_print_percent, 0, 100);
+                } else {
+                    moonraker_print_job.progress_percent = std::clamp(obj->mc_print_percent, 0, 100);
+                }
+
+                if (!metadata_body.empty()) {
+                    auto metadata = nlohmann::json::parse(metadata_body, nullptr, false, true);
+                    if (!metadata.is_discarded()) {
+                        if (metadata.contains("result"))
+                            metadata = metadata["result"];
+                        if (metadata.is_object()) {
+                            if (metadata.contains("estimated_time") && metadata["estimated_time"].is_number())
+                                estimated_total_seconds = static_cast<int>(std::round(metadata["estimated_time"].get<double>()));
+                            else if (metadata.contains("print_time") && metadata["print_time"].is_number())
+                                estimated_total_seconds = static_cast<int>(std::round(metadata["print_time"].get<double>()));
+
+                            if (moonraker_print_job.total_layers <= 0) {
+                                if (metadata.contains("layer_count") && metadata["layer_count"].is_number_integer()) {
+                                    moonraker_print_job.total_layers = metadata["layer_count"].get<int>();
+                                } else if (metadata.contains("total_layer_count") && metadata["total_layer_count"].is_number_integer()) {
+                                    moonraker_print_job.total_layers = metadata["total_layer_count"].get<int>();
+                                } else if (metadata.contains("object_height") && metadata["object_height"].is_number() &&
+                                           metadata.contains("layer_height") && metadata["layer_height"].is_number()) {
+                                    const double object_height = metadata["object_height"].get<double>();
+                                    const double layer_height = metadata["layer_height"].get<double>();
+                                    const double first_layer_height = metadata.contains("first_layer_height") && metadata["first_layer_height"].is_number()
+                                        ? metadata["first_layer_height"].get<double>()
+                                        : layer_height;
+                                    if (object_height > 0.0 && layer_height > 0.0)
+                                        moonraker_print_job.total_layers = std::max(1, static_cast<int>(
+                                            std::ceil(std::max(0.0, object_height - first_layer_height) / layer_height)) + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                moonraker_finalize_print_job(moonraker_print_job, obj);
+                moonraker_print_job.elapsed_seconds = moonraker_compute_total_estimate_seconds(
+                    moonraker_print_job.progress_percent, estimated_total_seconds, print_duration, obj);
+                moonraker_print_job.remaining_seconds = moonraker_compute_remaining_seconds(
+                    moonraker_print_job.progress_percent,
+                    estimated_total_seconds,
+                    print_duration,
+                    moonraker_print_job.current_layer,
+                    moonraker_print_job.total_layers,
+                    obj->mc_left_time > 0 ? obj->mc_left_time : -1);
+
+                if (moonraker_print_job.total_layers > 0 && moonraker_print_job.current_layer <= 0)
+                    moonraker_print_job.current_layer = std::clamp(
+                        static_cast<int>(std::ceil(moonraker_print_job.total_layers * std::clamp(moonraker_print_job.progress_percent, 0, 100) / 100.0)),
+                        1,
+                        moonraker_print_job.total_layers);
+            }
+            if (got_print_state) {
+                m_has_moonraker_print_status = true;
+                m_moonraker_print_job = moonraker_print_job;
+            }
+
+            nlohmann::json fan_status_storage;
+            const nlohmann::json *fan_status = &status;
+            if (!fan_body.empty()) {
+                auto parsed_fan = nlohmann::json::parse(fan_body, nullptr, false, true);
+                if (!parsed_fan.is_discarded()) {
+                    if (parsed_fan.contains("result"))
+                        parsed_fan = parsed_fan["result"];
+                    if (parsed_fan.is_object() && parsed_fan.contains("status") && parsed_fan["status"].is_object()) {
+                        fan_status_storage = parsed_fan["status"];
+                        fan_status = &fan_status_storage;
+                    }
+                }
+            }
+
+            int standard_fan_percent = 0;
+            bool has_standard_fan = false;
+            if (fan_status->contains("fan") && (*fan_status)["fan"].is_object())
+                has_standard_fan = moonraker_fan_percent_from_json((*fan_status)["fan"], standard_fan_percent);
+
+            for (int i = 0; i < 4; ++i) {
+                const std::string object_name = "fan_generic fan_t" + std::to_string(i);
+                int fan_percent = 0;
+                if (fan_status->contains(object_name) && (*fan_status)[object_name].is_object() &&
+                    moonraker_fan_percent_from_json((*fan_status)[object_name], fan_percent)) {
+                    m_moonraker_fan_percent[i] = fan_percent;
+                    m_moonraker_fan_available[i] = true;
+                    got_any = true;
+                } else {
+                    m_moonraker_fan_available[i] = false;
+                }
+            }
+
+            // Single-tool Klipper printers expose [fan] as "fan", not fan_generic fan_t0.
+            if (has_standard_fan) {
+                const int tool_index = active_tool_index >= 0 ? active_tool_index : 0;
+                if (!m_moonraker_fan_available[tool_index] || m_moonraker_fan_percent[tool_index] == 0) {
+                    m_moonraker_fan_percent[tool_index] = standard_fan_percent;
+                    m_moonraker_fan_available[tool_index] = true;
                     got_any = true;
                 }
             }
@@ -3586,6 +4113,10 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             //  o fonksiyon içinde yeni bir Moonraker fetch başlatır → sonsuz döngü)
             if (got_any && m_dashboard_printer_status_panel != nullptr) {
                 DeviceDashboard::DeviceDashboardState patched = m_dashboard_state_store.state();
+                if (active_tool_index >= 0) {
+                    m_selected_extruder_index = active_tool_index;
+                    patched.movement.selected_tool = active_tool_index;
+                }
                 patched.bed.temperature.available = true;
                 patched.bed.temperature.current   = m_moonraker_bed_current;
                 patched.bed.temperature.target    = m_moonraker_bed_target;
@@ -3593,15 +4124,30 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                     patched.tools[i].nozzle.available = true;
                     patched.tools[i].nozzle.current   = m_moonraker_nozzle_current[i];
                     patched.tools[i].nozzle.target    = m_moonraker_nozzle_target[i];
-                    patched.tools[i].fan.available    = true;
-                    patched.tools[i].fan.percent      = m_moonraker_fan_percent;
+                    if (m_moonraker_fan_available[i]) {
+                        patched.tools[i].fan.available = true;
+                        patched.tools[i].fan.percent   = m_moonraker_fan_percent[i];
+                    }
+                    if (active_tool_index >= 0)
+                        patched.tools[i].active = i == active_tool_index;
                 }
+                if (got_print_state)
+                    patched.print_job = moonraker_print_job;
                 m_dashboard_printer_status_panel->apply_state(patched.tools, patched.bed);
+                if (got_print_state && m_dashboard_print_status_panel != nullptr)
+                    m_dashboard_print_status_panel->apply_state(patched.print_job);
+                if (active_tool_index >= 0) {
+                    m_dashboard_printer_status_panel->set_active_tool(active_tool_index);
+                    if (m_dashboard_movement_panel != nullptr)
+                        m_dashboard_movement_panel->apply_state(patched.movement);
+                }
                 m_dashboard_state_store.set_state(patched);
             }
             // Tüm status_page'i değil, sadece sıcaklık panelini yenile
             if (m_dashboard_printer_status_panel != nullptr)
                 m_dashboard_printer_status_panel->Refresh();
+            if (got_print_state && m_dashboard_print_status_panel != nullptr)
+                m_dashboard_print_status_panel->Refresh();
         });
     }).detach();
 }
@@ -3692,6 +4238,310 @@ void PrinterWebView::apply_printer_status_tool_selection(int tool_index)
 
     refresh_layer_info_from_selected_machine();
     Layout();
+}
+
+bool PrinterWebView::send_toolhead_fan_speed_command(int tool_index, int fan_percent)
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    const std::string base = moonraker_base_url(obj);
+    if (obj == nullptr || !obj->is_online() || base.empty())
+        return false;
+
+    tool_index = std::max(0, std::min(3, tool_index));
+    fan_percent = std::max(0, std::min(100, fan_percent));
+
+    std::ostringstream speed;
+    speed << std::fixed << std::setprecision(3) << (static_cast<double>(fan_percent) / 100.0);
+
+    nlohmann::json payload;
+    payload["script"] = "SET_FAN_SPEED FAN=fan_t" + std::to_string(tool_index) + " SPEED=" + speed.str();
+    const std::string body = payload.dump();
+
+    std::thread([this, base, body]() {
+        Http::post(base + "/printer/gcode/script")
+            .header("Content-Type", "application/json")
+            .set_post_body(body)
+            .timeout_connect(2)
+            .timeout_max(4)
+            .on_complete([](std::string, unsigned status) {
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: tool fan speed command status=" << status;
+            })
+            .on_error([](std::string, std::string error, unsigned status) {
+                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: tool fan speed command failed status=" << status << " error=" << error;
+            })
+            .perform_sync();
+
+        CallAfter([this]() {
+            refresh_moonraker_status_from_selected_machine();
+        });
+    }).detach();
+
+    return true;
+}
+
+void PrinterWebView::show_toolhead_fan_dialog(int active_extruder_index)
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr || !obj->is_online())
+        return;
+
+    active_extruder_index = std::max(0, std::min(3, active_extruder_index));
+    const int current_percent = m_moonraker_fan_available[active_extruder_index] ? m_moonraker_fan_percent[active_extruder_index] : 0;
+
+    wxDialog dlg(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    dlg.SetBackgroundColour(wxColour("#000000"));
+
+    auto *root = new wxBoxSizer(wxVERTICAL);
+    auto *dialog_shell = new StaticBox(&dlg, wxID_ANY);
+    dialog_shell->SetCornerRadius(FromDIP(10));
+    dialog_shell->SetBorderWidth(1);
+    dialog_shell->SetBorderColorNormal(wxColour("#D9DBDB"));
+    dialog_shell->SetBackgroundColorNormal(wxColour("#F7F7F5"));
+    dialog_shell->SetBackgroundColour(wxColour("#F7F7F5"));
+    auto *shell_sz = new wxBoxSizer(wxVERTICAL);
+
+    auto *title_bar = new wxPanel(dialog_shell, wxID_ANY);
+    title_bar->SetBackgroundColour(wxColour("#252D31"));
+    auto *title_sz = new wxBoxSizer(wxHORIZONTAL);
+    auto *title_txt = new wxStaticText(title_bar, wxID_ANY, _L("Change Toolhead Fan"));
+    title_txt->SetForegroundColour(*wxWHITE);
+    {
+        wxFont tf = title_txt->GetFont();
+        if (tf.GetPointSize() > 1)
+            tf.SetPointSize(tf.GetPointSize() + 1);
+        tf.SetWeight(wxFONTWEIGHT_BOLD);
+        title_txt->SetFont(tf);
+    }
+    title_sz->Add(title_txt, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(14));
+    auto *close_btn = new wxButton(title_bar, wxID_ANY, wxString::FromUTF8("\u00D7"), wxDefaultPosition, wxSize(FromDIP(34), FromDIP(34)), wxBORDER_NONE);
+    close_btn->SetBackgroundColour(wxColour("#252D31"));
+    close_btn->SetForegroundColour(*wxWHITE);
+    title_sz->Add(close_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
+    title_bar->SetSizer(title_sz);
+    title_bar->SetMinSize(wxSize(-1, FromDIP(38)));
+    shell_sz->Add(title_bar, 0, wxEXPAND);
+
+    auto *body = new wxPanel(dialog_shell);
+    body->SetBackgroundColour(wxColour("#F7F7F5"));
+    auto *body_sz = new wxBoxSizer(wxHORIZONTAL);
+
+    auto *left = new wxPanel(body, wxID_ANY);
+    left->SetBackgroundColour(wxColour("#F7F7F5"));
+    left->SetMinSize(wxSize(FromDIP(190), -1));
+    auto *left_sz = new wxBoxSizer(wxVERTICAL);
+
+    auto *active_card = new StaticBox(left, wxID_ANY);
+    active_card->SetMinSize(wxSize(FromDIP(152), FromDIP(98)));
+    active_card->SetCornerRadius(FromDIP(10));
+    active_card->SetBorderWidth(1);
+    active_card->SetBorderColorNormal(wxColour("#ECEDEC"));
+    active_card->SetBackgroundColorNormal(wxColour("#FBFBFA"));
+    active_card->SetBackgroundColour(wxColour("#FBFBFA"));
+    auto *active_card_sz = new wxBoxSizer(wxVERTICAL);
+
+    auto *tool_hdr_wrap = new wxPanel(active_card, wxID_ANY);
+    tool_hdr_wrap->SetBackgroundColour(wxColour("#F2F3F1"));
+    auto *thw_sz = new wxBoxSizer(wxVERTICAL);
+    auto *tool_hdr = new wxStaticText(tool_hdr_wrap, wxID_ANY, wxString::Format("Tool %d", active_extruder_index + 1));
+    tool_hdr->SetBackgroundColour(wxColour("#F2F3F1"));
+    tool_hdr->SetForegroundColour(wxColour("#4C4E50"));
+    {
+        wxFont hf = tool_hdr->GetFont();
+        hf.SetWeight(wxFONTWEIGHT_BOLD);
+        tool_hdr->SetFont(hf);
+    }
+    thw_sz->Add(tool_hdr, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(10));
+    tool_hdr_wrap->SetSizer(thw_sz);
+    active_card_sz->Add(tool_hdr_wrap, 0, wxEXPAND);
+
+    auto *fan_row = new wxBoxSizer(wxHORIZONTAL);
+    wxBitmap fan_bitmap = create_scaled_bitmap("cp_tool_fan", &dlg, 24);
+    if (fan_bitmap.IsOk())
+        fan_row->Add(new wxStaticBitmap(active_card, wxID_ANY, fan_bitmap), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+    auto *big_cur = new wxStaticText(active_card, wxID_ANY, wxString::Format("%d%%", current_percent));
+    {
+        wxFont bf = big_cur->GetFont();
+        bf.SetPointSize(std::max(18, bf.GetPointSize() + 8));
+        bf.SetWeight(wxFONTWEIGHT_BOLD);
+        big_cur->SetFont(bf);
+    }
+    big_cur->SetForegroundColour(wxColour("#596068"));
+    fan_row->Add(big_cur, 0, wxALIGN_CENTER_VERTICAL);
+    active_card_sz->Add(fan_row, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(14));
+    active_card->SetSizer(active_card_sz);
+    left_sz->Add(active_card, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(8));
+
+    auto *input_wrap = new StaticBox(left, wxID_ANY);
+    input_wrap->SetCornerRadius(FromDIP(8));
+    input_wrap->SetBorderWidth(1);
+    input_wrap->SetBorderColorNormal(wxColour("#E0E2E2"));
+    input_wrap->SetBackgroundColorNormal(*wxWHITE);
+    input_wrap->SetBackgroundColour(*wxWHITE);
+    input_wrap->SetMinSize(wxSize(FromDIP(112), FromDIP(29)));
+    auto *input_wrap_sz = new wxBoxSizer(wxHORIZONTAL);
+    auto *inp = new wxTextCtrl(input_wrap, wxID_ANY, wxString::Format("%d%%", current_percent), wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER | wxBORDER_NONE);
+    inp->SetBackgroundColour(*wxWHITE);
+    inp->SetForegroundColour(wxColour("#4F555A"));
+    input_wrap_sz->Add(inp, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(10));
+    input_wrap->SetSizer(input_wrap_sz);
+
+    auto *set_btn = new StaticBox(left, wxID_ANY);
+    set_btn->SetMinSize(wxSize(FromDIP(50), FromDIP(29)));
+    set_btn->SetCornerRadius(FromDIP(7));
+    set_btn->SetBorderWidth(0);
+    set_btn->SetBackgroundColorNormal(wxColour("#4E4E4E"));
+    set_btn->SetBackgroundColour(wxColour("#4E4E4E"));
+    set_btn->SetCursor(wxCursor(wxCURSOR_HAND));
+    auto *set_btn_sz = new wxBoxSizer(wxHORIZONTAL);
+    auto *set_label = new wxStaticText(set_btn, wxID_ANY, _L("Set"));
+    set_label->SetForegroundColour(*wxWHITE);
+    set_label->SetCursor(wxCursor(wxCURSOR_HAND));
+    set_btn_sz->AddStretchSpacer(1);
+    set_btn_sz->Add(set_label, 0, wxALIGN_CENTER_VERTICAL);
+    set_btn_sz->AddStretchSpacer(1);
+    set_btn->SetSizer(set_btn_sz);
+    auto *inp_row = new wxBoxSizer(wxHORIZONTAL);
+    inp_row->Add(input_wrap, 0, wxALIGN_CENTER_VERTICAL);
+    inp_row->Add(set_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(10));
+    left_sz->Add(inp_row, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+    left_sz->AddStretchSpacer(1);
+    left->SetSizer(left_sz);
+
+    auto *right = new wxPanel(body, wxID_ANY);
+    right->SetBackgroundColour(wxColour("#F7F7F5"));
+    right->SetMinSize(wxSize(FromDIP(190), -1));
+    auto *right_sz = new wxBoxSizer(wxVERTICAL);
+
+    constexpr int k_select_tool_base_id = wxID_HIGHEST + 340;
+    for (int i = 0; i < 4; ++i) {
+        if (i == active_extruder_index)
+            continue;
+        const int fan = m_moonraker_fan_available[i] ? m_moonraker_fan_percent[i] : 0;
+        auto *row = new StaticBox(right, wxID_ANY);
+        row->SetMinSize(wxSize(FromDIP(190), FromDIP(31)));
+        row->SetCursor(wxCursor(wxCURSOR_HAND));
+        row->SetCornerRadius(FromDIP(8));
+        row->SetBorderWidth(1);
+        row->SetBorderColorNormal(wxColour("#ECEDEC"));
+        row->SetBackgroundColorNormal(wxColour("#FBFBFA"));
+        row->SetBackgroundColour(wxColour("#FBFBFA"));
+        auto *rs = new wxBoxSizer(wxHORIZONTAL);
+
+        auto *pill = new wxPanel(row, wxID_ANY);
+        pill->SetCursor(wxCursor(wxCURSOR_HAND));
+        pill->SetBackgroundColour(wxColour("#F2F3F1"));
+        auto *ps = new wxBoxSizer(wxVERTICAL);
+        auto *pn = new wxStaticText(pill, wxID_ANY, wxString::Format("Tool %d", i + 1));
+        pn->SetCursor(wxCursor(wxCURSOR_HAND));
+        pn->SetBackgroundColour(wxColour("#F2F3F1"));
+        pn->SetForegroundColour(wxColour("#4C4E50"));
+        {
+            wxFont pf = pn->GetFont();
+            pf.SetWeight(wxFONTWEIGHT_BOLD);
+            pn->SetFont(pf);
+        }
+        ps->Add(pn, 0, wxALL, FromDIP(8));
+        pill->SetSizer(ps);
+        rs->Add(pill, 0, wxALIGN_CENTER_VERTICAL);
+        rs->AddSpacer(FromDIP(10));
+
+        wxBitmap sm = create_scaled_bitmap("cp_tool_fan", &dlg, 16);
+        wxStaticBitmap *sm_icon = nullptr;
+        if (sm.IsOk())
+            sm_icon = new wxStaticBitmap(row, wxID_ANY, sm);
+        if (sm_icon != nullptr) {
+            sm_icon->SetCursor(wxCursor(wxCURSOR_HAND));
+            rs->Add(sm_icon, 0, wxALIGN_CENTER_VERTICAL);
+        }
+        auto *tx = new wxStaticText(row, wxID_ANY, wxString::Format("%d%%", fan));
+        tx->SetCursor(wxCursor(wxCURSOR_HAND));
+        tx->SetForegroundColour(wxColour("#596068"));
+        rs->Add(tx, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(6));
+        row->SetSizer(rs);
+        right_sz->Add(row, 0, wxEXPAND | wxTOP, FromDIP(8));
+        const int tool_index = i;
+        auto select_tool = [&dlg, tool_index, k_select_tool_base_id](wxMouseEvent &evt) {
+            evt.StopPropagation();
+            dlg.EndModal(k_select_tool_base_id + tool_index);
+        };
+        row->Bind(wxEVT_LEFT_DOWN, select_tool);
+        pill->Bind(wxEVT_LEFT_DOWN, select_tool);
+        pn->Bind(wxEVT_LEFT_DOWN, select_tool);
+        if (sm_icon != nullptr)
+            sm_icon->Bind(wxEVT_LEFT_DOWN, select_tool);
+        tx->Bind(wxEVT_LEFT_DOWN, select_tool);
+    }
+    right_sz->AddStretchSpacer(1);
+    right->SetSizer(right_sz);
+
+    body_sz->Add(left, 0, wxEXPAND | wxLEFT | wxTOP | wxBOTTOM, FromDIP(14));
+    body_sz->AddSpacer(FromDIP(14));
+    body_sz->Add(right, 0, wxEXPAND | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(14));
+    body->SetSizer(body_sz);
+    shell_sz->Add(body, 1, wxEXPAND);
+
+    dialog_shell->SetSizer(shell_sz);
+    root->Add(dialog_shell, 1, wxEXPAND | wxALL, FromDIP(1));
+    dlg.SetSizer(root);
+
+    const auto apply_fan = [&]() {
+        wxString raw = inp->GetValue();
+        raw.Trim(true);
+        raw.Trim(false);
+        raw.Replace("%", wxEmptyString, true);
+        raw.Trim(true);
+        raw.Trim(false);
+        long v = 0;
+        if (!raw.ToLong(&v)) {
+            wxMessageBox(_L("Please enter a valid fan speed."), _L("Change Toolhead Fan"), wxOK | wxICON_WARNING, &dlg);
+            return;
+        }
+        v = std::max(0L, std::min(100L, v));
+        if (!send_toolhead_fan_speed_command(active_extruder_index, static_cast<int>(v))) {
+            wxMessageBox(_L("Fan speed command could not be sent."), _L("Change Toolhead Fan"), wxOK | wxICON_WARNING, &dlg);
+            return;
+        }
+        dlg.EndModal(wxID_OK);
+    };
+
+    close_btn->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent &) { dlg.EndModal(wxID_CANCEL); });
+    set_btn->Bind(wxEVT_LEFT_DOWN, [&apply_fan](wxMouseEvent &) { apply_fan(); });
+    set_label->Bind(wxEVT_LEFT_DOWN, [&apply_fan](wxMouseEvent &) { apply_fan(); });
+    inp->Bind(wxEVT_TEXT_ENTER, [&apply_fan](wxCommandEvent &) { apply_fan(); });
+    dlg.Bind(wxEVT_CLOSE_WINDOW, [&dlg](wxCloseEvent &e) {
+        if (dlg.IsModal())
+            dlg.EndModal(wxID_CANCEL);
+        else
+            e.Skip();
+    });
+
+    dlg.Fit();
+    dlg.SetMinSize(dlg.GetSize());
+    {
+        const wxSize size = dlg.GetSize();
+        wxBitmap shape_bmp(size.GetWidth(), size.GetHeight());
+        wxMemoryDC dc(shape_bmp);
+        dc.SetBackground(wxBrush(wxColour(0, 0, 0)));
+        dc.Clear();
+        dc.SetBrush(wxBrush(wxColour(255, 255, 255)));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.DrawRoundedRectangle(0, 0, size.GetWidth(), size.GetHeight(), FromDIP(10));
+        dc.SelectObject(wxNullBitmap);
+
+        wxRegion region(shape_bmp, wxColour(0, 0, 0));
+        if (region.IsOk())
+            dlg.SetShape(region);
+    }
+    dlg.CentreOnParent();
+    const int modal_result = dlg.ShowModal();
+    if (modal_result >= k_select_tool_base_id && modal_result < k_select_tool_base_id + 4) {
+        const int selected_tool = modal_result - k_select_tool_base_id;
+        CallAfter([this, selected_tool]() {
+            show_toolhead_fan_dialog(selected_tool);
+        });
+    }
 }
 
 void PrinterWebView::show_toolhead_temperature_dialog(int active_extruder_index)
@@ -3979,6 +4829,205 @@ void PrinterWebView::show_toolhead_temperature_dialog(int active_extruder_index)
     }
 }
 
+void PrinterWebView::show_bed_temperature_dialog()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr || !obj->is_online() || obj->GetBed() == nullptr)
+        return;
+
+    long min_t = 0;
+    long max_t = obj->get_bed_temperature_limit();
+    if (obj->bed_temp_range.size() >= 2) {
+        min_t = obj->bed_temp_range[0];
+        max_t = obj->bed_temp_range[1];
+    }
+
+    const float cur_f = obj->GetBed()->GetBedTemp();
+    const float tgt_f = obj->GetBed()->GetBedTempTarget();
+
+    wxDialog dlg(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    dlg.SetBackgroundColour(wxColour("#000000"));
+
+    auto *root = new wxBoxSizer(wxVERTICAL);
+    auto *dialog_shell = new StaticBox(&dlg, wxID_ANY);
+    dialog_shell->SetCornerRadius(FromDIP(10));
+    dialog_shell->SetBorderWidth(1);
+    dialog_shell->SetBorderColorNormal(wxColour("#D9DBDB"));
+    dialog_shell->SetBackgroundColorNormal(wxColour("#F7F7F5"));
+    dialog_shell->SetBackgroundColour(wxColour("#F7F7F5"));
+    auto *shell_sz = new wxBoxSizer(wxVERTICAL);
+
+    auto *title_bar = new wxPanel(dialog_shell, wxID_ANY);
+    title_bar->SetBackgroundColour(wxColour("#252D31"));
+    auto *title_sz = new wxBoxSizer(wxHORIZONTAL);
+    auto *title_txt = new wxStaticText(title_bar, wxID_ANY, _L("Change Build Plate Temperature"));
+    title_txt->SetForegroundColour(*wxWHITE);
+    {
+        wxFont tf = title_txt->GetFont();
+        if (tf.GetPointSize() > 1)
+            tf.SetPointSize(tf.GetPointSize() + 1);
+        tf.SetWeight(wxFONTWEIGHT_BOLD);
+        title_txt->SetFont(tf);
+    }
+    title_sz->Add(title_txt, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(14));
+    auto *close_btn = new wxButton(title_bar, wxID_ANY, wxString::FromUTF8("\u00D7"), wxDefaultPosition, wxSize(FromDIP(34), FromDIP(34)), wxBORDER_NONE);
+    close_btn->SetBackgroundColour(wxColour("#252D31"));
+    close_btn->SetForegroundColour(*wxWHITE);
+    title_sz->Add(close_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
+    title_bar->SetSizer(title_sz);
+    title_bar->SetMinSize(wxSize(-1, FromDIP(38)));
+    shell_sz->Add(title_bar, 0, wxEXPAND);
+
+    auto *body = new wxPanel(dialog_shell);
+    body->SetBackgroundColour(wxColour("#F7F7F5"));
+    auto *body_sz = new wxBoxSizer(wxVERTICAL);
+
+    auto *active_card = new StaticBox(body, wxID_ANY);
+    active_card->SetMinSize(wxSize(FromDIP(220), FromDIP(98)));
+    active_card->SetCornerRadius(FromDIP(10));
+    active_card->SetBorderWidth(1);
+    active_card->SetBorderColorNormal(wxColour("#ECEDEC"));
+    active_card->SetBackgroundColorNormal(wxColour("#FBFBFA"));
+    active_card->SetBackgroundColour(wxColour("#FBFBFA"));
+    auto *active_card_sz = new wxBoxSizer(wxVERTICAL);
+
+    auto *bed_hdr_wrap = new wxPanel(active_card, wxID_ANY);
+    bed_hdr_wrap->SetBackgroundColour(wxColour("#F2F3F1"));
+    auto *bhw_sz = new wxBoxSizer(wxVERTICAL);
+    auto *bed_hdr = new wxStaticText(bed_hdr_wrap, wxID_ANY, _L("Build Plate"));
+    bed_hdr->SetBackgroundColour(wxColour("#F2F3F1"));
+    bed_hdr->SetForegroundColour(wxColour("#4C4E50"));
+    {
+        wxFont hf = bed_hdr->GetFont();
+        hf.SetWeight(wxFONTWEIGHT_BOLD);
+        bed_hdr->SetFont(hf);
+    }
+    bhw_sz->Add(bed_hdr, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(10));
+    bed_hdr_wrap->SetSizer(bhw_sz);
+    active_card_sz->Add(bed_hdr_wrap, 0, wxEXPAND);
+
+    auto *temp_row = new wxBoxSizer(wxHORIZONTAL);
+    wxBitmap therm = safe_scaled_bitmap(&dlg, "cp_bed_heating", 24);
+    if (therm.IsOk())
+        temp_row->Add(new wxStaticBitmap(active_card, wxID_ANY, therm), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+    auto *big_cur = new wxStaticText(active_card, wxID_ANY, wxString::Format("%.0f", static_cast<double>(cur_f)));
+    {
+        wxFont bf = big_cur->GetFont();
+        bf.SetPointSize(std::max(18, bf.GetPointSize() + 8));
+        bf.SetWeight(wxFONTWEIGHT_BOLD);
+        big_cur->SetFont(bf);
+    }
+    big_cur->SetForegroundColour(wxColour("#596068"));
+    temp_row->Add(big_cur, 0, wxALIGN_CENTER_VERTICAL);
+    temp_row->Add(new wxStaticText(active_card, wxID_ANY, "/"), 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(2));
+    auto *big_tgt = new wxStaticText(active_card, wxID_ANY,
+                                     wxString::Format("%.0f %s", static_cast<double>(tgt_f), wxString::FromUTF8("\xC2\xB0""C")));
+    {
+        wxFont sf = big_tgt->GetFont();
+        if (sf.GetPointSize() > 1)
+            sf.SetPointSize(sf.GetPointSize() + 1);
+        big_tgt->SetFont(sf);
+    }
+    big_tgt->SetForegroundColour(wxColour("#596068"));
+    temp_row->Add(big_tgt, 0, wxALIGN_CENTER_VERTICAL);
+    active_card_sz->Add(temp_row, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(14));
+    active_card->SetSizer(active_card_sz);
+
+    wxString init_val = wxString::Format("%.0f%s", static_cast<double>(tgt_f), wxString::FromUTF8("\xC2\xB0""C"));
+    auto *input_wrap = new StaticBox(body, wxID_ANY);
+    input_wrap->SetCornerRadius(FromDIP(8));
+    input_wrap->SetBorderWidth(1);
+    input_wrap->SetBorderColorNormal(wxColour("#E0E2E2"));
+    input_wrap->SetBackgroundColorNormal(*wxWHITE);
+    input_wrap->SetBackgroundColour(*wxWHITE);
+    input_wrap->SetMinSize(wxSize(FromDIP(112), FromDIP(29)));
+    auto *input_wrap_sz = new wxBoxSizer(wxHORIZONTAL);
+    auto *inp = new wxTextCtrl(input_wrap, wxID_ANY, init_val, wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER | wxBORDER_NONE);
+    inp->SetBackgroundColour(*wxWHITE);
+    inp->SetForegroundColour(wxColour("#4F555A"));
+    input_wrap_sz->Add(inp, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(10));
+    input_wrap->SetSizer(input_wrap_sz);
+
+    auto *set_btn = new StaticBox(body, wxID_ANY);
+    set_btn->SetMinSize(wxSize(FromDIP(50), FromDIP(29)));
+    set_btn->SetCornerRadius(FromDIP(7));
+    set_btn->SetBorderWidth(0);
+    set_btn->SetBackgroundColorNormal(wxColour("#4E4E4E"));
+    set_btn->SetBackgroundColour(wxColour("#4E4E4E"));
+    set_btn->SetCursor(wxCursor(wxCURSOR_HAND));
+    auto *set_btn_sz = new wxBoxSizer(wxHORIZONTAL);
+    auto *set_label = new wxStaticText(set_btn, wxID_ANY, _L("Set"));
+    set_label->SetForegroundColour(*wxWHITE);
+    set_label->SetCursor(wxCursor(wxCURSOR_HAND));
+    set_btn_sz->AddStretchSpacer(1);
+    set_btn_sz->Add(set_label, 0, wxALIGN_CENTER_VERTICAL);
+    set_btn_sz->AddStretchSpacer(1);
+    set_btn->SetSizer(set_btn_sz);
+
+    auto *inp_row = new wxBoxSizer(wxHORIZONTAL);
+    inp_row->Add(input_wrap, 0, wxALIGN_CENTER_VERTICAL);
+    inp_row->Add(set_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(10));
+
+    body_sz->Add(active_card, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(14));
+    body_sz->Add(inp_row, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(14));
+    body->SetSizer(body_sz);
+    shell_sz->Add(body, 1, wxEXPAND);
+
+    dialog_shell->SetSizer(shell_sz);
+    root->Add(dialog_shell, 1, wxEXPAND | wxALL, FromDIP(1));
+    dlg.SetSizer(root);
+
+    const auto apply_temp = [&]() {
+        wxString raw = inp->GetValue();
+        raw.Trim(true);
+        raw.Trim(false);
+        raw.Replace(wxString::FromUTF8("\xC2\xB0""C"), wxEmptyString, true);
+        raw.Replace("C", wxEmptyString, true);
+        raw.Trim(true);
+        raw.Trim(false);
+        long v = 0;
+        if (!raw.ToLong(&v)) {
+            wxMessageBox(_L("Please enter a valid temperature."), _L("Change Build Plate Temperature"), wxOK | wxICON_WARNING, &dlg);
+            return;
+        }
+        v = std::max(min_t, std::min(max_t, v));
+        obj->command_set_bed(static_cast<int>(v));
+        dlg.EndModal(wxID_OK);
+    };
+
+    close_btn->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent &) { dlg.EndModal(wxID_CANCEL); });
+    set_btn->Bind(wxEVT_LEFT_DOWN, [&apply_temp](wxMouseEvent &) { apply_temp(); });
+    set_label->Bind(wxEVT_LEFT_DOWN, [&apply_temp](wxMouseEvent &) { apply_temp(); });
+    inp->Bind(wxEVT_TEXT_ENTER, [&apply_temp](wxCommandEvent &) { apply_temp(); });
+    dlg.Bind(wxEVT_CLOSE_WINDOW, [&dlg](wxCloseEvent &e) {
+        if (dlg.IsModal())
+            dlg.EndModal(wxID_CANCEL);
+        else
+            e.Skip();
+    });
+
+    dlg.Fit();
+    dlg.SetMinSize(dlg.GetSize());
+    {
+        const wxSize size = dlg.GetSize();
+        wxBitmap shape_bmp(size.GetWidth(), size.GetHeight());
+        wxMemoryDC dc(shape_bmp);
+        dc.SetBackground(wxBrush(wxColour(0, 0, 0)));
+        dc.Clear();
+        dc.SetBrush(wxBrush(wxColour(255, 255, 255)));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.DrawRoundedRectangle(0, 0, size.GetWidth(), size.GetHeight(), FromDIP(10));
+        dc.SelectObject(wxNullBitmap);
+
+        wxRegion region(shape_bmp, wxColour(0, 0, 0));
+        if (region.IsOk())
+            dlg.SetShape(region);
+    }
+    dlg.CentreOnParent();
+    dlg.ShowModal();
+}
+
 void PrinterWebView::prompt_ps_target_temperature(bool is_bed, int extruder_index)
 {
     if (!is_bed) {
@@ -3986,31 +5035,7 @@ void PrinterWebView::prompt_ps_target_temperature(bool is_bed, int extruder_inde
         return;
     }
 
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    if (obj == nullptr || !obj->is_online())
-        return;
-
-    long min_t = 0;
-    long max_t = 300;
-    long cur = 0;
-
-    if (obj->GetBed() != nullptr)
-        cur = static_cast<long>(std::nearbyint(static_cast<double>(obj->GetBed()->GetBedTempTarget())));
-    max_t = obj->get_bed_temperature_limit();
-    if (obj->bed_temp_range.size() >= 2) {
-        min_t = obj->bed_temp_range[0];
-        max_t = obj->bed_temp_range[1];
-    }
-
-    wxTextEntryDialog dlg(this, _L("Enter new bed target temperature (Â°C)."), _L("Bed target temperature"), wxString::Format("%ld", cur));
-    if (dlg.ShowModal() != wxID_OK)
-        return;
-    long v = 0;
-    if (!dlg.GetValue().ToLong(&v))
-        return;
-    v = std::max(min_t, std::min(max_t, v));
-    obj->command_set_bed(static_cast<int>(v));
+    show_bed_temperature_dialog();
 }
 
 void PrinterWebView::show_filament_load_wizard()
@@ -4408,7 +5433,8 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
 
     switch (command.kind) {
     case DeviceDashboard::DeviceCommandKind::SelectTool:
-        apply_printer_status_tool_selection(command.tool_index);
+        if (!send_tool_select_command(command.tool_index))
+            apply_printer_status_tool_selection(command.tool_index);
         break;
     case DeviceDashboard::DeviceCommandKind::SelectFilamentTool:
         apply_filament_tool_selection(command.tool_index);
@@ -4433,9 +5459,7 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
     case DeviceDashboard::DeviceCommandKind::PausePrint:
         if (obj == nullptr || !obj->is_online())
             return;
-        if (obj->can_resume())
-            obj->command_task_resume();
-        else
+        if (!send_print_control_command(false))
             obj->command_task_pause();
         break;
     case DeviceDashboard::DeviceCommandKind::ResumePrint:
@@ -4446,7 +5470,8 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
     case DeviceDashboard::DeviceCommandKind::StopPrint:
         if (obj == nullptr || !obj->is_online())
             return;
-        obj->command_task_abort();
+        if (!send_print_control_command(true))
+            obj->command_task_abort();
         break;
     case DeviceDashboard::DeviceCommandKind::Home:
         if (obj == nullptr || !obj->is_online())
@@ -4500,6 +5525,20 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
     dashboard_state.movement.selected_tool    = m_selected_extruder_index;
     dashboard_state.movement.selected_distance_mm = m_axis_move_step;
 
+    if (obj != nullptr && obj->is_online()) {
+        for (int i = 0; i < DeviceDashboard::MaxDashboardTools; ++i) {
+            if (m_filament_tool_has_color[i]) {
+                dashboard_state.filament.tools[i].color = m_filament_loaded_tool_colors[i];
+                dashboard_state.filament.tools[i].material = is_empty_filament_material(m_filament_loaded_tool_materials[i])
+                    ? wxString::FromUTF8("Empty")
+                    : m_filament_loaded_tool_materials[i];
+            } else {
+                dashboard_state.filament.tools[i].color = wxColour();
+                dashboard_state.filament.tools[i].material = wxString::FromUTF8("Empty");
+            }
+        }
+    }
+
     // Moonraker WebSocket verileri MachineObject içinde değil, PrinterWebView'ın
     // kendi m_moonraker_* alanlarında tutuluyor — DashboardStateAdapter çıktısının üzerine yaz.
     if (m_has_moonraker_status) {
@@ -4510,9 +5549,26 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
             dashboard_state.tools[i].nozzle.available = true;
             dashboard_state.tools[i].nozzle.current   = m_moonraker_nozzle_current[i];
             dashboard_state.tools[i].nozzle.target    = m_moonraker_nozzle_target[i];
-            dashboard_state.tools[i].fan.available    = true;
-            dashboard_state.tools[i].fan.percent      = m_moonraker_fan_percent;
+            if (m_moonraker_fan_available[i]) {
+                dashboard_state.tools[i].fan.available = true;
+                dashboard_state.tools[i].fan.percent   = m_moonraker_fan_percent[i];
+            }
+            dashboard_state.tools[i].active           = i == m_selected_extruder_index;
         }
+        dashboard_state.movement.selected_tool = m_selected_extruder_index;
+    }
+    if (m_has_moonraker_print_status) {
+        DeviceDashboard::PrintJobState merged = m_moonraker_print_job;
+        const DeviceDashboard::PrintJobState &adapter_job = dashboard_state.print_job;
+        if (merged.file_name.IsEmpty() && !adapter_job.file_name.IsEmpty())
+            merged.file_name = adapter_job.file_name;
+        if (merged.remaining_seconds <= 0 && adapter_job.remaining_seconds > 0)
+            merged.remaining_seconds = adapter_job.remaining_seconds;
+        if (merged.elapsed_seconds <= 0 && adapter_job.elapsed_seconds > 0)
+            merged.elapsed_seconds = adapter_job.elapsed_seconds;
+        if (merged.thumbnail_url.IsEmpty() && !adapter_job.thumbnail_url.IsEmpty())
+            merged.thumbnail_url = adapter_job.thumbnail_url;
+        dashboard_state.print_job = merged;
     }
 
     m_dashboard_state_store.set_state(dashboard_state);
