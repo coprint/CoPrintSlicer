@@ -6,6 +6,7 @@
 #include <string>
 
 #include <wx/panel.h>
+#include <wx/gdicmn.h>
 #include <wx/colour.h>
 #include <wx/string.h>
 #include <wx/timer.h>
@@ -111,6 +112,7 @@ private:
     void send_tool_map_command(int model_slot_index, int ui_tool);
     bool send_tool_select_command(int tool_index);
     bool send_print_control_command(bool stop_print);
+    bool show_filament_material_dialog(bool start_load_after_save, const wxPoint& anchor_screen_pos = wxDefaultPosition);
     void prompt_and_save_filament_selection_then_load();
     void save_filament_selection_to_moonraker(int ui_tool, const wxString &material, const wxString &color_hex);
     void clear_filament_selection_from_moonraker(int ui_tool);

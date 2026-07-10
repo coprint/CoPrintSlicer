@@ -16,12 +16,14 @@
 #include "slic3r/GUI/DeviceCore/DevLamp.h"
 #include "slic3r/GUI/DeviceManager.hpp"
 #include "slic3r/GUI/DeviceDashboard/services/DashboardStateAdapter.hpp"
+#include "slic3r/GUI/DeviceDashboard/DeviceUiStyle.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/MovementPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/PrintStatusPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/PrinterStatusPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/FilamentPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/CameraPanel.hpp"
 #include "slic3r/GUI/Widgets/Button.hpp"
+#include "slic3r/GUI/Widgets/StaticBox.hpp"
 #include "slic3r/Utils/NetworkAgentFactory.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include "slic3r/Utils/Http.hpp"
@@ -39,6 +41,9 @@
 #include <wx/textctrl.h>
 #include <wx/dialog.h>
 #include <wx/button.h>
+#include <wx/colordlg.h>
+#include <wx/combobox.h>
+#include <wx/display.h>
 #include <wx/menu.h>
 #include <wx/simplebook.h>
 #include <algorithm>
@@ -735,6 +740,509 @@ bool looks_like_hex_colour(wxString value)
             return false;
     }
     return true;
+}
+
+wxString short_filament_type_from_preset(const wxString &preset)
+{
+    const wxString upper = preset.Upper();
+    if (upper.Contains("PETG"))
+        return "PETG";
+    if (upper.Contains("ABS"))
+        return "ABS";
+    if (upper.Contains("ASA"))
+        return "ASA";
+    if (upper.Contains("TPU"))
+        return "TPU";
+    if (upper.Contains("PA"))
+        return "PA";
+    return "PLA";
+}
+
+std::pair<int, int> nozzle_temperature_range_for_material(const wxString &material)
+{
+    const wxString upper = material.Upper();
+    if (upper.Contains("PETG"))
+        return {260, 220};
+    if (upper.Contains("ABS"))
+        return {280, 240};
+    if (upper.Contains("ASA"))
+        return {280, 240};
+    if (upper.Contains("TPU"))
+        return {240, 210};
+    if (upper.Contains("PA"))
+        return {300, 260};
+    return {240, 190};
+}
+
+class RoundedSelect : public StaticBox
+{
+public:
+    RoundedSelect(wxWindow *parent, const wxArrayString &choices, int selection, const wxColour &bg,
+                  const wxColour &border, const wxColour &text, const wxColour &muted, int radius)
+        : StaticBox(parent, wxID_ANY)
+        , m_choices(choices)
+        , m_bg(bg)
+        , m_border(border)
+        , m_text(text)
+        , m_muted(muted)
+    {
+        SetMinSize(wxSize(FromDIP(250), FromDIP(40)));
+        SetCornerRadius(radius);
+        SetBorderWidth(FromDIP(1));
+        SetBorderColorNormal(border);
+        SetBackgroundColorNormal(bg);
+        SetBackgroundColour(parent->GetBackgroundColour());
+        SetCursor(wxCursor(wxCURSOR_HAND));
+
+        auto *sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_value = new wxStaticText(this, wxID_ANY, wxEmptyString);
+        m_value->SetForegroundColour(text);
+        m_arrow = new wxStaticText(this, wxID_ANY, wxString::FromUTF8("v"));
+        m_arrow->SetForegroundColour(muted);
+        sizer->Add(m_value, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(12));
+        sizer->Add(m_arrow, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        SetSizer(sizer);
+
+        SetSelection(selection);
+        Bind(wxEVT_LEFT_DOWN, &RoundedSelect::on_left_down, this);
+        m_value->Bind(wxEVT_LEFT_DOWN, &RoundedSelect::on_left_down, this);
+        m_arrow->Bind(wxEVT_LEFT_DOWN, &RoundedSelect::on_left_down, this);
+    }
+
+    void SetSelection(int selection)
+    {
+        if (m_choices.IsEmpty())
+            return;
+        m_selection = std::clamp(selection, 0, static_cast<int>(m_choices.size()) - 1);
+        m_value->SetLabel(m_choices[m_selection]);
+        Layout();
+    }
+
+    wxString GetValue() const
+    {
+        return !m_choices.IsEmpty() && m_selection >= 0 ? m_choices[m_selection] : wxString();
+    }
+
+    void SetChangeHandler(std::function<void()> handler)
+    {
+        m_change_handler = std::move(handler);
+    }
+
+private:
+    void on_left_down(wxMouseEvent &)
+    {
+        if (m_choices.IsEmpty())
+            return;
+
+        wxMenu menu;
+        constexpr int base_id = wxID_HIGHEST + 4300;
+        for (size_t i = 0; i < m_choices.size(); ++i)
+            menu.Append(base_id + static_cast<int>(i), m_choices[i]);
+
+        const int result = GetPopupMenuSelectionFromUser(menu, wxPoint(0, GetSize().y + FromDIP(4)));
+        if (result < base_id)
+            return;
+
+        const int next_selection = result - base_id;
+        if (next_selection < 0 || next_selection >= static_cast<int>(m_choices.size()))
+            return;
+
+        SetSelection(next_selection);
+        if (m_change_handler)
+            m_change_handler();
+    }
+
+    wxArrayString m_choices;
+    int m_selection{0};
+    wxStaticText *m_value{nullptr};
+    wxStaticText *m_arrow{nullptr};
+    wxColour m_bg;
+    wxColour m_border;
+    wxColour m_text;
+    wxColour m_muted;
+    std::function<void()> m_change_handler;
+};
+
+class RoundedValueBox : public StaticBox
+{
+public:
+    RoundedValueBox(wxWindow *parent, const wxString &value, const wxSize &min_size, const wxColour &bg,
+                    const wxColour &border, const wxColour &text, int radius, const wxString &suffix = wxEmptyString)
+        : StaticBox(parent, wxID_ANY)
+    {
+        SetMinSize(min_size);
+        SetCornerRadius(radius);
+        SetBorderWidth(FromDIP(1));
+        SetBorderColorNormal(border);
+        SetBackgroundColorNormal(bg);
+        SetBackgroundColour(parent->GetBackgroundColour());
+
+        auto *sizer = new wxBoxSizer(wxHORIZONTAL);
+        m_value = new wxStaticText(this, wxID_ANY, value);
+        m_value->SetForegroundColour(text);
+        sizer->Add(m_value, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(12));
+        if (!suffix.IsEmpty()) {
+            auto *suffix_label = new wxStaticText(this, wxID_ANY, suffix);
+            suffix_label->SetForegroundColour(text);
+            sizer->Add(suffix_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
+        }
+        SetSizer(sizer);
+    }
+
+    void SetValue(const wxString &value)
+    {
+        if (m_value == nullptr)
+            return;
+        m_value->SetLabel(value);
+        Layout();
+    }
+
+private:
+    wxStaticText *m_value{nullptr};
+};
+
+class RoundedColorSwatch : public wxWindow
+{
+public:
+    RoundedColorSwatch(wxWindow *parent, const wxColour &colour, const wxColour &border, int radius)
+        : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(parent->FromDIP(32), parent->FromDIP(32)))
+        , m_colour(colour)
+        , m_border(border)
+        , m_radius(radius)
+    {
+        SetMinSize(wxSize(FromDIP(32), FromDIP(32)));
+        SetMaxSize(wxSize(FromDIP(32), FromDIP(32)));
+        SetBackgroundColour(parent->GetBackgroundColour());
+        SetCursor(wxCursor(wxCURSOR_HAND));
+        Bind(wxEVT_PAINT, &RoundedColorSwatch::on_paint, this);
+    }
+
+    void SetColour(const wxColour &colour)
+    {
+        m_colour = colour;
+        Refresh();
+    }
+
+private:
+    void on_paint(wxPaintEvent &)
+    {
+        wxPaintDC raw_dc(this);
+        wxGCDC dc(raw_dc);
+        dc.SetBackground(wxBrush(GetBackgroundColour()));
+        dc.Clear();
+        dc.SetPen(wxPen(m_border, FromDIP(1)));
+        dc.SetBrush(wxBrush(m_colour.IsOk() ? m_colour : wxColour(214, 45, 214)));
+        const wxSize size = GetClientSize();
+        dc.DrawRoundedRectangle(0, 0, size.x, size.y, m_radius);
+    }
+
+    wxColour m_colour;
+    wxColour m_border;
+    int m_radius{8};
+};
+
+class FilamentMaterialDialog : public wxDialog
+{
+public:
+    FilamentMaterialDialog(wxWindow *parent, int ui_tool, const wxString &initial_material, const wxColour &initial_color)
+        : wxDialog(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
+        , m_colour(initial_color.IsOk() ? initial_color : wxColour(214, 45, 214))
+    {
+        namespace Style = DeviceDashboard;
+
+        const wxColour page_bg = Style::DeviceUiStyle::page_background();
+        const wxColour card_bg = Style::DeviceUiStyle::card_background();
+        const wxColour control_bg = Style::DeviceUiStyle::control_background();
+        const wxColour border = Style::DeviceUiStyle::card_border();
+        const wxColour text = Style::DeviceUiStyle::text_primary();
+        const wxColour muted = Style::DeviceUiStyle::text_muted();
+        const wxColour accent = Style::DeviceUiStyle::accent();
+        const int shell_radius = FromDIP(18);
+        const int control_radius = FromDIP(14);
+        const int button_radius = FromDIP(14);
+
+        SetBackgroundColour(page_bg);
+
+        auto *root = new wxBoxSizer(wxVERTICAL);
+        auto *shell = new StaticBox(this, wxID_ANY);
+        shell->SetCornerRadius(shell_radius);
+        shell->SetBorderWidth(FromDIP(1));
+        shell->SetBorderColorNormal(border);
+        shell->SetBackgroundColorNormal(page_bg);
+        shell->SetBackgroundColour(page_bg);
+        auto *outer = new wxBoxSizer(wxVERTICAL);
+
+        auto *header = new wxPanel(shell, wxID_ANY);
+        header->SetBackgroundColour(card_bg);
+        auto *header_sizer = new wxBoxSizer(wxVERTICAL);
+
+        auto *title_row = new wxBoxSizer(wxHORIZONTAL);
+        auto *title = new wxStaticText(header, wxID_ANY, wxString::Format("Tool %d Filament", ui_tool));
+        wxFont title_font = title->GetFont();
+        title_font.SetWeight(wxFONTWEIGHT_BOLD);
+        title_font.SetPointSize(title_font.GetPointSize() + 2);
+        title->SetFont(title_font);
+        title->SetForegroundColour(text);
+        title_row->Add(title, 1, wxALIGN_CENTER_VERTICAL);
+
+        auto *close_x = new Button(header, wxString::FromUTF8("\u00D7"));
+        close_x->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
+        close_x->SetCornerRadius(FromDIP(8));
+        close_x->SetMinSize(wxSize(FromDIP(28), FromDIP(28)));
+        close_x->SetPaddingSize(wxSize(FromDIP(4), FromDIP(2)));
+        close_x->SetBackgroundColour(card_bg);
+        close_x->SetBackgroundColor(StateColor(
+            std::pair(wxColour(53, 57, 65), (int) StateColor::Pressed),
+            std::pair(wxColour(60, 64, 72), (int) StateColor::Hovered),
+            std::pair(card_bg, (int) StateColor::Normal)));
+        close_x->SetBorderWidth(0);
+        close_x->SetTextColor(StateColor(std::pair(text, (int) StateColor::Normal)));
+        title_row->Add(close_x, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(8));
+
+        auto *subtitle = new wxStaticText(header, wxID_ANY, wxString::FromUTF8("Materyal, renk ve akış ayarlarını CoPrint cihaz panelinden düzenle"));
+        subtitle->SetForegroundColour(muted);
+
+        auto *accent_line = new StaticBox(header, wxID_ANY);
+        accent_line->SetMinSize(wxSize(-1, FromDIP(3)));
+        accent_line->SetMaxSize(wxSize(-1, FromDIP(3)));
+        accent_line->SetCornerRadius(FromDIP(2));
+        accent_line->SetBorderWidth(0);
+        accent_line->SetBackgroundColorNormal(accent);
+        accent_line->SetBackgroundColour(accent);
+
+        header_sizer->Add(title_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
+        header_sizer->Add(subtitle, 0, wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(20));
+        header_sizer->Add(accent_line, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(2));
+        header->SetSizer(header_sizer);
+        outer->Add(header, 0, wxEXPAND);
+
+        auto *body = new wxPanel(shell, wxID_ANY);
+        body->SetBackgroundColour(page_bg);
+        auto *body_sizer = new wxBoxSizer(wxVERTICAL);
+
+        auto *grid = new wxFlexGridSizer(0, 2, FromDIP(12), FromDIP(16));
+        grid->AddGrowableCol(1, 1);
+
+        auto add_label = [&](const wxString &label_text) {
+            auto *label = new wxStaticText(body, wxID_ANY, label_text);
+            label->SetForegroundColour(muted);
+            grid->Add(label, 0, wxALIGN_CENTER_VERTICAL);
+            return label;
+        };
+
+        add_label(wxString::FromUTF8("Filament"));
+        wxArrayString presets;
+        presets.Add("Bambu PLA Basic");
+        presets.Add("PLA");
+        presets.Add("PETG");
+        presets.Add("ABS");
+        presets.Add("ASA");
+        presets.Add("TPU");
+        presets.Add("PA");
+        const wxString initial_type = is_empty_filament_material(initial_material) ? wxString("PLA") : initial_material;
+        const int initial_selection = initial_type.CmpNoCase("PLA") == 0 ? 0 : std::max(0, presets.Index(initial_type, false));
+        m_filament_combo = new RoundedSelect(body, presets, initial_selection == wxNOT_FOUND ? 0 : initial_selection,
+                                             control_bg, border, text, muted, control_radius);
+        grid->Add(m_filament_combo, 1, wxEXPAND);
+
+        add_label(wxString::FromUTF8("Renk"));
+        m_colour_swatch = new RoundedColorSwatch(body, m_colour, border, FromDIP(10));
+        m_colour_swatch->SetCursor(wxCursor(wxCURSOR_HAND));
+        grid->Add(m_colour_swatch, 0, wxALIGN_CENTER_VERTICAL);
+
+        add_label(wxString::FromUTF8("Nozul\nSicaklik"));
+        auto *temp_row = new wxBoxSizer(wxHORIZONTAL);
+        auto *max_col = new wxBoxSizer(wxVERTICAL);
+        auto *min_col = new wxBoxSizer(wxVERTICAL);
+        auto *max_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("maks"));
+        auto *min_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("min"));
+        max_label->SetForegroundColour(muted);
+        min_label->SetForegroundColour(muted);
+        max_col->Add(max_label, 0, wxBOTTOM, FromDIP(4));
+        min_col->Add(min_label, 0, wxBOTTOM, FromDIP(4));
+        m_temp_max = new RoundedValueBox(body, wxEmptyString, wxSize(FromDIP(88), FromDIP(38)), control_bg, border, text, control_radius, wxString::FromUTF8("C"));
+        m_temp_min = new RoundedValueBox(body, wxEmptyString, wxSize(FromDIP(88), FromDIP(38)), control_bg, border, text, control_radius, wxString::FromUTF8("C"));
+        max_col->Add(m_temp_max, 0);
+        min_col->Add(m_temp_min, 0);
+        temp_row->Add(max_col, 0, wxRIGHT, FromDIP(10));
+        temp_row->Add(min_col, 0);
+        grid->Add(temp_row, 0, wxEXPAND);
+
+        body_sizer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(20));
+
+        auto *calibration = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("Akis Dinamigi Kalibrasyonu"));
+        wxFont cal_font = calibration->GetFont();
+        cal_font.SetWeight(wxFONTWEIGHT_BOLD);
+        calibration->SetFont(cal_font);
+        calibration->SetForegroundColour(accent);
+        body_sizer->Add(calibration, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(20));
+
+        auto *pa_grid = new wxFlexGridSizer(0, 2, FromDIP(10), FromDIP(16));
+        pa_grid->AddGrowableCol(1, 1);
+        auto *pa_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("PA Profili"));
+        pa_label->SetForegroundColour(muted);
+        pa_grid->Add(pa_label, 0, wxALIGN_CENTER_VERTICAL);
+        wxArrayString pa_profiles;
+        pa_profiles.Add("Varsayilan");
+        m_pa_combo = new RoundedSelect(body, pa_profiles, 0, control_bg, border, text, muted, control_radius);
+        pa_grid->Add(m_pa_combo, 1, wxEXPAND);
+        auto *factor_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("Faktor K"));
+        factor_label->SetForegroundColour(muted);
+        pa_grid->Add(factor_label, 0, wxALIGN_CENTER_VERTICAL);
+        m_factor_k = new RoundedValueBox(body, wxString::FromUTF8("0.020"), wxSize(FromDIP(250), FromDIP(40)), control_bg, border, text, control_radius);
+        pa_grid->Add(m_factor_k, 1, wxEXPAND);
+        body_sizer->Add(pa_grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(20));
+
+        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
+        m_confirm = new Button(body, wxString::FromUTF8("Onayla"));
+        m_confirm->SetStyle(ButtonStyle::Confirm, ButtonType::Choice);
+        style_dialog_button(m_confirm, true, accent, control_bg, border, text, page_bg, button_radius);
+        m_reset = new Button(body, wxString::FromUTF8("Sifirla"));
+        m_reset->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
+        style_dialog_button(m_reset, false, accent, control_bg, border, text, page_bg, button_radius);
+        m_close = new Button(body, wxString::FromUTF8("Kapat"));
+        m_close->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
+        style_dialog_button(m_close, false, accent, control_bg, border, text, page_bg, button_radius);
+        buttons->AddStretchSpacer(1);
+        buttons->Add(m_confirm, 0, wxRIGHT, FromDIP(14));
+        buttons->Add(m_reset, 0, wxRIGHT, FromDIP(14));
+        buttons->Add(m_close, 0);
+        body_sizer->Add(buttons, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(26));
+        body->SetSizer(body_sizer);
+        outer->Add(body, 0, wxEXPAND);
+
+        shell->SetSizer(outer);
+        root->Add(shell, 1, wxEXPAND | wxALL, FromDIP(2));
+        SetSizerAndFit(root);
+        SetMinSize(GetSize());
+        apply_rounded_window_shape(shell_radius);
+
+        m_colour_swatch->SetToolTip(wxString::FromUTF8("Renk sec"));
+
+        m_filament_combo->SetChangeHandler([this]() { update_temperature_fields(); });
+        m_colour_swatch->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &) { choose_colour(); });
+        m_confirm->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_OK); });
+        m_reset->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+            m_filament_combo->SetSelection(0);
+            m_colour = wxColour(214, 45, 214);
+            m_colour_swatch->SetColour(m_colour);
+            m_factor_k->SetValue("0.020");
+            update_temperature_fields();
+        });
+        m_close->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
+        close_x->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
+        update_temperature_fields();
+
+        BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament material dialog opened for T" << ui_tool;
+    }
+
+    wxString material() const
+    {
+        return short_filament_type_from_preset(m_filament_combo->GetValue());
+    }
+
+    wxString color_hex() const
+    {
+        return hex_from_colour(m_colour);
+    }
+
+private:
+    void style_dialog_button(Button *button, bool primary, const wxColour &accent, const wxColour &control_bg,
+                             const wxColour &border, const wxColour &text, const wxColour &page_bg, int radius)
+    {
+        if (button == nullptr)
+            return;
+
+        button->SetCornerRadius(radius);
+        button->SetMinSize(wxSize(FromDIP(92), FromDIP(34)));
+        button->SetPaddingSize(wxSize(FromDIP(14), FromDIP(8)));
+        button->SetBackgroundColour(page_bg);
+        button->SetBorderWidth(FromDIP(1));
+        button->SetBackgroundColor(StateColor(
+            std::pair(primary ? wxColour(33, 141, 97) : wxColour(37, 40, 46), (int) StateColor::Pressed),
+            std::pair(primary ? wxColour(53, 198, 136) : wxColour(53, 57, 65), (int) StateColor::Hovered),
+            std::pair(primary ? accent : control_bg, (int) StateColor::Normal)));
+        button->SetBorderColor(StateColor(
+            std::pair(primary ? accent : wxColour(76, 82, 92), (int) StateColor::Hovered),
+            std::pair(primary ? accent : border, (int) StateColor::Normal)));
+        button->SetTextColor(StateColor(
+            std::pair(wxColour(255, 255, 255), (int) StateColor::Hovered),
+            std::pair(primary ? wxColour(255, 255, 255) : text, (int) StateColor::Normal)));
+    }
+
+    void apply_rounded_window_shape(int radius)
+    {
+        const wxSize size = GetSize();
+        if (size.x <= 0 || size.y <= 0)
+            return;
+
+        wxBitmap mask(size.x, size.y);
+        wxMemoryDC dc(mask);
+        dc.SetBackground(wxBrush(*wxBLACK));
+        dc.Clear();
+        {
+            wxGCDC gc(dc);
+            gc.SetPen(*wxTRANSPARENT_PEN);
+            gc.SetBrush(wxBrush(*wxWHITE));
+            gc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
+        }
+        dc.SelectObject(wxNullBitmap);
+        wxRegion region(mask, *wxBLACK);
+        SetShape(region);
+    }
+
+    void update_temperature_fields()
+    {
+        const auto [max_temp, min_temp] = nozzle_temperature_range_for_material(material());
+        m_temp_max->SetValue(wxString::Format("%d", max_temp));
+        m_temp_min->SetValue(wxString::Format("%d", min_temp));
+    }
+
+    void choose_colour()
+    {
+        static wxColourData data;
+        data.SetChooseFull(true);
+        data.SetColour(m_colour);
+        wxColourDialog dialog(this, &data);
+        if (dialog.ShowModal() != wxID_OK)
+            return;
+        data = dialog.GetColourData();
+        m_colour = data.GetColour();
+        m_colour_swatch->SetColour(m_colour);
+    }
+
+    RoundedSelect *m_filament_combo{nullptr};
+    RoundedSelect *m_pa_combo{nullptr};
+    RoundedValueBox *m_temp_max{nullptr};
+    RoundedValueBox *m_temp_min{nullptr};
+    RoundedValueBox *m_factor_k{nullptr};
+    RoundedColorSwatch *m_colour_swatch{nullptr};
+    Button *m_confirm{nullptr};
+    Button *m_reset{nullptr};
+    Button *m_close{nullptr};
+    wxColour m_colour;
+};
+
+void position_dialog_near_anchor(wxDialog& dialog, wxWindow *fallback_parent, const wxPoint& anchor_screen_pos)
+{
+    if (anchor_screen_pos == wxDefaultPosition)
+        return;
+
+    const wxSize size = dialog.GetSize();
+    wxPoint pos(anchor_screen_pos.x - size.x / 2, anchor_screen_pos.y - size.y - 16);
+
+    int display_index = wxDisplay::GetFromPoint(anchor_screen_pos);
+    if (display_index == wxNOT_FOUND && fallback_parent != nullptr)
+        display_index = wxDisplay::GetFromWindow(fallback_parent);
+    wxRect area = display_index != wxNOT_FOUND ? wxDisplay(display_index).GetClientArea() : wxRect(wxPoint(0, 0), wxGetDisplaySize());
+
+    const int min_x = area.GetLeft() + 8;
+    const int min_y = area.GetTop() + 8;
+    const int max_x = std::max(min_x, area.GetRight() - size.x - 8);
+    const int max_y = std::max(min_y, area.GetBottom() - size.y - 8);
+    pos.x = std::clamp(pos.x, min_x, max_x);
+    pos.y = std::clamp(pos.y, min_y, max_y);
+    dialog.SetPosition(pos);
 }
 
 std::string url_encode_component(const wxString &text)
@@ -3638,48 +4146,25 @@ bool PrinterWebView::get_loaded_tool_filament(int tool_0based, wxColour *color_o
     return true;
 }
 
-void PrinterWebView::prompt_and_save_filament_selection_then_load()
+bool PrinterWebView::show_filament_material_dialog(bool start_load_after_save, const wxPoint& anchor_screen_pos)
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    if (obj == nullptr || !obj->is_online() || obj->is_in_printing())
-        return;
+    if (start_load_after_save && (obj == nullptr || !obj->is_online() || obj->is_in_printing()))
+        return false;
 
     const int ui_tool = m_selected_filament_tool + 1;
-    wxTextEntryDialog material_dialog(
+    FilamentMaterialDialog dialog(
         this,
-        wxString::Format(_L("Tool %d icin filament tipini girin."), ui_tool),
-        _L("Filament Type"),
-        m_filament_loaded_tool_materials[m_selected_filament_tool].empty()
-            ? wxString("PLA")
-            : m_filament_loaded_tool_materials[m_selected_filament_tool]);
-    if (material_dialog.ShowModal() != wxID_OK)
-        return;
+        ui_tool,
+        m_filament_loaded_tool_materials[m_selected_filament_tool],
+        m_filament_loaded_tool_colors[m_selected_filament_tool]);
+    position_dialog_near_anchor(dialog, this, anchor_screen_pos);
+    if (dialog.ShowModal() != wxID_OK)
+        return false;
 
-    wxString material = material_dialog.GetValue();
-    material.Trim(true);
-    material.Trim(false);
-    if (material.empty())
-        material = "PLA";
-
-    wxTextEntryDialog color_dialog(
-        this,
-        wxString::Format(_L("Tool %d icin filament rengini HEX olarak girin."), ui_tool),
-        _L("Filament Color"),
-        hex_from_colour(m_filament_loaded_tool_colors[m_selected_filament_tool]));
-    if (color_dialog.ShowModal() != wxID_OK)
-        return;
-
-    wxString color_hex = color_dialog.GetValue();
-    color_hex.Trim(true);
-    color_hex.Trim(false);
-    if (!color_hex.StartsWith("#"))
-        color_hex = "#" + color_hex;
-    if (!looks_like_hex_colour(color_hex)) {
-        wxMessageBox(_L("Renk formati #RRGGBB seklinde olmali."), _L("Filament Color"), wxOK | wxICON_WARNING, this);
-        return;
-    }
-
+    const wxString material = dialog.material();
+    const wxString color_hex = dialog.color_hex();
     m_filament_loaded_tool_materials[m_selected_filament_tool] = material;
     m_filament_loaded_tool_colors[m_selected_filament_tool] = colour_from_hex(into_u8(color_hex), m_filament_loaded_tool_colors[m_selected_filament_tool]);
     m_filament_tool_has_color[m_selected_filament_tool] = true;
@@ -3690,7 +4175,14 @@ void PrinterWebView::prompt_and_save_filament_selection_then_load()
     });
     apply_filament_tool_selection(m_selected_filament_tool);
     save_filament_selection_to_moonraker(ui_tool, material, color_hex);
-    show_filament_load_wizard();
+    if (start_load_after_save)
+        show_filament_load_wizard();
+    return true;
+}
+
+void PrinterWebView::prompt_and_save_filament_selection_then_load()
+{
+    show_filament_material_dialog(true);
 }
 
 void PrinterWebView::save_filament_selection_to_moonraker(int ui_tool, const wxString &material, const wxString &color_hex)
@@ -5452,6 +5944,10 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
             return;
         obj->command_ams_change_filament(false, "0", std::to_string(m_selected_filament_tool));
         clear_filament_selection_from_moonraker(m_selected_filament_tool + 1);
+        break;
+    case DeviceDashboard::DeviceCommandKind::ConfigureFilament:
+        apply_filament_tool_selection(command.tool_index);
+        show_filament_material_dialog(false, wxPoint(command.screen_x, command.screen_y));
         break;
     case DeviceDashboard::DeviceCommandKind::SetMotionDistance:
         m_axis_move_step = command.value > 0.0 ? command.value : 1.0;

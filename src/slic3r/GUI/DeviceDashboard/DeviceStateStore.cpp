@@ -9,14 +9,12 @@ namespace DeviceDashboard {
 void DeviceStateStore::set_state(DeviceDashboardState state)
 {
     m_state = std::move(state);
-    notify_listeners();
 }
 
 void DeviceStateStore::update(const std::function<void(DeviceDashboardState&)>& updater)
 {
     if (updater)
         updater(m_state);
-    notify_listeners();
 }
 
 DeviceStateStore::ListenerId DeviceStateStore::add_listener(Listener listener)

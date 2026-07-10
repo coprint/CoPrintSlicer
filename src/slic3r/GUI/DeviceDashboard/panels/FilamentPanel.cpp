@@ -78,6 +78,8 @@ public:
     }
 
     void set_tool_handler(ToolHandler handler) { m_tool_handler = std::move(handler); }
+    void set_configure_handler(ToolHandler handler) { m_configure_handler = std::move(handler); }
+    wxPoint last_configure_anchor_screen() const { return m_last_configure_anchor; }
 
     void apply_state(const FilamentState& state)
     {
@@ -129,7 +131,16 @@ private:
     int hit_test_tool(const wxPoint& pos) const
     {
         for (int i = 0; i < MaxDashboardTools; ++i) {
-            if (m_card_hit_rects[i].Contains(pos) || m_track_hit_rects[i].Contains(pos))
+            if (m_card_hit_rects[i].Contains(pos))
+                return i;
+        }
+        return -1;
+    }
+
+    int hit_test_track(const wxPoint& pos) const
+    {
+        for (int i = 0; i < MaxDashboardTools; ++i) {
+            if (m_track_hit_rects[i].Contains(pos))
                 return i;
         }
         return -1;
@@ -137,7 +148,18 @@ private:
 
     void on_left_down(wxMouseEvent& event)
     {
-        const int tool = hit_test_tool(event.GetPosition());
+        const wxPoint pos = event.GetPosition();
+        const int track_tool = hit_test_track(pos);
+        if (track_tool >= 0) {
+            if (m_configure_handler) {
+                m_last_configure_anchor = ClientToScreen(m_track_hit_rects[track_tool].GetPosition() +
+                    wxPoint(m_track_hit_rects[track_tool].GetWidth() / 2, m_track_hit_rects[track_tool].GetHeight() / 2));
+                m_configure_handler(track_tool);
+            }
+            return;
+        }
+
+        const int tool = hit_test_tool(pos);
         if (tool >= 0) {
             if (m_tool_handler)
                 m_tool_handler(tool);
@@ -148,7 +170,8 @@ private:
 
     void on_motion(wxMouseEvent& event)
     {
-        SetCursor(hit_test_tool(event.GetPosition()) >= 0 ? wxCursor(wxCURSOR_HAND) : wxCursor(wxCURSOR_ARROW));
+        const wxPoint pos = event.GetPosition();
+        SetCursor((hit_test_track(pos) >= 0 || hit_test_tool(pos) >= 0) ? wxCursor(wxCURSOR_HAND) : wxCursor(wxCURSOR_ARROW));
         event.Skip();
     }
 
@@ -309,7 +332,9 @@ private:
     wxBitmap m_edit_icon_bmp;
     wxBitmap m_add_icon_bmp;
     int m_selected_tool{0};
+    wxPoint m_last_configure_anchor{wxDefaultPosition};
     ToolHandler m_tool_handler;
+    ToolHandler m_configure_handler;
 };
 
 void set_panel_colour(wxWindow* panel, const wxColour& colour)
@@ -482,6 +507,15 @@ FilamentPanel::FilamentPanel(wxWindow* parent)
     m_tool_map_view = new FilamentToolMapView(m_frame->content_parent());
     m_tool_map_view->set_tool_handler([this](int tool_index) {
         select_manage_tool(tool_index);
+    });
+    m_tool_map_view->set_configure_handler([this](int tool_index) {
+        DeviceCommand command;
+        command.kind = DeviceCommandKind::ConfigureFilament;
+        command.tool_index = tool_index;
+        const wxPoint anchor = m_tool_map_view->last_configure_anchor_screen();
+        command.screen_x = anchor.x;
+        command.screen_y = anchor.y;
+        dispatch(command);
     });
     columns->Add(m_tool_map_view, 1, wxEXPAND | wxRIGHT, FromDIP(18));
 

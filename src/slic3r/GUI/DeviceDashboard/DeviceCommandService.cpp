@@ -93,6 +93,14 @@ void DeviceCommandService::unload_filament(int tool_index) const
     dispatch(command);
 }
 
+void DeviceCommandService::configure_filament(int tool_index) const
+{
+    DeviceCommand command;
+    command.kind = DeviceCommandKind::ConfigureFilament;
+    command.tool_index = tool_index;
+    dispatch(command);
+}
+
 void DeviceCommandService::assign_model_slot_to_tool(int model_slot, int tool_index) const
 {
     DeviceCommand command;

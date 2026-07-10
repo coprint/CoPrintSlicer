@@ -25,6 +25,7 @@ enum class DeviceCommandKind {
     StopPrint,
     LoadFilament,
     UnloadFilament,
+    ConfigureFilament,
     AssignModelSlotToTool
 };
 
@@ -33,6 +34,8 @@ struct DeviceCommand {
     Axis axis{Axis::X};
     int tool_index{0};
     int model_slot{0};
+    int screen_x{-1};
+    int screen_y{-1};
     double value{0.0};
 };
 
@@ -55,6 +58,7 @@ public:
     void stop_print() const;
     void load_filament(int tool_index) const;
     void unload_filament(int tool_index) const;
+    void configure_filament(int tool_index) const;
     void assign_model_slot_to_tool(int model_slot, int tool_index) const;
 
 private:
