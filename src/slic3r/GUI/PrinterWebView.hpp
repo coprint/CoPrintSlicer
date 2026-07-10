@@ -45,6 +45,8 @@ enum class PrinterWebViewTab {
 
 class PrinterWebView : public wxPanel
 {
+    friend class PrinterWebViewHandler;
+
 public:
     PrinterWebView(wxWindow *parent);
     ~PrinterWebView() override;

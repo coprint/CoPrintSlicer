@@ -115,8 +115,6 @@ namespace Slic3r {
 #define IOT_JSON_KEY_FILAMENT_ID        "filament_id"
 #define IOT_JSON_KEY_USER_ID            "user_id"
 
-// user callbacks
-typedef std::function<void(int online_login, bool login)> OnUserLoginFn;
 // printer callbacks
 typedef std::function<void(std::string topic_str)>  OnPrinterConnectedFn;
 typedef std::function<void(int status, std::string dev_id, std::string msg)> OnLocalConnectedFn;
@@ -137,6 +135,7 @@ typedef std::function<void(std::function<void()>)> QueueOnMainFn;
 
 typedef std::function<void(int progress)> ProgressFn;
 typedef std::function<void(int retcode, std::string info)> LoginFn;
+typedef std::function<void(int online_login, bool login)> OnUserLoginFn;
 typedef std::function<void(int result, std::string info)> ResultFn;
 typedef std::function<bool()> CancelFn;
 typedef std::function<bool(std::map<std::string, std::string> info)> CheckFn;

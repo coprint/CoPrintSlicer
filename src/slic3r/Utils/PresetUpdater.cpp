@@ -1531,6 +1531,11 @@ void PresetUpdater::do_printer_config_update()
     }
 }
 
+void PresetUpdater::check_vendor_update(const std::string& vendor_id)
+{
+    (void)vendor_id;
+}
+
 bool PresetUpdater::version_check_enabled() const
 {
 	return p->enabled_version_check;

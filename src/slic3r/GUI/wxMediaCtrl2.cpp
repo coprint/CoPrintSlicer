@@ -53,6 +53,8 @@ wxMediaCtrl2::wxMediaCtrl2(wxWindow *parent)
 #endif
 }
 
+wxMediaCtrl2::~wxMediaCtrl2() = default;
+
 #define CLSID_BAMBU_SOURCE L"{233E64FB-2041-4A6C-AFAB-FF9BCF83E7AA}"
 
 void wxMediaCtrl2::Load(wxURI url)
@@ -146,6 +148,11 @@ void wxMediaCtrl2::Play() { wxMediaCtrl::Play(); }
 void wxMediaCtrl2::Stop()
 {
     wxMediaCtrl::Stop();
+}
+
+wxMediaState wxMediaCtrl2::GetState()
+{
+    return wxMediaCtrl::GetState();
 }
 
 #ifdef __LINUX__

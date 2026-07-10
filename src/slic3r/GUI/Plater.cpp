@@ -110,7 +110,7 @@
 #include "ConfigWizard.hpp"
 #include "SyncAmsInfoDialog.hpp"
 #include "../Utils/ASCIIFolding.hpp"
-#include "../Utils/FixModelByWin10.hpp"
+#include "../Utils/FixModelByCgal.hpp"
 #include "../Utils/UndoRedo.hpp"
 #include "../Utils/PresetUpdater.hpp"
 #include "../Utils/Process.hpp"
@@ -3659,6 +3659,16 @@ void Sidebar::show_SEMM_buttons(bool bshow)
         p->m_bpButton_del_filament->Show(bshow);
     if (p->m_flushing_volume_btn && p->combos_filament.size() > 1) // ORCA add filament count as condition to prevent showing Flushing volumes and Del Filament icon visible while only 1 filament exist
         p->m_flushing_volume_btn->Show(bshow);
+    Layout();
+}
+
+void Sidebar::show_SEMM_buttons()
+{
+    show_SEMM_buttons(should_show_SEMM_buttons());
+}
+
+void Sidebar::update_filaments_area_height()
+{
     Layout();
 }
 
@@ -7411,7 +7421,7 @@ void Plater::priv::split_object()
 
     wxBusyCursor wait;
     ModelObjectPtrs new_objects;
-    current_model_object->split(&new_objects);
+    current_model_object->split(&new_objects, false);
     if (new_objects.size() == 1)
         // #ysFIXME use notification
         Slic3r::GUI::warning_catcher(q, _L("The selected object couldn't be split."));
@@ -10068,7 +10078,7 @@ void Plater::priv::on_object_select(SimpleEvent& evt)
 //BBS: repair model through netfabb
 void Plater::priv::on_repair_model(wxCommandEvent &event)
 {
-    wxGetApp().obj_list()->fix_through_netfabb();
+    wxGetApp().obj_list()->fix_through_cgal();
 }
 
 void Plater::priv::on_filament_color_changed(wxCommandEvent &event)
@@ -12117,7 +12127,7 @@ void Plater::import_model_id(wxString download_info)
         /* load project */
         // Orca: If download is a zip file, treat it as if file has been drag and dropped on the plater
         if (target_path.extension() == ".zip")
-            this->load_files(wxArrayString(1, target_path.string()));
+            this->load_files(wxArrayString{wxString::FromUTF8(target_path.string())});
         else
             this->load_project(target_path.wstring());
         /*BBS set project info after load project, project info is reset in load project */
@@ -12703,7 +12713,8 @@ void adjust_settings_for_flowrate_calib(ModelObjectPtrs& objects, bool linear, i
     wxGetApp().get_tab(Preset::TYPE_PRINTER)->reload_config();
 }
 
-void Plater::calib_flowrate(bool is_linear, int pass) {
+void Plater::calib_flowrate(bool is_linear, int pass, InfillPattern pattern) {
+    (void)pattern;
     if (pass != 1 && pass != 2)
         return;
     wxString calib_name;
@@ -16773,6 +16784,7 @@ void Plater::center_selection()     { p->center_selection(); }
 void Plater::drop_selection()       { p->drop_selection(); }
 void Plater::mirror(Axis axis)      { p->mirror(axis); }
 void Plater::split_object()         { p->split_object(); }
+void Plater::split_object(bool auto_drop) { (void)auto_drop; p->split_object(); }
 void Plater::split_volume()         { p->split_volume(); }
 void Plater::optimize_rotation()
 {
@@ -17812,7 +17824,7 @@ void Plater::show_object_info()
 
     info_manifold = "<Error>" + info_manifold + "</Error>";
     info_text += into_u8(info_manifold);
-    notify_manager->bbl_show_objectsinfo_notification(info_text, is_windows10()&&(non_manifold_edges > 0), !(p->current_panel == p->view3D));
+    notify_manager->bbl_show_objectsinfo_notification(info_text, non_manifold_edges > 0, !(p->current_panel == p->view3D));
 }
 
 bool Plater::show_publish_dialog(bool show)
@@ -17990,6 +18002,7 @@ bool Plater::can_increase_instances() const { return p->can_increase_instances()
 bool Plater::can_decrease_instances() const { return p->can_decrease_instances(); }
 bool Plater::can_set_instance_to_object() const { return p->can_set_instance_to_object(); }
 bool Plater::can_fix_through_netfabb() const { return p->can_fix_through_netfabb(); }
+bool Plater::can_fix_through_cgal() const { return p->can_fix_through_netfabb(); }
 bool Plater::can_simplify() const { return p->can_simplify(); }
 bool Plater::can_smooth_mesh() const { return p->can_smooth_mesh(); }
 bool Plater::can_split_to_objects() const { return p->can_split_to_objects(); }

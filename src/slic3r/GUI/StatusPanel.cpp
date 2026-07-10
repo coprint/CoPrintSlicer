@@ -695,7 +695,7 @@ void PrintingTaskPanel::create_panel(wxWindow* parent)
     #endif
 
 
-    m_staticText_progress_left = new wxStaticText(penel_text, wxID_ANY, L("N/A"), wxDefaultPosition, wxDefaultSize, 0);
+    m_staticText_progress_left = new wxStaticText(penel_text, wxID_ANY, _L("N/A"), wxDefaultPosition, wxDefaultSize, 0);
     m_staticText_progress_left->Wrap(-1);
     m_staticText_progress_left->SetFont(wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, wxT("HarmonyOS Sans SC")));
     m_staticText_progress_left->SetForegroundColour(wxColour(146, 146, 146));
@@ -793,11 +793,11 @@ void PrintingTaskPanel::create_panel(wxWindow* parent)
     printingstage_horizontal_sizer->Add(m_printing_stage_value, 0, wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL, 0);
     printingstage_horizontal_sizer->Add(m_question_button, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(5));
     printingstage_vertical_sizer->Add(printingstage_horizontal_sizer, 0, wxALIGN_CENTER_VERTICAL, 0);
-    printingstage_vertical_sizer->Add(m_printing_stage_underline, 0, wxEXPAND |wxALIGN_TOP, 0);
+    printingstage_vertical_sizer->Add(m_printing_stage_underline, 0, wxEXPAND, 0);
     m_printing_stage_panel->SetSizer(printingstage_vertical_sizer);
 
     // Orca: display the end time of the print
-    m_staticText_progress_end = new wxStaticText(penel_finish_time, wxID_ANY, L("N/A"), wxDefaultPosition, wxDefaultSize, 0);
+    m_staticText_progress_end = new wxStaticText(penel_finish_time, wxID_ANY, _L("N/A"), wxDefaultPosition, wxDefaultSize, 0);
     m_staticText_progress_end->Wrap(-1);
     m_staticText_progress_end->SetFont(
         wxFont(12, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL, false, wxT("HarmonyOS Sans SC")));
@@ -2134,7 +2134,7 @@ wxBoxSizer* StatusBasePanel::create_filament_group(wxWindow* parent)
     });
 
 
-    sizer_box->Add(steps_sizer, 0, wxEXPAND | wxALIGN_LEFT | wxTOP, FromDIP(5));
+    sizer_box->Add(steps_sizer, 0, wxEXPAND | wxTOP, FromDIP(5));
     sizer_box->Add(m_button_retry, 0, wxLEFT, FromDIP(28));
     sizer_box->Add(0, 0, 0, wxTOP, FromDIP(5));
     m_filament_load_box->SetBackgroundColour(*wxWHITE);
@@ -5905,7 +5905,7 @@ wxBoxSizer *ScoreDialog::get_button_sizer()
                 if (ret == -1)
                     error_info += _L("Upload failed\n").ToUTF8().data();
                 else
-                    error_info += _L("obtaining instance_id failed\n").ToUTF8().data();
+                    error_info += _L("Obtaining instance_id failed\n").ToUTF8().data();
                 if (!error_info.empty()) { BOOST_LOG_TRIVIAL(info) << error_info; }
 
                 dlg_info = new MessageDialog(this,

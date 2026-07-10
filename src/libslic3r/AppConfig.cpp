@@ -1564,6 +1564,65 @@ void AppConfig::clear_remind_network_update_later()
     set_bool(SETTING_NETWORK_PLUGIN_REMIND_LATER, false);
 }
 
+bool AppConfig::get_hide_login_side_panel()
+{
+    return get_bool("hide_login_side_panel");
+}
+
+std::vector<std::string> AppConfig::get_cloud_providers() const
+{
+    std::vector<std::string> providers;
+    std::string value = get("cloud_providers");
+    if (value.empty())
+        value = "orca";
+
+    size_t start = 0;
+    while (start <= value.size()) {
+        size_t pos = value.find(';', start);
+        std::string provider = value.substr(start, pos == std::string::npos ? std::string::npos : pos - start);
+        if (!provider.empty() && std::find(providers.begin(), providers.end(), provider) == providers.end())
+            providers.push_back(provider);
+        if (pos == std::string::npos)
+            break;
+        start = pos + 1;
+    }
+    return providers;
+}
+
+void AppConfig::set_cloud_providers(const std::vector<std::string>& providers)
+{
+    std::string joined;
+    for (const auto& provider : providers) {
+        if (provider.empty())
+            continue;
+        if (!joined.empty())
+            joined += ";";
+        joined += provider;
+    }
+    set("cloud_providers", joined.empty() ? "orca" : joined);
+}
+
+bool AppConfig::has_cloud_provider(const std::string& provider) const
+{
+    auto providers = get_cloud_providers();
+    return std::find(providers.begin(), providers.end(), provider) != providers.end();
+}
+
+void AppConfig::add_cloud_provider(const std::string& provider)
+{
+    auto providers = get_cloud_providers();
+    if (std::find(providers.begin(), providers.end(), provider) == providers.end())
+        providers.push_back(provider);
+    set_cloud_providers(providers);
+}
+
+void AppConfig::remove_cloud_provider(const std::string& provider)
+{
+    auto providers = get_cloud_providers();
+    providers.erase(std::remove(providers.begin(), providers.end(), provider), providers.end());
+    set_cloud_providers(providers);
+}
+
 void AppConfig::reset_selections()
 {
     auto it = m_storage.find("presets");

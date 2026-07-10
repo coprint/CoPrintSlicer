@@ -172,6 +172,8 @@ public:
     void set_bed_type_accord_combox(BedType bed_type);
     bool reset_bed_type_combox_choices(bool is_sidebar_init = false);
     void change_top_border_for_mode_sizer(bool increase_border);
+    void update_filaments_area_height();
+    void update_filaments_counter(bool force_layout = false);
     void msw_rescale();
     void sys_color_changed();
     void search();
@@ -202,6 +204,7 @@ public:
     void get_small_btn_sync_pos_size(wxPoint &pt, wxSize &size);
     // Orca
     static bool should_show_SEMM_buttons();
+    void show_SEMM_buttons();
     void show_SEMM_buttons(bool bshow);
     void update_dynamic_filament_list();
 
@@ -330,7 +333,8 @@ public:
 
     // SoftFever
     void calib_pa(const Calib_Params& params);
-    void calib_flowrate(bool is_linear, int pass);
+    //ORCA: Add pattern parameter to calib_flowrate
+    void calib_flowrate(bool is_linear, int pass, InfillPattern pattern = ipArchimedeanChords);
     void calib_temp(const Calib_Params& params);
     void calib_max_vol_speed(const Calib_Params& params);
     void calib_retraction(const Calib_Params& params);
@@ -643,6 +647,8 @@ public:
     void search(bool plater_is_active, Preset::Type  type, wxWindow *tag, TextInput *etag, wxWindow *stag);
     void mirror(Axis axis);
     void split_object();
+    void split_object(bool auto_drop);
+    void split_object(int obj_idx, bool auto_drop = true);
     void split_volume();
     void optimize_rotation();
     // find all empty cells on the plate and won't overlap with exclusion areas
@@ -655,12 +661,13 @@ public:
     bool can_delete() const;
     bool can_delete_all() const;
     bool can_add_model() const;
+    bool can_fix_through_netfabb() const;
     bool can_add_plate() const;
     bool can_delete_plate() const;
     bool can_increase_instances() const;
     bool can_decrease_instances() const;
     bool can_set_instance_to_object() const;
-    bool can_fix_through_netfabb() const;
+    bool can_fix_through_cgal() const;
     bool can_simplify() const;
     bool can_smooth_mesh() const;
     bool can_split_to_objects() const;

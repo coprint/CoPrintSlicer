@@ -4183,8 +4183,9 @@ void GUI_App::ShowDownNetPluginDlg() {
     }
 }
 
-void GUI_App::ShowUserLogin(bool show)
+void GUI_App::ShowUserLogin(bool show, const std::string& provider)
 {
+    (void)provider;
     // BBS: User Login Dialog
     if (show) {
         try {
@@ -4280,8 +4281,6 @@ void GUI_App::force_colors_update()
 #ifdef _MSW_DARK_MODE
 #ifdef __WINDOWS__
     NppDarkMode::SetDarkMode(dark_mode());
-    if (WXHWND wxHWND = wxToolTip::GetToolTipCtrl())
-        NppDarkMode::SetDarkExplorerTheme((HWND)wxHWND);
     NppDarkMode::SetDarkTitleBar(mainframe->GetHWND());
 
 
@@ -4419,17 +4418,18 @@ wxString GUI_App::transition_tridid(int trid_id) const
 }
 
 //BBS
-void GUI_App::request_login(bool show_user_info)
+void GUI_App::request_login(bool show_user_info, const std::string& provider)
 {
-    ShowUserLogin();
+    ShowUserLogin(true, provider);
 
     if (show_user_info) {
-        get_login_info();
+        get_login_info(provider);
     }
 }
 
-void GUI_App::get_login_info()
+void GUI_App::get_login_info(const std::string& provider)
 {
+    (void)provider;
     if (m_agent) {
         if (m_agent->is_user_login()) {
             std::string login_cmd = m_agent->build_login_cmd();
@@ -4454,8 +4454,9 @@ void GUI_App::get_login_info()
     }
 }
 
-bool GUI_App::is_user_login()
+bool GUI_App::is_user_login(const std::string& provider)
 {
+    (void)provider;
     if (m_agent) {
         return m_agent->is_user_login();
     }
@@ -4463,8 +4464,9 @@ bool GUI_App::is_user_login()
 }
 
 
-bool GUI_App::check_login()
+bool GUI_App::check_login(const std::string& provider)
 {
+    (void)provider;
     bool result = false;
     if (m_agent) {
         result = m_agent->is_user_login();
@@ -4476,22 +4478,25 @@ bool GUI_App::check_login()
     return result;
 }
 
-void GUI_App::request_user_handle(int online_login)
+void GUI_App::request_user_handle(int online_login, const std::string& provider)
 {
+    (void)provider;
     auto evt = new wxCommandEvent(EVT_USER_LOGIN_HANDLE);
     evt->SetInt(online_login);
     wxQueueEvent(this, evt);
 }
 
-void GUI_App::request_user_login(int online_login)
+void GUI_App::request_user_login(int online_login, const std::string& provider)
 {
+    (void)provider;
     auto evt = new wxCommandEvent(EVT_USER_LOGIN);
     evt->SetInt(online_login);
     wxQueueEvent(this, evt);
 }
 
-void GUI_App::request_user_logout()
+void GUI_App::request_user_logout(const std::string& provider)
 {
+    (void)provider;
     if (m_agent && m_agent->is_user_login()) {
         // Update data first before showing dialogs
         m_agent->user_logout(true);
@@ -4512,8 +4517,9 @@ void GUI_App::request_user_logout()
     }
 }
 
-int GUI_App::request_user_unbind(std::string dev_id)
+int GUI_App::request_user_unbind(std::string dev_id, const std::string& provider)
 {
+    (void)provider;
     int result = -1;
     if (m_agent) {
         result = m_agent->unbind(dev_id);
@@ -4722,8 +4728,9 @@ std::string GUI_App::handle_web_request(std::string cmd)
     return "";
 }
 
-void GUI_App::handle_script_message(std::string msg)
+void GUI_App::handle_script_message(std::string msg, const std::string& provider)
 {
+    (void)provider;
     try {
         json j = json::parse(msg);
         if (j.contains("command")) {
@@ -4790,8 +4797,9 @@ void GUI_App::request_remove_project(std::string project_id)
     mainframe->remove_recent_project(-1, wxString::FromUTF8(project_id));
 }
 
-void GUI_App::handle_http_error(unsigned int status, std::string body)
+void GUI_App::handle_http_error(unsigned int status, std::string body, const std::string& provider)
 {
+    (void)provider;
     // tips body size must less than 1024
     auto evt = new wxCommandEvent(EVT_HTTP_ERROR);
     evt->SetInt(status);
@@ -4836,12 +4844,12 @@ void GUI_App::on_http_error(wxCommandEvent &evt)
             if (m_agent->is_user_login()) {
                 this->request_user_logout();
 
-                if (!m_show_http_errpr_msgdlg) {
+                if (!m_show_http_error_msgdlg) {
                     MessageDialog msg_dlg(nullptr, _L("Login information expired. Please login again."), "", wxAPPLY | wxOK);
-                    m_show_http_errpr_msgdlg = true;
+                    m_show_http_error_msgdlg = true;
                     auto modal_result = msg_dlg.ShowModal();
                     if (modal_result == wxOK || modal_result == wxCLOSE) {
-                        m_show_http_errpr_msgdlg = false;
+                        m_show_http_error_msgdlg = false;
                         return;
                     }
                 }
@@ -5596,8 +5604,9 @@ void GUI_App::show_check_privacy_dlg(wxCommandEvent& evt)
     privacy_dlg.on_show();
 }
 
-void GUI_App::on_show_check_privacy_dlg(int online_login)
+void GUI_App::on_show_check_privacy_dlg(int online_login, const std::string& provider)
 {
+    (void)provider;
     auto evt = new wxCommandEvent(EVT_CHECK_PRIVACY_SHOW);
     evt->SetInt(online_login);
     wxQueueEvent(this, evt);
@@ -5631,8 +5640,9 @@ void GUI_App::on_check_privacy_update(wxCommandEvent& evt)
         request_user_handle(online_login);
 }
 
-void GUI_App::check_privacy_version(int online_login)
+void GUI_App::check_privacy_version(int online_login, const std::string& provider)
 {
+    (void)provider;
     update_http_extra_header();
     std::string query_params = "?policy/privacy=00.00.00.00";
     std::string url = get_http_url(app_config->get_country_code()) + query_params;
@@ -5781,8 +5791,9 @@ void GUI_App::remove_user_presets()
     }
 }
 
-void GUI_App::sync_preset(Preset* preset)
+void GUI_App::sync_preset(Preset* preset, bool force)
 {
+    (void)force;
     int result = -1;
     unsigned int http_code = 200;
     std::string updated_info;
@@ -5793,7 +5804,7 @@ void GUI_App::sync_preset(Preset* preset)
     auto setting_id = preset->setting_id;
     std::map<std::string, std::string> values_map;
     if (setting_id.empty() && preset->sync_info.empty()) {
-        if (m_create_preset_blocked[preset->type])
+        if (m_create_preset_blocked[static_cast<size_t>(preset->type)])
             return;
         int ret = preset_bundle->get_differed_values_to_update(*preset, values_map);
         if (!ret) {
@@ -5822,7 +5833,7 @@ void GUI_App::sync_preset(Preset* preset)
         }
     }
     else if (preset->sync_info.compare("create") == 0) {
-        if (m_create_preset_blocked[preset->type])
+        if (m_create_preset_blocked[static_cast<size_t>(preset->type)])
             return;
         int ret = preset_bundle->get_differed_values_to_update(*preset, values_map);
         if (!ret) {
@@ -5881,7 +5892,7 @@ void GUI_App::sync_preset(Preset* preset)
     }
 
     if (http_code >= 400 && values_map["code"] == "14") { // Limit
-        m_create_preset_blocked[preset->type] = true;
+        m_create_preset_blocked[static_cast<size_t>(preset->type)] = true;
         CallAfter([this] {
             plater()->get_notification_manager()->push_notification(NotificationType::BBLUserPresetExceedLimit);
             static bool dialog_notified = false;
@@ -6036,10 +6047,13 @@ void GUI_App::start_sync_user_preset(bool with_progress_dlg)
                         unsigned int http_code = 200;
 
                         /* get list witch need to be deleted*/
-                        std::vector<string> delete_cache_presets = get_delete_cache_presets_lock();
+                        std::map<std::string, std::string> delete_cache_presets = get_delete_cache_presets_lock();
                         for (auto it = delete_cache_presets.begin(); it != delete_cache_presets.end();) {
-                            if ((*it).empty()) continue;
-                            std::string del_setting_id = *it;
+                            if (it->first.empty()) {
+                                ++it;
+                                continue;
+                            }
+                            std::string del_setting_id = it->first;
                             int result = m_agent->delete_setting(del_setting_id);
                             if (result == 0) {
                                 preset_deleted_from_cloud(del_setting_id);
@@ -6074,16 +6088,17 @@ void GUI_App::stop_sync_user_preset()
     }
 }
 
-void GUI_App::start_http_server()
+void GUI_App::start_http_server(const std::string& provider)
 {
+    (void)provider;
     if (!m_http_server.is_started())
         m_http_server.start();
 }
 
-void GUI_App::start_http_server(int port)
+void GUI_App::start_http_server(int port, const std::string& provider)
 {
     if (port <= 0) {
-        start_http_server();
+        start_http_server(provider);
         return;
     }
 
@@ -7054,27 +7069,27 @@ void GUI_App::load_current_presets(bool active_preset_combox/*= false*/, bool ch
 
 static std::mutex mutex_delete_cache_presets;
 
-std::vector<std::string> & GUI_App::get_delete_cache_presets()
+std::map<std::string, std::string> & GUI_App::get_delete_cache_presets()
 {
     return need_delete_presets;
 }
 
-std::vector<std::string> GUI_App::get_delete_cache_presets_lock()
+std::map<std::string, std::string> GUI_App::get_delete_cache_presets_lock()
 {
     std::scoped_lock l(mutex_delete_cache_presets);
     return need_delete_presets;
 }
 
-void GUI_App::delete_preset_from_cloud(std::string setting_id)
+void GUI_App::delete_preset_from_cloud(std::string setting_id, std::string preset_file_path)
 {
     std::scoped_lock l(mutex_delete_cache_presets);
-    need_delete_presets.push_back(setting_id);
+    need_delete_presets[setting_id] = preset_file_path;
 }
 
 void GUI_App::preset_deleted_from_cloud(std::string setting_id)
 {
     std::scoped_lock l(mutex_delete_cache_presets);
-    need_delete_presets.erase(std::remove(need_delete_presets.begin(), need_delete_presets.end(), setting_id), need_delete_presets.end());
+    need_delete_presets.erase(setting_id);
 }
 
 wxString GUI_App::filter_string(wxString str)
@@ -8018,6 +8033,34 @@ bool is_support_filament(int extruder_id, bool strict_check)
     if (support_option == nullptr) return false;
     return support_option->get_at(0);
 };
+
+const std::string& GUI_App::get_printer_cloud_provider() const
+{
+    return ORCA_CLOUD_PROVIDER;
+}
+
+ConfigOptionMode GUI_App::get_saved_mode()
+{
+    return get_mode();
+}
+
+std::string GUI_App::get_saved_mode_str()
+{
+    return get_mode_str();
+}
+
+std::string GUI_App::get_bbl_client_version()
+{
+    return VersionInfo::convert_full_version(SLIC3R_VERSION);
+}
+
+void GUI_App::on_stealth_mode_enter()
+{
+}
+
+void GUI_App::troubleshoot()
+{
+}
 
 } // GUI
 } //Slic3r

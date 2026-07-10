@@ -1,5 +1,6 @@
 #pragma once
 #include <optional>
+#include <cmath>
 #include "libslic3r/CommonDefs.hpp"
 
 #include "slic3r/Utils/json_diff.hpp"
@@ -154,6 +155,10 @@ public:
     float          GetNozzleTempTarget(int extder_id) const { return GetExtderById(extder_id) ? GetExtderById(extder_id)->GetTargetTemp() : 0.0f; }
     // Returns per-tool fan speed [0,1], or -1 if no per-tool data is available
     float          GetNozzleFanSpeed(int extder_id) const { return GetExtderById(extder_id) ? GetExtderById(extder_id)->GetFanSpeed() : -1.0f; }
+    bool           NozzleDiameterMatchesOrUnknown(int extder_id, double diameter) const {
+        const float device_diameter = GetNozzleDiameter(extder_id);
+        return device_diameter <= 0.0f || diameter <= 0.0 || std::abs(double(device_diameter) - diameter) < 0.005;
+    }
 
     /** Until the next push_status, mirror the user's last nozzle target in the UI. */
     void set_extder_target_temp(int extder_id, int temp);

@@ -462,10 +462,30 @@ void ConfigBase::apply_only(const ConfigBase &other, const t_config_option_keys 
 {
     // loop through options and apply them
     for (const t_config_option_key &opt_key : keys) {
+        t_config_option_key dst_key = opt_key;
+        if ((dst_key == "perimeter_extruder" || dst_key == "wall_filament" || dst_key == "wall_filament_id" || dst_key == "outer_wall_filament") &&
+            this->def() != nullptr && this->def()->get("outer_wall_filament_id") != nullptr) {
+            dst_key = "outer_wall_filament_id";
+        } else if (dst_key == "inner_wall_filament" &&
+                   this->def() != nullptr && this->def()->get("inner_wall_filament_id") != nullptr) {
+            dst_key = "inner_wall_filament_id";
+        } else if ((dst_key == "infill_extruder" || dst_key == "sparse_infill_filament") &&
+                   this->def() != nullptr && this->def()->get("sparse_infill_filament_id") != nullptr) {
+            dst_key = "sparse_infill_filament_id";
+        } else if ((dst_key == "solid_infill_extruder" || dst_key == "solid_infill_filament") &&
+                   this->def() != nullptr && this->def()->get("internal_solid_filament_id") != nullptr) {
+            dst_key = "internal_solid_filament_id";
+        } else if (dst_key == "top_solid_infill_filament" &&
+                   this->def() != nullptr && this->def()->get("top_surface_filament_id") != nullptr) {
+            dst_key = "top_surface_filament_id";
+        } else if (dst_key == "bottom_solid_infill_filament" &&
+                   this->def() != nullptr && this->def()->get("bottom_surface_filament_id") != nullptr) {
+            dst_key = "bottom_surface_filament_id";
+        }
         // Create a new option with default value for the key.
         // If the key is not in the parameter definition, or this ConfigBase is a static type and it does not support the parameter,
         // an exception is thrown if not ignore_nonexistent.
-        ConfigOption *my_opt = this->option(opt_key, true);
+        ConfigOption *my_opt = this->option(dst_key, true);
         if (my_opt == nullptr) {
             // opt_key does not exist in this ConfigBase and it cannot be created, because it is not defined by this->def().
             // This is only possible if other is of DynamicConfig type.
@@ -608,6 +628,27 @@ bool ConfigBase::set_deserialize_raw(const t_config_option_key &opt_key_src, con
     if (def == nullptr)
         throw NoDefinitionException(opt_key);
     const ConfigOptionDef *optdef  = def->get(opt_key);
+    if (optdef == nullptr) {
+        if ((opt_key == "perimeter_extruder" || opt_key == "wall_filament" || opt_key == "wall_filament_id" || opt_key == "outer_wall_filament") &&
+            (optdef = def->get("outer_wall_filament_id")) != nullptr) {
+            opt_key = "outer_wall_filament_id";
+        } else if (opt_key == "inner_wall_filament" &&
+                   (optdef = def->get("inner_wall_filament_id")) != nullptr) {
+            opt_key = "inner_wall_filament_id";
+        } else if ((opt_key == "infill_extruder" || opt_key == "sparse_infill_filament") &&
+                   (optdef = def->get("sparse_infill_filament_id")) != nullptr) {
+            opt_key = "sparse_infill_filament_id";
+        } else if ((opt_key == "solid_infill_extruder" || opt_key == "solid_infill_filament") &&
+                   (optdef = def->get("internal_solid_filament_id")) != nullptr) {
+            opt_key = "internal_solid_filament_id";
+        } else if (opt_key == "top_solid_infill_filament" &&
+                   (optdef = def->get("top_surface_filament_id")) != nullptr) {
+            opt_key = "top_surface_filament_id";
+        } else if (opt_key == "bottom_solid_infill_filament" &&
+                   (optdef = def->get("bottom_surface_filament_id")) != nullptr) {
+            opt_key = "bottom_surface_filament_id";
+        }
+    }
     if (optdef == nullptr) {
         // If we didn't find an option, look for any other option having this as an alias.
         for (const auto &opt : def->options) {
@@ -1498,7 +1539,7 @@ void ConfigBase::save_to_json(const std::string &file, const std::string &name, 
 
     boost::nowide::ofstream c;
     c.open(file, std::ios::out | std::ios::trunc);
-    c << std::setw(4) << j << std::endl;
+    c << j.dump(1, '\t') << std::endl;
     c.close();
 
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ":" <<__LINE__ << boost::format(", saved config to %1%\n")%file;

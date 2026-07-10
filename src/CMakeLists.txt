@@ -15,6 +15,7 @@ add_subdirectory(libslic3r)
 
 if (SLIC3R_GUI)
     # imgui, imguizmo, and hidapi are now included from deps_src
+    add_subdirectory(glad)
     add_subdirectory(libvgcode)
 
     if(WIN32)
@@ -36,14 +37,19 @@ if (SLIC3R_GUI)
             find_package(wxWidgets 3.1 REQUIRED COMPONENTS base core adv html gl aui net media webview)
         endif ()
     else ()
-        find_package(wxWidgets 3.1 REQUIRED COMPONENTS html adv gl core base webview aui net media)
+        if (WIN32 AND NOT wxWidgets_DIR)
+            set(wxWidgets_DIR "${CMAKE_PREFIX_PATH}/lib/cmake/wxWidgets-3.3" CACHE PATH "Path to wxWidgets config package" FORCE)
+        endif ()
+        find_package(wxWidgets 3.3 CONFIG REQUIRED COMPONENTS html adv gl core base webview aui net media)
     endif ()
 
     if(UNIX)
         message(STATUS "wx-config path: ${wxWidgets_CONFIG_EXECUTABLE}")
     endif()
 
-    include(${wxWidgets_USE_FILE})
+    if(wxWidgets_USE_FILE)
+        include(${wxWidgets_USE_FILE})
+    endif()
 
     find_package(JPEG QUIET)
 
