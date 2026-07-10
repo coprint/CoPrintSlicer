@@ -98,6 +98,8 @@ struct FilamentState {
     std::array<wxColour, MaxDashboardTools> assigned_colors;
     int selected_tool{0};
     bool can_load_unload{false};
+    bool is_loading{false};
+    int loading_tool{-1};
 };
 
 struct MovementState {

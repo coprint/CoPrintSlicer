@@ -591,10 +591,14 @@ void FilamentPanel::apply_state(const FilamentState& state)
     }
 
     set_selected_tool(state.selected_tool);
-    if (m_load_button != nullptr)
-        m_load_button->Enable(state.can_load_unload);
+    const bool selected_tool_loading = state.is_loading && state.loading_tool == m_selected_tool_index;
+    const bool controls_enabled = state.can_load_unload && !state.is_loading;
+    if (m_load_button != nullptr) {
+        m_load_button->SetLabel(selected_tool_loading ? wxString::FromUTF8("Loading...") : wxString::FromUTF8("Load"));
+        m_load_button->Enable(controls_enabled);
+    }
     if (m_unload_button != nullptr)
-        m_unload_button->Enable(state.can_load_unload);
+        m_unload_button->Enable(controls_enabled);
 }
 
 void FilamentPanel::set_command_handler(CommandHandler handler)

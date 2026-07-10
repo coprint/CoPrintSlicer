@@ -5522,10 +5522,21 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
     dashboard_state.filament = m_dashboard_state_store.state().filament;
     dashboard_state.filament.selected_tool    = std::clamp(m_selected_filament_tool, 0, 3);
     dashboard_state.filament.can_load_unload  = obj != nullptr && obj->is_online() && !obj->is_in_printing();
+    dashboard_state.filament.is_loading       = false;
+    dashboard_state.filament.loading_tool     = -1;
     dashboard_state.movement.selected_tool    = m_selected_extruder_index;
     dashboard_state.movement.selected_distance_mm = m_axis_move_step;
 
     if (obj != nullptr && obj->is_online()) {
+        if (auto* extruders = obj->GetExtderSystem()) {
+            dashboard_state.filament.is_loading = extruders->IsBusyLoading();
+            const int loading_tool = extruders->GetLoadingExtderId();
+            dashboard_state.filament.loading_tool =
+                dashboard_state.filament.is_loading && loading_tool >= 0 && loading_tool < DeviceDashboard::MaxDashboardTools
+                    ? loading_tool
+                    : -1;
+        }
+
         for (int i = 0; i < DeviceDashboard::MaxDashboardTools; ++i) {
             if (m_filament_tool_has_color[i]) {
                 dashboard_state.filament.tools[i].color = m_filament_loaded_tool_colors[i];
