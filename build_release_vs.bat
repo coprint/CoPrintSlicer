@@ -83,17 +83,10 @@ if "%1"=="pack" (
     cd %WP%/deps/build
     if "%arch%"=="ARM64" cd %WP%/deps/build-arm64
     for /f "tokens=2-4 delims=/ " %%a in ('date /t') do set build_date=%%c%%b%%a
-<<<<<<< HEAD
-    echo packing deps: CoPrintSlicer_dep_win64_!build_date!_vs!VS_VERSION!.zip
+    echo packing deps: CoPrintSlicer_dep_win-!arch!_!build_date!_vs!VS_VERSION!.zip
 
-    %WP%/tools/7z.exe a CoPrintSlicer_dep_win64_!build_date!_vs!VS_VERSION!.zip CoPrintSlicer_dep
-    exit /b 0
-=======
-    echo packing deps: OrcaSlicer_dep_win-!arch!_!build_date!_vs!VS_VERSION!.zip
-
-    %WP%/tools/7z.exe a OrcaSlicer_dep_win-!arch!_!build_date!_vs!VS_VERSION!.zip OrcaSlicer_dep
+    %WP%/tools/7z.exe a CoPrintSlicer_dep_win-!arch!_!build_date!_vs!VS_VERSION!.zip CoPrintSlicer_dep
     goto :done
->>>>>>> orca-v2.4.2
 )
 
 set debug=OFF
