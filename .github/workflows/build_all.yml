@@ -54,27 +54,14 @@ concurrency:
   
 
 jobs:
-  build_linux:
-    strategy:
-      fail-fast: false
-<<<<<<< HEAD
-    # Don't run scheduled builds on forks:
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'CoPrintSlicer/CoPrintSlicer') }}
-    uses: ./.github/workflows/build_check_cache.yml
-    with:
-      os: ubuntu-24.04
-      build-deps-only: ${{ inputs.build-deps-only || false }}
-    secrets: inherit
   build_all:
     strategy:
       fail-fast: false
-=======
       # Build both arches on every event (PRs included), through the same
       # build_check_cache -> build_deps -> build_orca chain (the AppImage).
       # aarch64 always uses the GitHub-hosted arm runner (there is no arm
       # self-hosted server). amd64's empty arch is load-bearing: it keeps the
       # historical 'linux-clang' deps cache key and the unsuffixed asset names.
->>>>>>> orca-v2.4.2
       matrix:
         include:
           - arch: ""
@@ -202,14 +189,8 @@ jobs:
             runner: ubuntu-24.04
           - arch: aarch64
             runner: ubuntu-24.04-arm
-<<<<<<< HEAD
-    # Don't run scheduled builds on forks:
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'CoPrintSlicer/CoPrintSlicer') }}
-=======
     # Don't run scheduled builds on forks; skip entirely on self-hosted runners
-    if: ${{ !cancelled() && !vars.SELF_HOSTED && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
-
->>>>>>> orca-v2.4.2
+    if: ${{ !cancelled() && !vars.SELF_HOSTED && (github.event_name != 'schedule' || github.repository == 'CoPrintSlicer/CoPrintSlicer') }}
     runs-on: ${{ matrix.variant.runner }}
     env:
       date:
@@ -265,16 +246,10 @@ jobs:
       shell: bash
     - uses: flatpak/flatpak-github-actions/flatpak-builder@master
       with:
-<<<<<<< HEAD
         bundle: CoPrintSlicer-Linux-flatpak_${{ env.ver }}_${{ matrix.variant.arch }}.flatpak
         manifest-path: scripts/flatpak/io.github.softfever.CoPrintSlicer.yml
         cache: true
         cache-key: flatpak-builder-${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
-=======
-        bundle: OrcaSlicer-Linux-flatpak_${{ env.ver }}_${{ matrix.variant.arch }}.flatpak
-        manifest-path: scripts/flatpak/com.orcaslicer.OrcaSlicer.yml
-        cache: false
->>>>>>> orca-v2.4.2
         arch: ${{ matrix.variant.arch }}
         upload-artifact: false
     - name: Upload artifacts Flatpak
@@ -283,21 +258,12 @@ jobs:
         name: CoPrintSlicer-Linux-flatpak_${{ env.ver }}_${{ matrix.variant.arch }}.flatpak
         path: '/__w/CoPrintSlicer/CoPrintSlicer/CoPrintSlicer-Linux-flatpak_${{ env.ver }}_${{ matrix.variant.arch }}.flatpak'
     - name: Deploy Flatpak to nightly release
-<<<<<<< HEAD
       if: github.repository == 'CoPrintSlicer/CoPrintSlicer' && github.ref == 'refs/heads/main'
-=======
-      if: github.repository == 'OrcaSlicer/OrcaSlicer' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/belt-printer')
->>>>>>> orca-v2.4.2
       uses: WebFreak001/deploy-nightly@v3.2.0
       with:
         upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
         release_id: 137995723
-<<<<<<< HEAD
         asset_path: /__w/CoPrintSlicer/CoPrintSlicer/CoPrintSlicer-Linux-flatpak_${{ env.ver }}_${{ matrix.variant.arch }}.flatpak
         asset_name: CoPrintSlicer-Linux-flatpak_nightly_${{ matrix.variant.arch }}.flatpak
-=======
-        asset_path: /__w/OrcaSlicer/OrcaSlicer/OrcaSlicer-Linux-flatpak_${{ env.ver }}_${{ matrix.variant.arch }}.flatpak
-        asset_name: OrcaSlicer-Linux-flatpak_nightly${{ env.nightly_suffix }}_${{ matrix.variant.arch }}.flatpak
->>>>>>> orca-v2.4.2
         asset_content_type: application/octet-stream
         max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted

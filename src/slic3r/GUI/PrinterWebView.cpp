@@ -1922,8 +1922,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     content_columns->AddSpacer(FromDIP(20));
     content_columns->Add(right_main_column, 54, wxEXPAND | wxRIGHT, FromDIP(5));
 
-    left_sizer->Add(content_columns, 0, wxEXPAND);
-    left_sizer->AddSpacer(FromDIP(52));
+    left_sizer->Add(content_columns, 1, wxEXPAND);
 
     left_container->SetSizer(left_sizer);
 
@@ -1959,10 +1958,16 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     content_host_sizer->Add(m_assistant_page, 1, wxEXPAND);
     content_host->SetSizer(content_host_sizer);
 
-    main_sizer->Add(preview_menu_panel, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(5));
+    main_sizer->Add(preview_menu_panel, 0, wxEXPAND | wxTOP, FromDIP(5));
     main_sizer->AddSpacer(FromDIP(20));
     main_sizer->Add(content_host, 1, wxEXPAND);
     SetSizer(main_sizer);
+    Bind(wxEVT_SIZE, [this](wxSizeEvent &event) {
+        event.Skip();
+        Layout();
+        if (wxWindow *parent = GetParent())
+            parent->Layout();
+    });
     select_tab(PrinterWebViewTab::Status);
 
     m_browser = nullptr;

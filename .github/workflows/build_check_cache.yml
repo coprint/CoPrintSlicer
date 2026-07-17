@@ -33,22 +33,15 @@ jobs:
       - name: set outputs
         id: set_outputs
         env:
-<<<<<<< HEAD
-          dep-folder-name: ${{ !contains(inputs.os, 'macos') && '/CoPrintSlicer_dep' || '' }}
-          output-cmd: ${{ inputs.os == 'windows-latest' && '$env:GITHUB_OUTPUT' || '"$GITHUB_OUTPUT"'}}
-        run: |
-          echo cache-key=${{ inputs.os }}-cache-coprintslicer_deps-build-${{ hashFiles('deps/**') }} >> ${{ env.output-cmd }}
-=======
           # Keep macOS/Windows cache keys architecture-specific. amd64 Linux passes
           # no arch (key stays 'linux-clang', preserving the existing cache);
           # aarch64 gets its own 'linux-clang-aarch64' key.
           cache-os: ${{ runner.os == 'macOS' && format('macos-{0}', inputs.arch) || (runner.os == 'Windows' && format('windows-{0}', inputs.arch) || format('linux-clang{0}', inputs.arch && format('-{0}', inputs.arch) || '')) }}
           # ARM64 builds use the build-arm64 tree (see build_release_vs.bat); x64/other use build.
-          dep-folder-name: ${{ runner.os == 'macOS' && format('/{0}', inputs.arch) || (runner.os == 'Windows' && inputs.arch == 'arm64') && '-arm64/OrcaSlicer_dep' || '/OrcaSlicer_dep' }}
+          dep-folder-name: ${{ runner.os == 'macOS' && format('/{0}', inputs.arch) || (runner.os == 'Windows' && inputs.arch == 'arm64') && '-arm64/CoPrintSlicer_dep' || '/CoPrintSlicer_dep' }}
           output-cmd: ${{ runner.os == 'Windows' && '$env:GITHUB_OUTPUT' || '"$GITHUB_OUTPUT"'}}
         run: |
-          echo cache-key=${{ env.cache-os }}-cache-orcaslicer_deps-build-${{ hashFiles('deps/**') }} >> ${{ env.output-cmd }}
->>>>>>> orca-v2.4.2
+          echo cache-key=${{ env.cache-os }}-cache-coprintslicer_deps-build-${{ hashFiles('deps/**') }} >> ${{ env.output-cmd }}
           echo cache-path=${{ github.workspace }}/deps/build${{ env.dep-folder-name }} >> ${{ env.output-cmd }}
             
       - name: load cache

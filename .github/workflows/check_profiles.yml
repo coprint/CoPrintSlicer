@@ -38,13 +38,8 @@ jobs:
       - name: Download
         working-directory: ${{ github.workspace }}
         run: |
-<<<<<<< HEAD
-          curl -LJO https://github.com/SoftFever/Orca_tools/releases/download/1/CoPrintSlicer_profile_validator
-          chmod +x ./CoPrintSlicer_profile_validator
-=======
           curl -L -o OrcaSlicer_profile_validator https://github.com/OrcaSlicer/OrcaSlicer/releases/download/nightly-builds/OrcaSlicer_profile_validator_Linux_Ubuntu2404_nightly
           chmod +x ./OrcaSlicer_profile_validator
->>>>>>> orca-v2.4.2
 
       # Validate all system profiles.
       - name: validate system profiles
@@ -52,7 +47,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          ./CoPrintSlicer_profile_validator -p ${{ github.workspace }}/resources/profiles -l 2 2>&1 | tee ${{ runner.temp }}/validate_system.log
+          ./OrcaSlicer_profile_validator -p ${{ github.workspace }}/resources/profiles -l 2 2>&1 | tee ${{ runner.temp }}/validate_system.log
           exit ${PIPESTATUS[0]}
       # For now run filament subtype check only for BBL profiles until we fix other vendors' profiles.
       - name: validate filament subtype check for BBL profiles
@@ -68,19 +63,11 @@ jobs:
         continue-on-error: true
         working-directory: ${{ github.workspace }}
         run: |
-<<<<<<< HEAD
-          set +e
-          curl -LJO https://github.com/CoPrintSlicer/CoPrintSlicer/releases/download/nightly-builds/orca_custom_preset_tests.zip
-          unzip -q ./orca_custom_preset_tests.zip -d ${{ github.workspace }}/resources/profiles
-          ./CoPrintSlicer_profile_validator -p ${{ github.workspace }}/resources/profiles -l 2 2>&1 | tee ${{ runner.temp }}/validate_custom.log
-          exit ${PIPESTATUS[0]}
-=======
           fixtures_dir="${{ runner.temp }}/profile-fixtures"
           output_dir="${{ runner.temp }}/custom-preset-validation"
           combined_log="${{ runner.temp }}/validate_custom.log"
           summary="${output_dir}/summary.md"
           release_url="https://github.com/OrcaSlicer/OrcaSlicer-profile-validator/releases/download/fixture-archive"
->>>>>>> orca-v2.4.2
 
           rm -rf "${fixtures_dir}" "${output_dir}"
           mkdir -p "${fixtures_dir}" "${output_dir}"

@@ -148,20 +148,20 @@ jobs:
         if: runner.os == 'macOS' && !inputs.macos-combine-only
         working-directory: ${{ github.workspace }}
         run: |
-          tar -czvf OrcaSlicer_Mac_bundle_${{ inputs.arch }}_${{ github.sha }}.tar.gz -C build/${{ inputs.arch }} OrcaSlicer
+          tar -czvf CoPrintSlicer_Mac_bundle_${{ inputs.arch }}_${{ github.sha }}.tar.gz -C build/${{ inputs.arch }} CoPrintSlicer
 
       - name: Upload macOS app bundle ${{ inputs.arch }}
         if: runner.os == 'macOS' && !inputs.macos-combine-only
         uses: actions/upload-artifact@v7
         with:
-          name: OrcaSlicer_Mac_bundle_${{ inputs.arch }}_${{ github.sha }}
-          path: ${{ github.workspace }}/OrcaSlicer_Mac_bundle_${{ inputs.arch }}_${{ github.sha }}.tar.gz
+          name: CoPrintSlicer_Mac_bundle_${{ inputs.arch }}_${{ github.sha }}
+          path: ${{ github.workspace }}/CoPrintSlicer_Mac_bundle_${{ inputs.arch }}_${{ github.sha }}.tar.gz
 
       - name: Download macOS app bundles
         if: runner.os == 'macOS' && inputs.macos-combine-only
         uses: actions/download-artifact@v8
         with:
-          pattern: OrcaSlicer_Mac_bundle_*_${{ github.sha }}
+          pattern: CoPrintSlicer_Mac_bundle_*_${{ github.sha }}
           path: ${{ github.workspace }}/mac_bundles
 
       - name: Extract macOS app bundles
@@ -169,8 +169,8 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           mkdir -p build/arm64 build/x86_64
-          arm_bundle=$(find "${{ github.workspace }}/mac_bundles/OrcaSlicer_Mac_bundle_arm64_${{ github.sha }}" -name '*.tar.gz' -print -quit)
-          x86_bundle=$(find "${{ github.workspace }}/mac_bundles/OrcaSlicer_Mac_bundle_x86_64_${{ github.sha }}" -name '*.tar.gz' -print -quit)
+          arm_bundle=$(find "${{ github.workspace }}/mac_bundles/CoPrintSlicer_Mac_bundle_arm64_${{ github.sha }}" -name '*.tar.gz' -print -quit)
+          x86_bundle=$(find "${{ github.workspace }}/mac_bundles/CoPrintSlicer_Mac_bundle_x86_64_${{ github.sha }}" -name '*.tar.gz' -print -quit)
           tar -xzvf "$arm_bundle" -C "${{ github.workspace }}/build/arm64"
           tar -xzvf "$x86_bundle" -C "${{ github.workspace }}/build/x86_64"
 
@@ -182,11 +182,7 @@ jobs:
 
  # Thanks to RaySajuuk, it's working now
       - name: Sign app and notary
-<<<<<<< HEAD
-        if: github.repository == 'CoPrintSlicer/CoPrintSlicer' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) && contains(inputs.os, 'macos')
-=======
         if: github.repository == 'OrcaSlicer/OrcaSlicer' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/belt-printer' || startsWith(github.ref, 'refs/heads/release/')) && runner.os == 'macOS' && inputs.macos-combine-only
->>>>>>> orca-v2.4.2
         working-directory: ${{ github.workspace }}
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
@@ -213,13 +209,12 @@ jobs:
             codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" ${{ github.workspace }}/build/universal/CoPrintSlicer/CoPrintSlicer_profile_validator.app
           fi
           
-<<<<<<< HEAD
           # Create main CoPrintSlicer DMG without the profile validator helper
           mkdir -p ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg
           rm -rf ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg/*
           cp -R ${{ github.workspace }}/build/universal/CoPrintSlicer/CoPrintSlicer.app ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg/
           ln -sfn /Applications ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg/Applications
-          hdiutil create -volname "CoPrintSlicer" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg -ov -format UDZO CoPrintSlicer_Mac_universal_${{ env.ver }}.dmg
+          retry hdiutil create -volname "CoPrintSlicer" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg -ov -format UDZO CoPrintSlicer_Mac_universal_${{ env.ver }}.dmg
           codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" CoPrintSlicer_Mac_universal_${{ env.ver }}.dmg
           
           # Create separate CoPrintSlicer_profile_validator DMG if the app exists
@@ -228,26 +223,8 @@ jobs:
             rm -rf ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg/*
             cp -R ${{ github.workspace }}/build/universal/CoPrintSlicer/CoPrintSlicer_profile_validator.app ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg/
             ln -sfn /Applications ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg/Applications
-            hdiutil create -volname "CoPrintSlicer Profile Validator" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg -ov -format UDZO CoPrintSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
+            retry hdiutil create -volname "CoPrintSlicer Profile Validator" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg -ov -format UDZO CoPrintSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
             codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" CoPrintSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
-=======
-          # Create main OrcaSlicer DMG without the profile validator helper
-          mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_dmg
-          rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/*
-          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
-          ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Applications
-          retry hdiutil create -volname "OrcaSlicer" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
-          codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
-          
-          # Create separate OrcaSlicer_profile_validator DMG if the app exists
-          if [ -f "${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
-            mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg
-            rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg/*
-            cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg/
-            ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg/Applications
-            retry hdiutil create -volname "OrcaSlicer Profile Validator" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg -ov -format UDZO OrcaSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
-            codesign --deep --force --verbose --options runtime --timestamp --entitlements ${{ github.workspace }}/scripts/disable_validation.entitlements --sign "$CERTIFICATE_ID" OrcaSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
->>>>>>> orca-v2.4.2
           fi
           
           # Notarize main DMG
@@ -264,12 +241,13 @@ jobs:
         if: github.ref != 'refs/heads/main' && github.ref != 'refs/heads/belt-printer' && runner.os == 'macOS' && inputs.macos-combine-only
         working-directory: ${{ github.workspace }}
         run: |
-<<<<<<< HEAD
+          # Load the `retry` helper (retries flaky commands such as `hdiutil create`).
+          source ${{ github.workspace }}/scripts/retry.sh
           mkdir -p ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg
           rm -rf ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg/*
           cp -R ${{ github.workspace }}/build/universal/CoPrintSlicer/CoPrintSlicer.app ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg/
           ln -sfn /Applications ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg/Applications
-          hdiutil create -volname "CoPrintSlicer" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg -ov -format UDZO CoPrintSlicer_Mac_universal_${{ env.ver }}.dmg
+          retry hdiutil create -volname "CoPrintSlicer" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_dmg -ov -format UDZO CoPrintSlicer_Mac_universal_${{ env.ver }}.dmg
           
           # Create separate CoPrintSlicer_profile_validator DMG if the app exists
           if [ -f "${{ github.workspace }}/build/universal/CoPrintSlicer/CoPrintSlicer_profile_validator.app/Contents/MacOS/CoPrintSlicer_profile_validator" ]; then
@@ -277,24 +255,7 @@ jobs:
             rm -rf ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg/*
             cp -R ${{ github.workspace }}/build/universal/CoPrintSlicer/CoPrintSlicer_profile_validator.app ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg/
             ln -sfn /Applications ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg/Applications
-            hdiutil create -volname "CoPrintSlicer Profile Validator" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg -ov -format UDZO CoPrintSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
-=======
-          # Load the `retry` helper (retries flaky commands such as `hdiutil create`).
-          source ${{ github.workspace }}/scripts/retry.sh
-          mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_dmg
-          rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/*
-          cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer.app ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/
-          ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_dmg/Applications
-          retry hdiutil create -volname "OrcaSlicer" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_dmg -ov -format UDZO OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
-          
-          # Create separate OrcaSlicer_profile_validator DMG if the app exists
-          if [ -f "${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app/Contents/MacOS/OrcaSlicer_profile_validator" ]; then
-            mkdir -p ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg
-            rm -rf ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg/*
-            cp -R ${{ github.workspace }}/build/universal/OrcaSlicer/OrcaSlicer_profile_validator.app ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg/
-            ln -sfn /Applications ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg/Applications
-            retry hdiutil create -volname "OrcaSlicer Profile Validator" -srcfolder ${{ github.workspace }}/build/universal/OrcaSlicer_profile_validator_dmg -ov -format UDZO OrcaSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
->>>>>>> orca-v2.4.2
+            retry hdiutil create -volname "CoPrintSlicer Profile Validator" -srcfolder ${{ github.workspace }}/build/universal/CoPrintSlicer_profile_validator_dmg -ov -format UDZO CoPrintSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
           fi
 
       # Delete the per-arch bundles only after signing/DMG creation succeeded, so a
@@ -304,8 +265,8 @@ jobs:
         uses: geekyeggo/delete-artifact@v6
         with:
           name: |
-            OrcaSlicer_Mac_bundle_arm64_${{ github.sha }}
-            OrcaSlicer_Mac_bundle_x86_64_${{ github.sha }}
+            CoPrintSlicer_Mac_bundle_arm64_${{ github.sha }}
+            CoPrintSlicer_Mac_bundle_x86_64_${{ github.sha }}
 
       - name: Upload artifacts mac
         if: runner.os == 'macOS' && inputs.macos-combine-only
@@ -314,50 +275,30 @@ jobs:
           name: CoPrintSlicer_Mac_universal_${{ env.ver }}
           path: ${{ github.workspace }}/CoPrintSlicer_Mac_universal_${{ env.ver }}.dmg
 
-<<<<<<< HEAD
       - name: Upload CoPrintSlicer_profile_validator DMG mac
-        if: contains(inputs.os, 'macos')
-        uses: actions/upload-artifact@v6
-=======
-      - name: Upload OrcaSlicer_profile_validator DMG mac
         if: runner.os == 'macOS' && inputs.macos-combine-only && !vars.SELF_HOSTED
         uses: actions/upload-artifact@v7
->>>>>>> orca-v2.4.2
         with:
           name: CoPrintSlicer_profile_validator_Mac_universal_DMG_${{ env.ver }}
           path: ${{ github.workspace }}/CoPrintSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
           if-no-files-found: ignore
 
       - name: Deploy Mac release
-<<<<<<< HEAD
-        if: github.repository == 'CoPrintSlicer/CoPrintSlicer' && github.ref == 'refs/heads/main' && contains(inputs.os, 'macos')
-=======
         if: github.repository == 'OrcaSlicer/OrcaSlicer' && env.deploy_nightly == 'true' && runner.os == 'macOS' && inputs.macos-combine-only && !vars.SELF_HOSTED
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-<<<<<<< HEAD
           asset_path: ${{ github.workspace }}/CoPrintSlicer_Mac_universal_${{ env.ver }}.dmg
-          asset_name: CoPrintSlicer_Mac_universal_nightly.dmg
+          asset_name: CoPrintSlicer_Mac_universal_nightly${{ env.nightly_suffix }}.dmg
           asset_content_type: application/octet-stream
           max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted
 
       - name: Deploy Mac CoPrintSlicer_profile_validator DMG release
-        if: github.repository == 'CoPrintSlicer/CoPrintSlicer' && github.ref == 'refs/heads/main' && contains(inputs.os, 'macos')
-=======
-          asset_path: ${{ github.workspace }}/OrcaSlicer_Mac_universal_${{ env.ver }}.dmg
-          asset_name: OrcaSlicer_Mac_universal_nightly${{ env.nightly_suffix }}.dmg
-          asset_content_type: application/octet-stream
-          max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted
-
-      - name: Deploy Mac OrcaSlicer_profile_validator DMG release
         if: github.repository == 'OrcaSlicer/OrcaSlicer' && github.ref == 'refs/heads/main' && runner.os == 'macOS' && inputs.macos-combine-only && !vars.SELF_HOSTED
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
           asset_path: ${{ github.workspace }}/CoPrintSlicer_profile_validator_Mac_universal_${{ env.ver }}.dmg
           asset_name: CoPrintSlicer_profile_validator_Mac_universal_nightly.dmg
@@ -411,11 +352,7 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: ${{ github.workspace }}/${{ env.BUILD_DIR }}
         shell: cmd
-<<<<<<< HEAD
-        run: '"C:/Program Files/7-Zip/7z.exe" a -tzip CoPrintSlicer_Windows_${{ env.ver }}_portable.zip ${{ github.workspace }}/build/CoPrintSlicer'
-=======
         run: '"C:/Program Files/7-Zip/7z.exe" a -tzip OrcaSlicer_Windows_${{ env.ver }}${{ env.ARCH_SUFFIX }}_portable.zip ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer'
->>>>>>> orca-v2.4.2
 
       - name: Pack PDB
         if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
@@ -427,25 +364,15 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
-<<<<<<< HEAD
-          name: CoPrintSlicer_Windows_${{ env.ver }}_portable
-          path: ${{ github.workspace }}/build/CoPrintSlicer
-=======
           name: OrcaSlicer_Windows_${{ env.ver }}${{ env.ARCH_SUFFIX }}_portable
           path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer
->>>>>>> orca-v2.4.2
 
       - name: Upload artifacts Win installer
         if: runner.os == 'Windows' && !vars.SELF_HOSTED
         uses: actions/upload-artifact@v7
         with:
-<<<<<<< HEAD
-          name: CoPrintSlicer_Windows_${{ env.ver }}
-          path: ${{ github.workspace }}/build/CoPrintSlicer*.exe
-=======
           name: OrcaSlicer_Windows_${{ env.ver }}${{ env.ARCH_SUFFIX }}
           path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer*.exe
->>>>>>> orca-v2.4.2
 
       - name: Upload artifacts Win PDB
         if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
@@ -454,58 +381,30 @@ jobs:
           name: PDB
           path: ${{ github.workspace }}/build/src/Release/Debug_PDB_${{ env.ver }}_for_developers_only.7z
 
-<<<<<<< HEAD
-      - name: Upload CoPrintSlicer_profile_validator Win
-        if: inputs.os == 'windows-latest'
-        uses: actions/upload-artifact@v6
-=======
       - name: Upload OrcaSlicer_profile_validator Win
         if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
         uses: actions/upload-artifact@v7
->>>>>>> orca-v2.4.2
         with:
-          name: CoPrintSlicer_profile_validator_Windows_${{ env.ver }}
-          path: ${{ github.workspace }}/build/src/Release/CoPrintSlicer_profile_validator.exe
+          name: OrcaSlicer_profile_validator_Windows_${{ env.ver }}
+          path: ${{ github.workspace }}/build/src/Release/OrcaSlicer_profile_validator.exe
 
       - name: Deploy Windows release portable
-<<<<<<< HEAD
-        if: github.repository == 'CoPrintSlicer/CoPrintSlicer' && github.ref == 'refs/heads/main' && inputs.os == 'windows-latest'
-=======
         if: github.repository == 'OrcaSlicer/OrcaSlicer' && env.deploy_nightly == 'true' && runner.os == 'Windows' && !vars.SELF_HOSTED
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-<<<<<<< HEAD
-          asset_path: ${{ github.workspace }}/build/CoPrintSlicer_Windows_${{ env.ver }}_portable.zip
-          asset_name: CoPrintSlicer_Windows_nightly_portable.zip
-=======
           asset_path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer_Windows_${{ env.ver }}${{ env.ARCH_SUFFIX }}_portable.zip
           asset_name: OrcaSlicer_Windows${{ env.ARCH_SUFFIX }}_nightly${{ env.nightly_suffix }}_portable.zip
->>>>>>> orca-v2.4.2
           asset_content_type: application/x-zip-compressed
           max_releases: 1
 
       - name: Deploy Windows release installer
-<<<<<<< HEAD
-        if: github.repository == 'CoPrintSlicer/CoPrintSlicer' && github.ref == 'refs/heads/main' && inputs.os == 'windows-latest'
-=======
         if: github.repository == 'OrcaSlicer/OrcaSlicer' && env.deploy_nightly == 'true' && runner.os == 'Windows' && !vars.SELF_HOSTED
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-<<<<<<< HEAD
-          asset_path: ${{ github.workspace }}/build/CoPrintSlicer_Windows_Installer_${{ env.ver }}.exe
-          asset_name: CoPrintSlicer_Windows_Installer_nightly.exe
-          asset_content_type: application/x-msdownload
-          max_releases: 1
-
-      - name: Deploy Windows CoPrintSlicer_profile_validator release
-        if: github.repository == 'CoPrintSlicer/CoPrintSlicer' && github.ref == 'refs/heads/main' && inputs.os == 'windows-latest'
-=======
           asset_path: ${{ github.workspace }}/${{ env.BUILD_DIR }}/OrcaSlicer_Windows_Installer_${{ env.ver }}${{ env.ARCH_SUFFIX }}.exe
           asset_name: OrcaSlicer_Windows_Installer${{ env.ARCH_SUFFIX }}_nightly${{ env.nightly_suffix }}.exe
           asset_content_type: application/x-msdownload
@@ -513,13 +412,12 @@ jobs:
 
       - name: Deploy Windows OrcaSlicer_profile_validator release
         if: github.repository == 'OrcaSlicer/OrcaSlicer' && github.ref == 'refs/heads/main' && runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-          asset_path: ${{ github.workspace }}/build/src/Release/CoPrintSlicer_profile_validator.exe
-          asset_name: CoPrintSlicer_profile_validator_Windows_nightly.exe
+          asset_path: ${{ github.workspace }}/build/src/Release/OrcaSlicer_profile_validator.exe
+          asset_name: OrcaSlicer_profile_validator_Windows_nightly.exe
           asset_content_type: application/x-msdownload
           max_releases: 1
 
@@ -554,12 +452,6 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-<<<<<<< HEAD
-          ./build_linux.sh -istr
-          mv -n ./build/CoPrintSlicer_Linux_V${{ env.ver_pure }}.AppImage ./build/CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
-          chmod +x ./build/CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
-          tar -cvpf build_tests.tar build/tests
-=======
           # Build + tar the unit tests (-t) only on the leg that runs them: the
           # aarch64 leg by default (faster GitHub arm runner), or amd64 when using
           # self-hosted runners (no arm self-hosted server). unit_tests downloads
@@ -572,7 +464,6 @@ jobs:
           mv -n ./build/OrcaSlicer_Linux_V${{ env.ver_pure }}.AppImage "$appimage"
           chmod +x "$appimage"
           if $tests; then tar -cvpf build_tests.tar build/tests; fi
->>>>>>> orca-v2.4.2
 
         # Use tar because upload-artifacts won't always preserve directory structure
         # and doesn't preserve file permissions
@@ -601,7 +492,7 @@ jobs:
         working-directory: ${{ github.workspace }}/build/src/Release
         shell: bash
         run: |
-          ./CoPrintSlicer_profile_validator -p ${{ github.workspace }}/resources/profiles -g 1
+          ./OrcaSlicer_profile_validator -p ${{ github.workspace }}/resources/profiles -g 1
           cd ${{ github.workspace }}/resources/profiles
           zip -r orca_custom_preset_tests.zip user/
 
@@ -609,54 +500,28 @@ jobs:
         if: ${{ ! env.ACT && runner.os == 'Linux' }}
         uses: actions/upload-artifact@v7
         with:
-<<<<<<< HEAD
-          name: CoPrintSlicer_Linux_ubuntu_${{ env.ubuntu-ver }}_${{ env.ver }}
-          path: './build/CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage'
-
-      - name: Upload CoPrintSlicer_profile_validator Ubuntu
-        if: ${{ ! env.ACT && inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04' }}
-        env:
-          ubuntu-ver: ${{ (inputs.os == 'ubuntu-20.04' && '2004') || (inputs.os == 'ubuntu-24.04' && '2404') || '' }}
-        uses: actions/upload-artifact@v6
-=======
           name: OrcaSlicer_Linux_ubuntu_${{ env.ubuntu-ver }}${{ env.arch_suffix }}_${{ env.ver }}
           path: "./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage"
 
       - name: Upload OrcaSlicer_profile_validator Ubuntu
         if: ${{ ! env.ACT && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64' }}
         uses: actions/upload-artifact@v7
->>>>>>> orca-v2.4.2
         with:
-          name: CoPrintSlicer_profile_validator_Linux_ubuntu_${{ env.ubuntu-ver }}_${{ env.ver }}
-          path: './build/src/Release/CoPrintSlicer_profile_validator'
+          name: OrcaSlicer_profile_validator_Linux_ubuntu_${{ env.ubuntu-ver }}_${{ env.ver }}
+          path: './build/src/Release/OrcaSlicer_profile_validator'
 
       - name: Deploy Ubuntu release
-<<<<<<< HEAD
-        if: ${{ github.repository == 'CoPrintSlicer/CoPrintSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && (inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04') }}
-        env:
-          ubuntu-ver-str: ${{ (inputs.os == 'ubuntu-24.04' && '_Ubuntu2404') || '' }}
-=======
         if: ${{ github.repository == 'OrcaSlicer/OrcaSlicer' && ! env.ACT && env.deploy_nightly == 'true' && runner.os == 'Linux' && !vars.SELF_HOSTED }}
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-<<<<<<< HEAD
-          asset_path: ./build/CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_${{ env.ver }}.AppImage
-          asset_name: CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}_nightly.AppImage
-          asset_content_type: application/octet-stream
-          max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted
-      - name: Deploy Ubuntu release
-        if: ${{ github.repository == 'CoPrintSlicer/CoPrintSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && inputs.os == 'ubuntu-24.04' }}
-=======
           asset_path: ./build/OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage
           asset_name: OrcaSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_nightly${{ env.nightly_suffix }}.AppImage
           asset_content_type: application/octet-stream
           max_releases: 1 # optional, if there are more releases than this matching the asset_name, the oldest ones are going to be deleted
       - name: Deploy Ubuntu release
         if: ${{ github.repository == 'OrcaSlicer/OrcaSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64' }}
->>>>>>> orca-v2.4.2
         uses: rickstaa/action-create-tag@v1
         with:
           tag: "nightly-builds"
@@ -664,33 +529,22 @@ jobs:
           force_push_tag: true
           message: "nightly-builds"
 
-<<<<<<< HEAD
-      - name: Deploy Ubuntu CoPrintSlicer_profile_validator release
-        if: ${{ github.repository == 'CoPrintSlicer/CoPrintSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && (inputs.os == 'ubuntu-20.04' || inputs.os == 'ubuntu-24.04') }}
-        env:
-          ubuntu-ver-str: ${{ (inputs.os == 'ubuntu-24.04' && '_Ubuntu2404') || '' }}
-=======
       - name: Deploy Ubuntu OrcaSlicer_profile_validator release
         if: ${{ github.repository == 'OrcaSlicer/OrcaSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64' }}
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-          asset_path: ./build/src/Release/CoPrintSlicer_profile_validator
-          asset_name: CoPrintSlicer_profile_validator_Linux${{ env.ubuntu-ver-str }}_nightly
+          asset_path: ./build/src/Release/OrcaSlicer_profile_validator
+          asset_name: OrcaSlicer_profile_validator_Linux${{ env.ubuntu-ver-str }}_nightly
           asset_content_type: application/octet-stream
           max_releases: 1
 
       - name: Deploy orca_custom_preset_tests
-<<<<<<< HEAD
-        if: ${{ github.repository == 'CoPrintSlicer/CoPrintSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && inputs.os == 'ubuntu-24.04' }}
-=======
         if: ${{ github.repository == 'OrcaSlicer/OrcaSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64' }}
->>>>>>> orca-v2.4.2
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
-          upload_url: https://uploads.github.com/repos/CoPrintSlicer/CoPrintSlicer/releases/137995723/assets{?name,label}
+          upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
           asset_path: ${{ github.workspace }}/resources/profiles/orca_custom_preset_tests.zip
           asset_name: orca_custom_preset_tests.zip

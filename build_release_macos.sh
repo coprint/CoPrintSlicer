@@ -291,69 +291,28 @@ function build_universal() {
     echo "Building universal binary..."
 
     PROJECT_BUILD_DIR="$PROJECT_DIR/build/$ARCH"
-<<<<<<< HEAD
-    
-    # Create universal binary
-    echo "Creating universal binary..."
-    # PROJECT_BUILD_DIR="$PROJECT_DIR/build_Universal"
+    ARM64_APP="$PROJECT_DIR/build/arm64/CoPrintSlicer/CoPrintSlicer.app"
+    X86_64_APP="$PROJECT_DIR/build/x86_64/CoPrintSlicer/CoPrintSlicer.app"
+
     mkdir -p "$PROJECT_BUILD_DIR/CoPrintSlicer"
     UNIVERSAL_APP="$PROJECT_BUILD_DIR/CoPrintSlicer/CoPrintSlicer.app"
     rm -rf "$UNIVERSAL_APP"
-    cp -R "$PROJECT_DIR/build/arm64/CoPrintSlicer/CoPrintSlicer.app" "$UNIVERSAL_APP"
-    
-    # Get the binary path inside the .app bundle
-    BINARY_PATH="Contents/MacOS/CoPrintSlicer"
-    
-    # Create universal binary using lipo
-    lipo -create \
-        "$PROJECT_DIR/build/x86_64/CoPrintSlicer/CoPrintSlicer.app/$BINARY_PATH" \
-        "$PROJECT_DIR/build/arm64/CoPrintSlicer/CoPrintSlicer.app/$BINARY_PATH" \
-        -output "$UNIVERSAL_APP/$BINARY_PATH"
-        
-    echo "Universal binary created at $UNIVERSAL_APP"
-    
-    # Create universal binary for profile validator if it exists
-    if [ -f "$PROJECT_DIR/build/arm64/CoPrintSlicer/CoPrintSlicer_profile_validator.app/Contents/MacOS/CoPrintSlicer_profile_validator" ] && \
-       [ -f "$PROJECT_DIR/build/x86_64/CoPrintSlicer/CoPrintSlicer_profile_validator.app/Contents/MacOS/CoPrintSlicer_profile_validator" ]; then
-        echo "Creating universal binary for CoPrintSlicer_profile_validator..."
-        UNIVERSAL_VALIDATOR_APP="$PROJECT_BUILD_DIR/CoPrintSlicer/CoPrintSlicer_profile_validator.app"
-        rm -rf "$UNIVERSAL_VALIDATOR_APP"
-        cp -R "$PROJECT_DIR/build/arm64/CoPrintSlicer/CoPrintSlicer_profile_validator.app" "$UNIVERSAL_VALIDATOR_APP"
-        
-        # Get the binary path inside the profile validator .app bundle
-        VALIDATOR_BINARY_PATH="Contents/MacOS/CoPrintSlicer_profile_validator"
-        
-        # Create universal binary using lipo
-        lipo -create \
-            "$PROJECT_DIR/build/x86_64/CoPrintSlicer/CoPrintSlicer_profile_validator.app/$VALIDATOR_BINARY_PATH" \
-            "$PROJECT_DIR/build/arm64/CoPrintSlicer/CoPrintSlicer_profile_validator.app/$VALIDATOR_BINARY_PATH" \
-            -output "$UNIVERSAL_VALIDATOR_APP/$VALIDATOR_BINARY_PATH"
-            
-        echo "Universal binary for CoPrintSlicer_profile_validator created at $UNIVERSAL_VALIDATOR_APP"
-=======
-    ARM64_APP="$PROJECT_DIR/build/arm64/OrcaSlicer/OrcaSlicer.app"
-    X86_64_APP="$PROJECT_DIR/build/x86_64/OrcaSlicer/OrcaSlicer.app"
-
-    mkdir -p "$PROJECT_BUILD_DIR/OrcaSlicer"
-    UNIVERSAL_APP="$PROJECT_BUILD_DIR/OrcaSlicer/OrcaSlicer.app"
-    rm -rf "$UNIVERSAL_APP"
     cp -R "$ARM64_APP" "$UNIVERSAL_APP"
 
-    echo "Creating universal binaries for OrcaSlicer.app..."
+    echo "Creating universal binaries for CoPrintSlicer.app..."
     lipo_dir "$UNIVERSAL_APP" "$X86_64_APP"
-    echo "Universal OrcaSlicer.app created at $UNIVERSAL_APP"
+    echo "Universal CoPrintSlicer.app created at $UNIVERSAL_APP"
 
     # Create universal binary for profile validator if it exists
-    ARM64_VALIDATOR="$PROJECT_DIR/build/arm64/OrcaSlicer/OrcaSlicer_profile_validator.app"
-    X86_64_VALIDATOR="$PROJECT_DIR/build/x86_64/OrcaSlicer/OrcaSlicer_profile_validator.app"
+    ARM64_VALIDATOR="$PROJECT_DIR/build/arm64/CoPrintSlicer/CoPrintSlicer_profile_validator.app"
+    X86_64_VALIDATOR="$PROJECT_DIR/build/x86_64/CoPrintSlicer/CoPrintSlicer_profile_validator.app"
     if [ -d "$ARM64_VALIDATOR" ] && [ -d "$X86_64_VALIDATOR" ]; then
-        echo "Creating universal binaries for OrcaSlicer_profile_validator.app..."
-        UNIVERSAL_VALIDATOR_APP="$PROJECT_BUILD_DIR/OrcaSlicer/OrcaSlicer_profile_validator.app"
+        echo "Creating universal binaries for CoPrintSlicer_profile_validator.app..."
+        UNIVERSAL_VALIDATOR_APP="$PROJECT_BUILD_DIR/CoPrintSlicer/CoPrintSlicer_profile_validator.app"
         rm -rf "$UNIVERSAL_VALIDATOR_APP"
         cp -R "$ARM64_VALIDATOR" "$UNIVERSAL_VALIDATOR_APP"
         lipo_dir "$UNIVERSAL_VALIDATOR_APP" "$X86_64_VALIDATOR"
-        echo "Universal OrcaSlicer_profile_validator.app created at $UNIVERSAL_VALIDATOR_APP"
->>>>>>> orca-v2.4.2
+        echo "Universal CoPrintSlicer_profile_validator.app created at $UNIVERSAL_VALIDATOR_APP"
     fi
 }
 
