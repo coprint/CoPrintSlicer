@@ -12,6 +12,7 @@
 
 class Button;
 class wxStaticText;
+class wxBoxSizer;
 
 namespace Slic3r {
 namespace GUI {
@@ -28,6 +29,7 @@ public:
 
     void apply_state(const MovementState& state);
     void set_command_handler(CommandHandler handler);
+    void set_compact_mode(bool compact);
 
 private:
     enum class SpeedPreset {
@@ -47,6 +49,17 @@ private:
     void set_active_speed_button(SpeedPreset preset);
 
     DeviceCardFrame* m_frame{nullptr};
+    wxBoxSizer* m_headers_sizer{nullptr};
+    wxBoxSizer* m_tool_header_slot{nullptr};
+    wxBoxSizer* m_xy_header_slot{nullptr};
+    wxBoxSizer* m_z_header_slot{nullptr};
+    wxBoxSizer* m_distance_header_slot{nullptr};
+    wxBoxSizer* m_speed_header_slot{nullptr};
+    wxBoxSizer* m_controls_sizer{nullptr};
+    wxWindow* m_xy_area{nullptr};
+    Button* m_center_button{nullptr};
+    wxWindow* m_z_plus_host{nullptr};
+    wxWindow* m_z_minus_host{nullptr};
     std::array<Button*, MaxDashboardTools> m_tool_buttons{nullptr, nullptr, nullptr, nullptr};
     std::array<Button*, 4> m_distance_buttons{nullptr, nullptr, nullptr, nullptr};
     std::array<Button*, 4> m_speed_buttons{nullptr, nullptr, nullptr, nullptr};
@@ -55,6 +68,7 @@ private:
     std::array<int8_t, 4> m_speed_button_active{-1, -1, -1, -1};
     double m_selected_distance_mm{1.0};
     int m_selected_tool{0};
+    bool m_compact_mode{false};
     SpeedPreset m_speed_preset{SpeedPreset::Normal};
     CommandHandler m_command_handler;
 };

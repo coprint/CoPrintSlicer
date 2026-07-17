@@ -1929,7 +1929,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
 
     status_content_sizer->Add(left_container, 1, wxEXPAND | wxRIGHT, FromDIP(20));
     status_content->SetSizer(status_content_sizer);
-    status_content->Bind(wxEVT_SIZE, [status_content, left_container, last_width = -1](wxSizeEvent &event) mutable {
+    status_content->Bind(wxEVT_SIZE, [this, status_content, left_container, last_width = -1](wxSizeEvent &event) mutable {
         event.Skip();
         if (status_content == nullptr || left_container == nullptr)
             return;
@@ -1937,6 +1937,8 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
         if (width <= 0 || width == last_width)
             return;
         last_width = width;
+        if (m_dashboard_movement_panel != nullptr)
+            m_dashboard_movement_panel->set_compact_mode(width < FromDIP(1180));
         left_container->SetMinSize(wxSize(width, -1));
         status_content->Freeze();
         status_content->Layout();

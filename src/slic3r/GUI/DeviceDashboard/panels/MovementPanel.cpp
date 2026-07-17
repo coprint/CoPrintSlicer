@@ -29,6 +29,10 @@ constexpr int kToolColumnWidth = 92;
 constexpr int kXYColumnWidth = 300;
 constexpr int kZColumnWidth = 90;
 constexpr int kOptionColumnWidth = 93;
+constexpr int kCompactToolColumnWidth = 74;
+constexpr int kCompactXYColumnWidth = 230;
+constexpr int kCompactZColumnWidth = 74;
+constexpr int kCompactOptionColumnWidth = 78;
 
 enum class JoystickAction {
     None,
@@ -48,8 +52,7 @@ public:
         , m_bitmap_name(bitmap_name)
         , m_label(label)
     {
-        SetMinSize(wxSize(FromDIP(90), FromDIP(75)));
-        SetMaxSize(wxSize(FromDIP(90), FromDIP(75)));
+        set_visual_size(FromDIP(90), FromDIP(75), 75);
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetBackgroundColour(DeviceUiStyle::page_background());
         SetCursor(wxCursor(wxCURSOR_HAND));
@@ -60,6 +63,14 @@ public:
     }
 
     void set_click_handler(ClickHandler handler) { m_click_handler = std::move(handler); }
+    void set_visual_size(int width, int height, int bitmap_dip_size)
+    {
+        SetMinSize(wxSize(width, height));
+        SetMaxSize(wxSize(width, height));
+        SetSize(wxSize(width, height));
+        m_bitmap_dip_size = bitmap_dip_size;
+        Refresh();
+    }
 
 private:
     void on_paint(wxPaintEvent&)
@@ -69,7 +80,7 @@ private:
         dc.Clear();
 
         const int press_offset = m_pressed ? FromDIP(1) : 0;
-        const wxBitmap bmp = create_scaled_bitmap(m_bitmap_name.ToStdString(), this, 75);
+        const wxBitmap bmp = create_scaled_bitmap(m_bitmap_name.ToStdString(), this, m_bitmap_dip_size);
         if (bmp.IsOk()) {
             const wxSize hs = GetClientSize();
             const wxSize bs = bmp.GetSize();
@@ -125,6 +136,7 @@ private:
     wxString m_label;
     ClickHandler m_click_handler;
     bool m_pressed{false};
+    int m_bitmap_dip_size{75};
 };
 
 class AxisJoystickPanel : public wxPanel
@@ -154,6 +166,18 @@ public:
     int center_pos() const { return m_center_pos; }
     int center_size() const { return m_center_size; }
     void set_action_handler(ActionHandler handler) { m_action_handler = std::move(handler); }
+    void set_geometry(int square, int center_size, int center_gap, int button_gap)
+    {
+        m_square = square;
+        m_center_size = center_size;
+        m_center_pos = (square - center_size) / 2;
+        m_center_gap = center_gap;
+        m_button_gap = button_gap;
+        SetMinSize(wxSize(square, square));
+        SetMaxSize(wxSize(square, square));
+        SetSize(wxSize(square, square));
+        Refresh();
+    }
 
 private:
     struct Piece {
@@ -380,6 +404,12 @@ MovementPanel::MovementPanel(wxWindow* parent)
     auto* z_header_slot = new wxBoxSizer(wxHORIZONTAL);
     auto* distance_header_slot = new wxBoxSizer(wxHORIZONTAL);
     auto* speed_header_slot = new wxBoxSizer(wxHORIZONTAL);
+    m_headers_sizer = headers;
+    m_tool_header_slot = tool_header_slot;
+    m_xy_header_slot = xy_header_slot;
+    m_z_header_slot = z_header_slot;
+    m_distance_header_slot = distance_header_slot;
+    m_speed_header_slot = speed_header_slot;
     tool_header_slot->AddSpacer(FromDIP(18));
     tool_header_slot->Add(make_header_label(content, wxString::FromUTF8("Tool\nSelection")), 0, wxALIGN_CENTER);
     xy_header_slot->AddSpacer(FromDIP(120));
@@ -405,6 +435,7 @@ MovementPanel::MovementPanel(wxWindow* parent)
     body->Add(headers, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(6));
 
     auto* controls = new wxBoxSizer(wxHORIZONTAL);
+    m_controls_sizer = controls;
     auto* tool_col = new wxBoxSizer(wxVERTICAL);
     for (int i = 0; i < MaxDashboardTools; ++i) {
         m_tool_buttons[i] = make_tool_button(content, wxString::Format("T%d", i + 1));
@@ -423,6 +454,7 @@ MovementPanel::MovementPanel(wxWindow* parent)
     const int xy_square = FromDIP(300);
     const int center_size = FromDIP(85);
     auto* xy_area = new AxisJoystickPanel(content, xy_square, center_size, FromDIP(4), FromDIP(3));
+    m_xy_area = xy_area;
     xy_area->SetCursor(wxCursor(wxCURSOR_HAND));
     xy_area->set_action_handler([this](JoystickAction action) {
         switch (action) {
@@ -435,6 +467,7 @@ MovementPanel::MovementPanel(wxWindow* parent)
     });
 
     auto* center_btn = new Button(xy_area, wxString(), "home", 0, 34);
+    m_center_button = center_btn;
     center_btn->SetSize(wxRect(wxPoint(xy_area->center_pos(), xy_area->center_pos()), wxSize(xy_area->center_size(), xy_area->center_size())));
     center_btn->SetMinSize(wxSize(xy_area->center_size(), xy_area->center_size()));
     center_btn->SetMaxSize(wxSize(xy_area->center_size(), xy_area->center_size()));
@@ -456,9 +489,11 @@ MovementPanel::MovementPanel(wxWindow* parent)
 
     // Z+ butonu — rectangle_10 SVG şekli üzerine +Z etiketi
     auto* z_plus_host = new ZAxisShapeButton(content, wxString::FromUTF8("rectangle_10"), wxString::FromUTF8("+Z"));
+    m_z_plus_host = z_plus_host;
     z_plus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, -1.0); });
 
     auto* z_minus_host = new ZAxisShapeButton(content, wxString::FromUTF8("rectangle_12"), wxString::FromUTF8("-Z"));
+    m_z_minus_host = z_minus_host;
     z_minus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, 1.0); });
 
     z_col->AddSpacer(FromDIP(48));
@@ -554,6 +589,79 @@ void MovementPanel::apply_state(const MovementState& state)
 void MovementPanel::set_command_handler(CommandHandler handler)
 {
     m_command_handler = std::move(handler);
+}
+
+void MovementPanel::set_compact_mode(bool compact)
+{
+    if (m_compact_mode == compact)
+        return;
+    m_compact_mode = compact;
+
+    const int tool_col_w = FromDIP(compact ? kCompactToolColumnWidth : kToolColumnWidth);
+    const int xy_col_w = FromDIP(compact ? kCompactXYColumnWidth : kXYColumnWidth);
+    const int z_col_w = FromDIP(compact ? kCompactZColumnWidth : kZColumnWidth);
+    const int option_col_w = FromDIP(compact ? kCompactOptionColumnWidth : kOptionColumnWidth);
+    const wxSize tool_size(FromDIP(compact ? 74 : 92), FromDIP(compact ? 48 : 58));
+    const wxSize option_size(FromDIP(compact ? 62 : 73), FromDIP(compact ? 40 : 45));
+    const int xy_square = FromDIP(compact ? 230 : 300);
+    const int center_size = FromDIP(compact ? 66 : 85);
+
+    if (m_headers_sizer != nullptr) {
+        if (m_tool_header_slot != nullptr)
+            m_headers_sizer->SetItemMinSize(m_tool_header_slot, tool_col_w, -1);
+        if (m_xy_header_slot != nullptr)
+            m_headers_sizer->SetItemMinSize(m_xy_header_slot, xy_col_w, -1);
+        if (m_z_header_slot != nullptr)
+            m_headers_sizer->SetItemMinSize(m_z_header_slot, z_col_w, -1);
+        if (m_distance_header_slot != nullptr)
+            m_headers_sizer->SetItemMinSize(m_distance_header_slot, option_col_w, -1);
+        if (m_speed_header_slot != nullptr)
+            m_headers_sizer->SetItemMinSize(m_speed_header_slot, option_col_w, -1);
+    }
+
+    for (Button* button : m_tool_buttons) {
+        if (button == nullptr)
+            continue;
+        button->SetMinSize(tool_size);
+        button->SetMaxSize(tool_size);
+        button->SetSize(tool_size);
+    }
+
+    for (Button* button : m_distance_buttons) {
+        if (button == nullptr)
+            continue;
+        button->SetMinSize(option_size);
+        button->SetSize(option_size);
+    }
+    for (Button* button : m_speed_buttons) {
+        if (button == nullptr)
+            continue;
+        button->SetMinSize(option_size);
+        button->SetSize(option_size);
+    }
+
+    if (auto* xy_area = static_cast<AxisJoystickPanel*>(m_xy_area))
+        xy_area->set_geometry(xy_square, center_size, FromDIP(4), FromDIP(3));
+
+    if (m_center_button != nullptr && m_xy_area != nullptr) {
+        auto* xy_area = static_cast<AxisJoystickPanel*>(m_xy_area);
+        m_center_button->SetSize(wxRect(wxPoint(xy_area->center_pos(), xy_area->center_pos()), wxSize(center_size, center_size)));
+        m_center_button->SetMinSize(wxSize(center_size, center_size));
+        m_center_button->SetMaxSize(wxSize(center_size, center_size));
+        m_center_button->SetCornerRadius(FromDIP(compact ? 14 : 18));
+    }
+
+    const int z_w = FromDIP(compact ? 72 : 90);
+    const int z_h = FromDIP(compact ? 62 : 75);
+    const int z_bmp = compact ? 62 : 75;
+    if (m_z_plus_host != nullptr)
+        static_cast<ZAxisShapeButton*>(m_z_plus_host)->set_visual_size(z_w, z_h, z_bmp);
+    if (m_z_minus_host != nullptr)
+        static_cast<ZAxisShapeButton*>(m_z_minus_host)->set_visual_size(z_w, z_h, z_bmp);
+
+    Layout();
+    if (GetParent() != nullptr)
+        GetParent()->Layout();
 }
 
 Button* MovementPanel::make_tool_button(wxWindow* parent, const wxString& label)
