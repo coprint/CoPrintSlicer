@@ -91,7 +91,7 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     details_sizer->Add(lower_row, 0, wxEXPAND);
 
     auto* action_row = new wxBoxSizer(wxHORIZONTAL);
-    m_pause_button = new Button(details, _L("Pause"), "print_control_pause_amber", 0, 14);
+    m_pause_button = new Button(details, wxString::FromUTF8("Pause"), "print_control_pause_amber", 0, 14);
     m_pause_button->SetMinSize(wxSize(FromDIP(80), FromDIP(40)));
     m_pause_button->SetMaxSize(wxSize(FromDIP(80), FromDIP(40)));
     m_pause_button->SetCornerRadius(FromDIP(8));
@@ -110,7 +110,7 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
         std::pair(wxColour(0xB7, 0x78, 0x2E), (int) StateColor::Pressed),
         std::pair(wxColour(0xDE, 0x9D, 0x55), (int) StateColor::Hovered),
         std::pair(wxColour(0xD7, 0xA4, 0x6D), (int) StateColor::Normal)));
-    m_stop_button = new Button(details, _L("Stop"), "print_control_stop_red", 0, 14);
+    m_stop_button = new Button(details, wxString::FromUTF8("Stop"), "print_control_stop_red", 0, 14);
     m_stop_button->SetMinSize(wxSize(FromDIP(80), FromDIP(40)));
     m_stop_button->SetMaxSize(wxSize(FromDIP(80), FromDIP(40)));
     m_stop_button->SetCornerRadius(FromDIP(8));

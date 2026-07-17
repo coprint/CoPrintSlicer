@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <thread>
 #include <wx/dcbuffer.h>
+#include <wx/dcgraph.h>
 #include <wx/popupwin.h>
 
 #include <boost/filesystem.hpp>
@@ -235,6 +236,40 @@ wxColour readable_on_fill(const wxColour &fill, const wxColour &fallback = wxCol
 {
     return is_dark_fill(fill) ? *wxWHITE : fallback;
 }
+
+class RoundedColorBlock : public wxPanel
+{
+public:
+    explicit RoundedColorBlock(wxWindow *parent)
+        : wxPanel(parent, wxID_ANY)
+    {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetBackgroundColour(Ui::card_background());
+        Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
+            wxAutoBufferedPaintDC dc(this);
+            dc.SetBackground(wxBrush(Ui::card_background()));
+            dc.Clear();
+
+            wxGCDC gc(dc);
+            const wxSize size = GetClientSize();
+            if (size.x <= 0 || size.y <= 0)
+                return;
+
+            gc.SetPen(*wxTRANSPARENT_PEN);
+            gc.SetBrush(wxBrush(m_fill));
+            gc.DrawRoundedRectangle(0, 0, size.x, size.y, FromDIP(8));
+        });
+    }
+
+    void set_fill(const wxColour &fill)
+    {
+        m_fill = fill.IsOk() ? fill : Ui::control_background();
+        Refresh();
+    }
+
+private:
+    wxColour m_fill{Ui::control_background()};
+};
 
 struct PrinterToolInfo {
     wxColour  color{Ui::control_background()};
@@ -489,21 +524,20 @@ StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_
 {
     SetBackgroundColour(Ui::page_background());
 
-    const int half_h = parent->FromDIP(40);
+    const int half_h   = parent->FromDIP(40);
+    const int half_gap = parent->FromDIP(4);
 
     auto *root = new wxBoxSizer(wxHORIZONTAL);
     SetSizer(root);
 
     m_row_card = make_card(this, Ui::card_background(), 8);
-    m_row_card->SetMinSize(wxSize(-1, half_h * 2));
+    m_row_card->SetMinSize(wxSize(-1, half_h * 2 + half_gap));
     m_row_card->SetBorderWidth(1);
     m_row_card->SetBorderColorNormal(Ui::card_border());
 
     auto *col = new wxBoxSizer(wxVERTICAL);
 
-    m_model_half = new StaticBox(m_row_card, wxID_ANY);
-    m_model_half->SetCornerRadius(0);
-    m_model_half->SetBorderWidth(0);
+    m_model_half = new RoundedColorBlock(m_row_card);
     m_model_half->SetMinSize(wxSize(-1, half_h));
 
     auto *model_inner = new wxBoxSizer(wxHORIZONTAL);
@@ -517,9 +551,7 @@ StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_
     model_inner->AddStretchSpacer();
     m_model_half->SetSizer(model_inner);
 
-    m_printer_half = new StaticBox(m_row_card, wxID_ANY);
-    m_printer_half->SetCornerRadius(0);
-    m_printer_half->SetBorderWidth(0);
+    m_printer_half = new RoundedColorBlock(m_row_card);
     m_printer_half->SetMinSize(wxSize(-1, half_h));
     m_printer_half->SetCursor(wxCursor(wxCURSOR_HAND));
 
@@ -546,7 +578,7 @@ StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_
     bind_printer_click(m_printer_tag);
     bind_printer_click(m_printer_type);
 
-    col->Add(m_model_half, 1, wxEXPAND);
+    col->Add(m_model_half, 1, wxEXPAND | wxBOTTOM, half_gap);
     col->Add(m_printer_half, 1, wxEXPAND);
     m_row_card->SetSizer(col);
 
@@ -558,13 +590,13 @@ StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_
         wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool), _L("Empty"));
 }
 
-void StartPrintFilamentSlot::style_half(StaticBox *half, wxStaticText *tag, wxStaticText *type_label,
+void StartPrintFilamentSlot::style_half(wxPanel *half, wxStaticText *tag, wxStaticText *type_label,
     const wxColour &bg, const wxString &tag_text, const wxString &type_text)
 {
     if (half == nullptr)
         return;
-    half->SetBackgroundColorNormal(bg);
-    half->SetBackgroundColour(bg);
+    if (auto *block = dynamic_cast<RoundedColorBlock *>(half))
+        block->set_fill(bg);
     const wxColour text = readable_on_fill(bg);
     if (tag != nullptr) {
         if (tag_text.empty())
@@ -572,12 +604,14 @@ void StartPrintFilamentSlot::style_half(StaticBox *half, wxStaticText *tag, wxSt
         else {
             tag->SetLabel(tag_text);
             tag->SetForegroundColour(text);
+            tag->SetBackgroundColour(bg);
             tag->Show();
         }
     }
     if (type_label != nullptr) {
         type_label->SetLabel(type_text);
         type_label->SetForegroundColour(text);
+        type_label->SetBackgroundColour(bg);
     }
     half->Refresh();
 }
@@ -668,9 +702,9 @@ void StartPrintDialog::build_ui()
     main_sizer->Add(preview_outer, 0, wxEXPAND);
 
     auto *preview_body = new wxBoxSizer(wxHORIZONTAL);
-    const int thumb_dip = 128;
+    const int thumb_dip = 144;
     auto *thumb_host = make_card(m_preview_card, Ui::control_background(), 8);
-    thumb_host->SetMinSize(wxSize(FromDIP(thumb_dip + 16), FromDIP(thumb_dip + 16)));
+    thumb_host->SetMinSize(wxSize(FromDIP(thumb_dip), FromDIP(thumb_dip)));
     auto *thumb_stack = new wxBoxSizer(wxVERTICAL);
     m_thumbnail_panel = new ThumbnailPanel(thumb_host, wxID_ANY, wxDefaultPosition,
         wxSize(FromDIP(thumb_dip), FromDIP(thumb_dip)));
@@ -903,9 +937,9 @@ void StartPrintDialog::refresh_from_plate()
         }
 
         wxWindow *thumb_host = m_thumbnail_panel ? m_thumbnail_panel->GetParent() : nullptr;
-        apply_plate_thumbnail(thumb_host, m_thumbnail_panel, m_thumbnail_placeholder, plate, 128);
+        apply_plate_thumbnail(thumb_host, m_thumbnail_panel, m_thumbnail_placeholder, plate, 144);
     } else {
-        apply_plate_thumbnail(nullptr, m_thumbnail_panel, m_thumbnail_placeholder, nullptr, 128);
+        apply_plate_thumbnail(nullptr, m_thumbnail_panel, m_thumbnail_placeholder, nullptr, 144);
     }
 
     char weight_buf[64];

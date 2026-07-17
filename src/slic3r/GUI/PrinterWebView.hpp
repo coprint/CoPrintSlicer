@@ -71,9 +71,9 @@ public:
     wxPanel *create_update_page(wxWindow *parent);
     void set_sidebar_user_avatar(const wxBitmap &avatar_bitmap);
     void begin_moonraker_lan_scan();
-    void set_fallback_preview_thumbnail();
+    void clear_preview_thumbnail();
     void on_thumbnail_webrequest_state(wxWebRequestEvent &evt);
-    void update_preview_thumbnail(const MachineObject *obj);
+    void update_preview_thumbnail(const MachineObject *obj, bool has_active_job);
     void refresh_layer_info_from_selected_machine();
     void refresh_update_page_from_selected_machine();
     void UpdateState();

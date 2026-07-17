@@ -40,7 +40,7 @@ public:
     int get_mapped_tool() const { return m_mapped_tool; }
 
 private:
-    void style_half(StaticBox *half, wxStaticText *tag, wxStaticText *type_label,
+    void style_half(wxPanel *half, wxStaticText *tag, wxStaticText *type_label,
                     const wxColour &bg, const wxString &tag_text, const wxString &type_text);
     void on_printer_half_clicked(wxMouseEvent &event);
 
@@ -49,8 +49,8 @@ private:
     ToolPickHandler m_pick_handler;
 
     StaticBox     *m_row_card{nullptr};
-    StaticBox     *m_model_half{nullptr};
-    StaticBox     *m_printer_half{nullptr};
+    wxPanel       *m_model_half{nullptr};
+    wxPanel       *m_printer_half{nullptr};
     wxStaticText  *m_model_type{nullptr};
     wxStaticText  *m_printer_tag{nullptr};
     wxStaticText  *m_printer_type{nullptr};

@@ -8,19 +8,158 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 
 #include "DeviceCore/DevManager.h"
+#include <wx/dcgraph.h>
 
 namespace Slic3r {
 namespace GUI {
+
+namespace {
+constexpr int CLOUD_HISTORY_ITEM_HEIGHT = 96;
+
+wxString history_status_text(TaskState state)
+{
+    switch (state) {
+    case TS_PENDING:
+    case TS_SENDING:
+    case TS_SEND_COMPLETED:
+    case TS_PRINTING:
+        return _L("Printing");
+    case TS_PRINT_SUCCESS:
+        return _L("Completed");
+    case TS_SEND_CANCELED:
+    case TS_REMOVED:
+        return _L("Canceled");
+    case TS_SEND_FAILED:
+    case TS_PRINT_FAILED:
+        return _L("Stopped");
+    default:
+        return _L("Unknown");
+    }
+}
+
+bool parse_cloud_time(const std::string& value, std::tm& out)
+{
+    if (value.empty())
+        return false;
+    out = {};
+    std::istringstream iss(value);
+    iss >> std::get_time(&out, "%Y-%m-%dT%H:%M:%SZ");
+    return !iss.fail();
+}
+
+wxString history_duration_text(const std::string& start_time, const std::string& end_time)
+{
+    std::tm start_tm {};
+    std::tm end_tm {};
+    if (!parse_cloud_time(start_time, start_tm) || !parse_cloud_time(end_time, end_tm))
+        return _L("Duration: N/A");
+
+    const std::time_t start = std::mktime(&start_tm);
+    const std::time_t end = std::mktime(&end_tm);
+    if (start == static_cast<std::time_t>(-1) || end == static_cast<std::time_t>(-1) || end < start)
+        return _L("Duration: N/A");
+
+    const int total_minutes = static_cast<int>(std::difftime(end, start) / 60.0);
+    const int hours = total_minutes / 60;
+    const int minutes = total_minutes % 60;
+    if (hours > 0)
+        return wxString::Format(_L("Duration: %dh %dm"), hours, minutes);
+    return wxString::Format(_L("Duration: %dm"), minutes);
+}
+
+class TimelapsePreviewCard : public wxPanel
+{
+public:
+    TimelapsePreviewCard(wxWindow* parent, const wxString& name)
+        : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
+        , m_name(name)
+    {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetMinSize(wxSize(FromDIP(260), FromDIP(148)));
+        SetMaxSize(wxSize(FromDIP(360), FromDIP(205)));
+        Bind(wxEVT_PAINT, &TimelapsePreviewCard::on_paint, this);
+        Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& evt) {
+            m_selected = !m_selected;
+            Refresh();
+            evt.Skip();
+        });
+        Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent& evt) {
+            m_hover = true;
+            SetCursor(wxCURSOR_HAND);
+            Refresh();
+            evt.Skip();
+        });
+        Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent& evt) {
+            m_hover = false;
+            SetCursor(wxCURSOR_ARROW);
+            Refresh();
+            evt.Skip();
+        });
+    }
+
+    void set_selected(bool selected)
+    {
+        m_selected = selected;
+        Refresh();
+    }
+
+private:
+    void on_paint(wxPaintEvent&)
+    {
+        wxPaintDC dc(this);
+        const wxSize size = GetSize();
+        const int radius = FromDIP(8);
+
+        dc.SetPen(wxPen(m_hover || m_selected ? wxColour("#35AD27") : wxColour("#3A3F47"), FromDIP(1)));
+        dc.SetBrush(wxBrush(wxColour("#252A31")));
+        dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
+
+        wxRect image_rect(FromDIP(2), FromDIP(2), size.x - FromDIP(4), size.y - FromDIP(4));
+        dc.SetClippingRegion(image_rect);
+        dc.GradientFillLinear(image_rect, wxColour("#303741"), wxColour("#111318"), wxSOUTH);
+
+        dc.SetPen(wxPen(wxColour("#515B68"), FromDIP(2)));
+        for (int i = 0; i < 5; ++i) {
+            const int y = image_rect.y + FromDIP(24 + i * 22);
+            dc.DrawLine(image_rect.x + FromDIP(10), y, image_rect.GetRight() - FromDIP(10), y + FromDIP(10));
+        }
+
+        dc.SetFont(Label::Body_12);
+        dc.SetTextForeground(wxColour("#DDE3EA"));
+        dc.DrawText(m_name, image_rect.x + FromDIP(12), image_rect.y + FromDIP(12));
+        dc.DestroyClippingRegion();
+
+        if (m_selected) {
+            const int overlay_h = FromDIP(40);
+            wxRect overlay(FromDIP(2), size.y - overlay_h - FromDIP(2), size.x - FromDIP(4), overlay_h);
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.SetBrush(wxBrush(wxColour(0, 0, 0, 170)));
+            dc.DrawRoundedRectangle(overlay.x, overlay.y, overlay.width, overlay.height, FromDIP(6));
+
+            dc.SetFont(Label::Head_13);
+            dc.SetTextForeground(*wxWHITE);
+            dc.DrawText(_L("Delete"), overlay.x + overlay.width / 4 - FromDIP(20), overlay.y + FromDIP(12));
+            dc.DrawText(_L("Download"), overlay.x + overlay.width * 3 / 4 - FromDIP(32), overlay.y + FromDIP(12));
+        }
+    }
+
+    bool     m_selected{ false };
+    bool     m_hover{ false };
+    wxString m_name;
+};
+} // namespace
 
 MultiTaskItem::MultiTaskItem(wxWindow* parent, MachineObject* obj, int type)
     : DeviceItem(parent, obj),
     m_task_type(type)
 {
-    SetBackgroundColour(*wxWHITE);
-    SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
-    SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
+    SetBackgroundColour(m_task_type == 1 ? wxColour("#1C1E22") : *wxWHITE);
+    const int item_height = m_task_type == 1 ? CLOUD_HISTORY_ITEM_HEIGHT : DEVICE_ITEM_MAX_HEIGHT;
+    SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(item_height)));
+    SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(item_height)));
 
     Bind(wxEVT_PAINT, &MultiTaskItem::paintEvent, this);
+    Bind(wxEVT_WEBREQUEST_STATE, &MultiTaskItem::on_thumbnail_request, this);
     Bind(wxEVT_ENTER_WINDOW, &MultiTaskItem::OnEnterWindow, this);
     Bind(wxEVT_LEAVE_WINDOW, &MultiTaskItem::OnLeaveWindow, this);
     Bind(wxEVT_LEFT_DOWN, &MultiTaskItem::OnLeftDown, this);
@@ -115,8 +254,52 @@ MultiTaskItem::MultiTaskItem(wxWindow* parent, MachineObject* obj, int type)
     wxGetApp().UpdateDarkUIWin(this);
 }
 
+MultiTaskItem::~MultiTaskItem()
+{
+    if (m_thumbnail_request.IsOk())
+        m_thumbnail_request.Cancel();
+}
+
+void MultiTaskItem::set_history_info(TaskStateInfo& info, const wxString& date_text, const wxString& duration_text, const wxString& status_text)
+{
+    m_history_date = date_text.IsEmpty() ? _L("Date: N/A") : wxString::Format(_L("Date: %s"), date_text);
+    m_history_duration = duration_text;
+    m_history_status = status_text;
+    m_thumbnail_url = wxString::FromUTF8(info.thumbnail_url);
+
+    if (m_thumbnail_request.IsOk())
+        m_thumbnail_request.Cancel();
+    m_thumbnail_image = wxImage();
+
+    if (!m_thumbnail_url.IsEmpty()) {
+        m_thumbnail_request = wxWebSession::GetDefault().CreateRequest(this, m_thumbnail_url);
+        if (m_thumbnail_request.IsOk())
+            m_thumbnail_request.Start();
+    }
+    Refresh();
+}
+
+void MultiTaskItem::on_thumbnail_request(wxWebRequestEvent& evt)
+{
+    if (evt.GetState() == wxWebRequest::State_Completed && evt.GetResponse().GetStream() != nullptr) {
+        wxImage image;
+        if (image.LoadFile(*evt.GetResponse().GetStream(), wxBITMAP_TYPE_ANY))
+            m_thumbnail_image = image;
+        Refresh();
+    }
+}
+
 void MultiTaskItem::update_info()
 {
+    if (m_task_type == 1) {
+        m_button_cancel->Hide();
+        m_button_stop->Hide();
+        m_button_pause->Hide();
+        m_button_resume->Hide();
+        Layout();
+        return;
+    }
+
     //local
     if (m_task_type == 0) {
         m_button_stop->Hide();
@@ -314,6 +497,72 @@ void MultiTaskItem::render(wxDC& dc)
 void MultiTaskItem::doRender(wxDC& dc)
 {
     wxSize size = GetSize();
+    if (m_task_type == 1) {
+        const wxColour bg("#1C1E22");
+        const wxColour card_bg(m_hover ? "#252A31" : "#202329");
+        const wxColour border(m_hover ? "#35AD27" : "#343A43");
+        const wxColour text("#F1F3F4");
+        const wxColour muted("#A7ADB5");
+        const wxColour accent("#35AD27");
+        const int radius = FromDIP(8);
+        const wxRect card_rect(FromDIP(10), FromDIP(6), size.x - FromDIP(20), size.y - FromDIP(12));
+
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(bg));
+        dc.DrawRectangle(0, 0, size.x, size.y);
+        dc.SetPen(wxPen(border));
+        dc.SetBrush(wxBrush(card_bg));
+        dc.DrawRoundedRectangle(card_rect.x, card_rect.y, card_rect.width, card_rect.height, radius);
+
+        const wxRect thumb_rect(card_rect.x + FromDIP(12), card_rect.y + FromDIP(12), FromDIP(72), FromDIP(60));
+        dc.SetPen(wxPen(wxColour("#3A3F47")));
+        dc.SetBrush(wxBrush(wxColour("#111318")));
+        dc.DrawRoundedRectangle(thumb_rect.x, thumb_rect.y, thumb_rect.width, thumb_rect.height, FromDIP(6));
+        if (m_thumbnail_image.IsOk()) {
+            wxImage thumb = m_thumbnail_image.Copy();
+            thumb.Rescale(thumb_rect.width, thumb_rect.height, wxIMAGE_QUALITY_HIGH);
+            dc.DrawBitmap(wxBitmap(thumb), thumb_rect.x, thumb_rect.y, true);
+        } else {
+            dc.SetTextForeground(muted);
+            dc.SetFont(Label::Body_12);
+            dc.DrawText(_L("Thumbnail"), thumb_rect.x + FromDIP(8), thumb_rect.y + FromDIP(22));
+        }
+
+        const int text_left = thumb_rect.GetRight() + FromDIP(16);
+        const int status_width = FromDIP(120);
+        const int text_width = card_rect.GetRight() - text_left - status_width - FromDIP(20);
+
+        dc.SetTextForeground(text);
+        dc.SetFont(Label::Head_14);
+        DrawTextWithEllipsis(dc, m_project_name.IsEmpty() ? _L("Unknown model") : m_project_name, text_width, text_left, card_rect.y + FromDIP(14));
+
+        dc.SetTextForeground(muted);
+        dc.SetFont(Label::Body_12);
+        DrawTextWithEllipsis(dc, m_dev_name.IsEmpty() ? _L("Unknown printer") : m_dev_name, text_width, text_left, card_rect.y + FromDIP(38));
+        DrawTextWithEllipsis(dc, m_history_duration, FromDIP(170), text_left, card_rect.y + FromDIP(60));
+        DrawTextWithEllipsis(dc, m_history_date, FromDIP(230), text_left + FromDIP(180), card_rect.y + FromDIP(60));
+
+        const wxColour status_bg = m_history_status == _L("Completed") ? wxColour("#163A2B") :
+                                   m_history_status == _L("Printing") ? wxColour("#17324A") :
+                                   m_history_status == _L("Canceled") ? wxColour("#3A3330") :
+                                                                        wxColour("#3A2225");
+        const wxColour status_fg = m_history_status == _L("Completed") ? accent :
+                                   m_history_status == _L("Printing") ? wxColour("#7CB7FF") :
+                                   m_history_status == _L("Canceled") ? wxColour("#F0B15B") :
+                                                                        wxColour("#FF7474");
+        const wxRect status_rect(card_rect.GetRight() - status_width - FromDIP(14), card_rect.y + FromDIP(28), status_width, FromDIP(32));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(status_bg));
+        dc.DrawRoundedRectangle(status_rect.x, status_rect.y, status_rect.width, status_rect.height, FromDIP(16));
+        dc.SetTextForeground(status_fg);
+        dc.SetFont(Label::Body_12);
+        const wxSize status_text = dc.GetTextExtent(m_history_status);
+        dc.DrawText(m_history_status,
+                    status_rect.x + (status_rect.width - status_text.x) / 2,
+                    status_rect.y + (status_rect.height - status_text.y) / 2);
+        return;
+    }
+
     dc.SetPen(wxPen(*wxBLACK));
 
     int left = FromDIP(TASK_LEFT_PADDING_LEFT);
@@ -462,8 +711,6 @@ void MultiTaskItem::DrawTextWithEllipsis(wxDC& dc, const wxString& text, int max
     wxFont font = dc.GetFont();
 
     wxSize textSize = dc.GetTextExtent(text);
-
-    dc.SetTextForeground(StateColor::darkModeColorFor(wxColour(50, 58, 61)));
 
     int textWidth = textSize.GetWidth();
 
@@ -898,28 +1145,40 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
 #ifdef __WINDOWS__
     SetDoubleBuffered(true);
 #endif //__WINDOWS__
-    SetBackgroundColour(wxColour(0xEEEEEE));
+    const wxColour cprint_page_bg("#1C1E22");
+    const wxColour cprint_panel_bg("#1C1E22");
+    const wxColour cprint_table_head("#23272D");
+    const wxColour cprint_table_head_pressed("#2B3037");
+    const wxColour cprint_control_bg("#2A2E35");
+    const wxColour cprint_control_pressed("#343A43");
+    const wxColour cprint_text("#F1F3F4");
+    const wxColour cprint_muted("#A7ADB5");
+
+    SetBackgroundColour(cprint_page_bg);
     m_sort.set_role(SortItem::SR_SEND_TIME, true);
 
-    SetBackgroundColour(wxColour(0xEEEEEE));
+    SetBackgroundColour(cprint_page_bg);
     m_main_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
-    m_main_panel->SetBackgroundColour(*wxWHITE);
+    m_main_panel->SetBackgroundColour(cprint_panel_bg);
     m_main_sizer = new wxBoxSizer(wxVERTICAL);
 
     StateColor head_bg(
-        std::pair<wxColour, int>(TABLE_HEAD_PRESSED_COLOUR, StateColor::Pressed),
-        std::pair<wxColour, int>(TABLE_HEAR_NORMAL_COLOUR, StateColor::Normal)
+        std::pair<wxColour, int>(cprint_table_head_pressed, StateColor::Pressed),
+        std::pair<wxColour, int>(cprint_table_head, StateColor::Hovered),
+        std::pair<wxColour, int>(cprint_table_head, StateColor::Normal)
     );
 
     StateColor ctrl_bg(
-        std::pair<wxColour, int>(CTRL_BUTTON_PRESSEN_COLOUR, StateColor::Pressed),
-        std::pair<wxColour, int>(CTRL_BUTTON_NORMAL_COLOUR, StateColor::Normal)
+        std::pair<wxColour, int>(cprint_control_pressed, StateColor::Pressed),
+        std::pair<wxColour, int>(cprint_control_bg, StateColor::Hovered),
+        std::pair<wxColour, int>(cprint_control_bg, StateColor::Normal)
     );
+    StateColor header_text = StateColor::darkModeColorFor("#F1F3F4");
 
     m_table_head_panel = new wxPanel(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
     m_table_head_panel->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_table_head_panel->SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
-    m_table_head_panel->SetBackgroundColour(TABLE_HEAR_NORMAL_COLOUR);
+    m_table_head_panel->SetBackgroundColour(cprint_table_head);
     m_table_head_sizer = new wxBoxSizer(wxHORIZONTAL);
 
     m_select_checkbox = new CheckBox(m_table_head_panel, wxID_ANY);
@@ -949,7 +1208,8 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
 
 
     m_task_name = new Button(m_table_head_panel, _L("Task Name"), "", wxNO_BORDER, ICON_SINGLE_SIZE);
-    m_task_name->SetBackgroundColor(TABLE_HEAR_NORMAL_COLOUR);
+    m_task_name->SetBackgroundColor(head_bg);
+    m_task_name->SetTextColor(header_text);
     m_task_name->SetFont(TABLE_HEAD_FONT);
     m_task_name->SetCornerRadius(0);
     m_task_name->SetMinSize(wxSize(FromDIP(TASK_LEFT_PRO_NAME), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
@@ -959,6 +1219,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
 
     m_printer_name = new Button(m_table_head_panel, _L("Device Name"), "toolbar_double_directional_arrow", wxNO_BORDER, ICON_SINGLE_SIZE);
     m_printer_name->SetBackgroundColor(head_bg);
+    m_printer_name->SetTextColor(header_text);
     m_printer_name->SetFont(TABLE_HEAD_FONT);
     m_printer_name->SetCornerRadius(0);
     m_printer_name->SetMinSize(wxSize(FromDIP(TASK_LEFT_DEV_NAME), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
@@ -979,6 +1240,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
 
     m_status = new Button(m_table_head_panel, _L("Task Status"), "toolbar_double_directional_arrow", wxNO_BORDER, ICON_SINGLE_SIZE);
     m_status->SetBackgroundColor(head_bg);
+    m_status->SetTextColor(header_text);
     m_status->SetFont(TABLE_HEAD_FONT);
     m_status->SetCornerRadius(0);
     m_status->SetMinSize(wxSize(FromDIP(TASK_LEFT_PRO_STATE), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
@@ -998,7 +1260,8 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
     m_table_head_sizer->Add(m_status, 0, wxALIGN_CENTER_VERTICAL, 0);
 
     m_info = new Button(m_table_head_panel, _L("Info"), "", wxNO_BORDER, ICON_SINGLE_SIZE);
-    m_info->SetBackgroundColor(TABLE_HEAR_NORMAL_COLOUR);
+    m_info->SetBackgroundColor(head_bg);
+    m_info->SetTextColor(header_text);
     m_info->SetFont(TABLE_HEAD_FONT);
     m_info->SetCornerRadius(0);
     m_info->SetMinSize(wxSize(FromDIP(TASK_LEFT_PRO_INFO), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
@@ -1008,6 +1271,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
 
     m_send_time = new Button(m_table_head_panel, _L("Sent Time"), "toolbar_double_directional_arrow", wxNO_BORDER, ICON_SINGLE_SIZE, false);
     m_send_time->SetBackgroundColor(head_bg);
+    m_send_time->SetTextColor(header_text);
     m_send_time->SetFont(TABLE_HEAD_FONT);
     m_send_time->SetCornerRadius(0);
     m_send_time->SetMinSize(wxSize(FromDIP(TASK_LEFT_SEND_TIME), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
@@ -1027,7 +1291,8 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
     m_table_head_sizer->Add(m_send_time, 0, wxALIGN_CENTER_VERTICAL, 0);
 
     m_action = new Button(m_table_head_panel, _L("Actions"), "", wxNO_BORDER, ICON_SINGLE_SIZE, false);
-    m_action->SetBackgroundColor(TABLE_HEAR_NORMAL_COLOUR);
+    m_action->SetBackgroundColor(head_bg);
+    m_action->SetTextColor(header_text);
     m_action->SetFont(TABLE_HEAD_FONT);
     m_action->SetCornerRadius(0);
     m_action->SetMinSize(wxSize(FromDIP(TASK_LEFT_PRO_INFO), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
@@ -1041,7 +1306,8 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
     m_tip_text->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_tip_text->SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_tip_text->SetLabel(_L("No historical tasks!"));
-    m_tip_text->SetForegroundColour(wxColour(50, 58, 61));
+    m_table_head_panel->Hide();
+    m_tip_text->SetForegroundColour(cprint_text);
     m_tip_text->SetFont(::Label::Head_24);
     m_tip_text->Wrap(-1);
 
@@ -1049,34 +1315,172 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
     m_loading_text->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_loading_text->SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_loading_text->SetLabel(_L("Loading..."));
-    m_loading_text->SetForegroundColour(wxColour(50, 58, 61));
+    m_loading_text->SetForegroundColour(cprint_text);
     m_loading_text->SetFont(::Label::Head_24);
     m_loading_text->Wrap(-1);
     m_loading_text->Show(false);
 
     m_task_list = new wxScrolledWindow(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
-    m_task_list->SetBackgroundColour(*wxWHITE);
+    m_task_list->SetBackgroundColour(cprint_panel_bg);
     m_task_list->SetScrollRate(0, 5);
-    m_task_list->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
-    m_task_list->SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), 10 * FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
+    m_task_list->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(CLOUD_HISTORY_ITEM_HEIGHT)));
+    m_task_list->SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), 10 * FromDIP(CLOUD_HISTORY_ITEM_HEIGHT)));
 
     m_sizer_task_list = new wxBoxSizer(wxVERTICAL);
     m_task_list->SetSizer(m_sizer_task_list);
     m_task_list->Layout();
     m_task_list->Fit();
 
-    m_main_sizer->AddSpacer(FromDIP(50));
+    m_timelapse_panel = new wxPanel(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
+    m_timelapse_panel->SetBackgroundColour(cprint_panel_bg);
+    m_timelapse_panel->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(520)));
+    wxBoxSizer* timelapse_sizer = new wxBoxSizer(wxVERTICAL);
+
+    wxPanel* timelapse_header = new wxPanel(m_timelapse_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
+    timelapse_header->SetBackgroundColour(cprint_panel_bg);
+    wxBoxSizer* timelapse_header_sizer = new wxBoxSizer(wxHORIZONTAL);
+
+    m_timelapse_date_range = new wxStaticText(timelapse_header, wxID_ANY, _L("2026-07-13 - 2026-04-29"));
+    m_timelapse_date_range->SetForegroundColour(cprint_text);
+    m_timelapse_date_range->SetFont(Label::Head_14);
+    timelapse_header_sizer->Add(m_timelapse_date_range, 0, wxALIGN_BOTTOM, 0);
+    timelapse_header_sizer->AddStretchSpacer(1);
+    timelapse_header->SetSizer(timelapse_header_sizer);
+
+    m_timelapse_grid = new wxScrolledWindow(m_timelapse_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
+    m_timelapse_grid->SetBackgroundColour(cprint_panel_bg);
+    m_timelapse_grid->SetScrollRate(0, FromDIP(12));
+    wxFlexGridSizer* timelapse_grid_sizer = new wxFlexGridSizer(4, FromDIP(10), FromDIP(10));
+    timelapse_grid_sizer->AddGrowableCol(0, 1);
+    timelapse_grid_sizer->AddGrowableCol(1, 1);
+    timelapse_grid_sizer->AddGrowableCol(2, 1);
+    timelapse_grid_sizer->AddGrowableCol(3, 1);
+    m_timelapse_grid->SetSizer(timelapse_grid_sizer);
+    m_timelapse_grid->Layout();
+    update_timelapse_filter_tabs();
+
+    timelapse_sizer->Add(timelapse_header, 0, wxEXPAND | wxBOTTOM, FromDIP(10));
+    timelapse_sizer->Add(m_timelapse_grid, 1, wxEXPAND, 0);
+    m_timelapse_panel->SetSizer(timelapse_sizer);
+    m_timelapse_panel->Layout();
+    m_timelapse_panel->Hide();
+
+    m_media_mode_panel = new wxPanel(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
+    m_media_mode_panel->SetBackgroundColour(cprint_panel_bg);
+    wxBoxSizer* media_mode_sizer = new wxBoxSizer(wxHORIZONTAL);
+
+    m_timelapse_tab = new Button(m_media_mode_panel, _L("Timelapse"));
+    m_timelapse_tab->SetMinSize(wxSize(FromDIP(120), FromDIP(36)));
+    m_timelapse_tab->SetMaxSize(wxSize(FromDIP(120), FromDIP(36)));
+    m_timelapse_tab->SetCornerRadius(FromDIP(8));
+    m_timelapse_tab->SetFont(::Label::Body_14);
+    m_timelapse_tab->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
+        set_media_mode(true);
+        evt.Skip();
+    });
+
+    m_model_tab = new Button(m_media_mode_panel, _L("Model"));
+    m_model_tab->SetMinSize(wxSize(FromDIP(120), FromDIP(36)));
+    m_model_tab->SetMaxSize(wxSize(FromDIP(120), FromDIP(36)));
+    m_model_tab->SetCornerRadius(FromDIP(8));
+    m_model_tab->SetFont(::Label::Body_14);
+    m_model_tab->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
+        set_media_mode(false);
+        evt.Skip();
+    });
+
+    m_refresh_tab = new Button(m_media_mode_panel, wxEmptyString, "refresh", wxNO_BORDER, FromDIP(18));
+    m_refresh_tab->SetMinSize(wxSize(FromDIP(32), FromDIP(30)));
+    m_refresh_tab->SetMaxSize(wxSize(FromDIP(32), FromDIP(30)));
+    m_refresh_tab->SetCornerRadius(FromDIP(8));
+    m_refresh_tab->SetToolTip(_L("Refresh"));
+    m_refresh_tab->SetBackgroundColor(ctrl_bg);
+    m_refresh_tab->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
+        if (m_media_timelapse_mode) {
+            if (m_timelapse_panel)
+                m_timelapse_panel->Refresh();
+            evt.Skip();
+            return;
+        }
+        m_current_page = 0;
+        refresh_user_device();
+        update_page_number();
+        evt.Skip();
+    });
+
+    media_mode_sizer->Add(m_timelapse_tab, 0, wxRIGHT, FromDIP(4));
+    media_mode_sizer->Add(m_model_tab, 0, wxRIGHT, FromDIP(12));
+    media_mode_sizer->Add(m_refresh_tab, 0, wxALIGN_TOP | wxTOP, FromDIP(3));
+    media_mode_sizer->AddStretchSpacer(1);
+
+    m_timelapse_top_actions = new wxPanel(m_media_mode_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
+    m_timelapse_top_actions->SetBackgroundColour(cprint_panel_bg);
+    wxBoxSizer* timelapse_actions_sizer = new wxBoxSizer(wxVERTICAL);
+    wxBoxSizer* timelapse_action_row = new wxBoxSizer(wxHORIZONTAL);
+    wxBoxSizer* timelapse_filter_row = new wxBoxSizer(wxHORIZONTAL);
+
+    m_timelapse_select_all = new Button(m_timelapse_top_actions, _L("Select all"));
+    m_timelapse_select_all->SetMinSize(wxSize(FromDIP(96), FromDIP(30)));
+    m_timelapse_select_all->SetMaxSize(wxSize(FromDIP(96), FromDIP(30)));
+    m_timelapse_select_all->SetCornerRadius(FromDIP(15));
+    m_timelapse_select_all->SetBackgroundColor(wxColour("#00B050"));
+    m_timelapse_select_all->SetTextColor(StateColor::darkModeColorFor("#FFFFFF"));
+    m_timelapse_select_all->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
+        select_all_timelapse_cards();
+        evt.Skip();
+    });
+
+    m_timelapse_select = new Button(m_timelapse_top_actions, _L("Select"));
+    m_timelapse_select->SetMinSize(wxSize(FromDIP(72), FromDIP(30)));
+    m_timelapse_select->SetMaxSize(wxSize(FromDIP(72), FromDIP(30)));
+    m_timelapse_select->SetCornerRadius(FromDIP(15));
+    m_timelapse_select->SetBackgroundColor(wxColour("#00B050"));
+    m_timelapse_select->SetTextColor(StateColor::darkModeColorFor("#FFFFFF"));
+
+    m_timelapse_all_files = new Button(m_timelapse_top_actions, _L("All files"));
+    m_timelapse_year = new Button(m_timelapse_top_actions, _L("Year"));
+    m_timelapse_month = new Button(m_timelapse_top_actions, _L("Month"));
+    for (Button* filter_btn : { m_timelapse_all_files, m_timelapse_year, m_timelapse_month }) {
+        filter_btn->SetMinSize(wxSize(FromDIP(94), FromDIP(28)));
+        filter_btn->SetMaxSize(wxSize(FromDIP(94), FromDIP(28)));
+        filter_btn->SetCornerRadius(FromDIP(8));
+        filter_btn->SetFont(Label::Body_13);
+    }
+    m_timelapse_all_files->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) { set_timelapse_filter(0); evt.Skip(); });
+    m_timelapse_year->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) { set_timelapse_filter(1); evt.Skip(); });
+    m_timelapse_month->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) { set_timelapse_filter(2); evt.Skip(); });
+
+    timelapse_action_row->AddStretchSpacer(1);
+    timelapse_action_row->Add(m_timelapse_select_all, 0, wxRIGHT, FromDIP(12));
+    timelapse_action_row->Add(m_timelapse_select, 0, 0, 0);
+    timelapse_filter_row->Add(m_timelapse_all_files, 0, wxRIGHT, FromDIP(18));
+    timelapse_filter_row->Add(m_timelapse_year, 0, wxRIGHT, FromDIP(18));
+    timelapse_filter_row->Add(m_timelapse_month, 0, 0, 0);
+    timelapse_actions_sizer->Add(timelapse_action_row, 0, wxEXPAND | wxBOTTOM, FromDIP(10));
+    timelapse_actions_sizer->Add(timelapse_filter_row, 0, wxALIGN_RIGHT, 0);
+    m_timelapse_top_actions->SetSizer(timelapse_actions_sizer);
+    m_timelapse_top_actions->Layout();
+    m_timelapse_top_actions->Hide();
+    media_mode_sizer->Add(m_timelapse_top_actions, 0, wxALIGN_CENTER_VERTICAL, 0);
+
+    m_media_mode_panel->SetSizer(media_mode_sizer);
+    m_media_mode_panel->Layout();
+
+    m_main_sizer->AddSpacer(FromDIP(24));
+    m_main_sizer->Add(m_media_mode_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(24));
+    m_main_sizer->AddSpacer(FromDIP(18));
     m_main_sizer->Add(m_table_head_panel, 0, wxALIGN_CENTER_HORIZONTAL, 0);
     m_main_sizer->Add(m_tip_text, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(50));
     m_main_sizer->Add(m_loading_text, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(50));
     m_main_sizer->Add(m_task_list, 0, wxALIGN_CENTER_HORIZONTAL, 0);
+    m_main_sizer->Add(m_timelapse_panel, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(24));
     m_main_sizer->AddSpacer(FromDIP(5));
 
     // add flipping page
     m_flipping_panel = new wxPanel(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
     m_flipping_panel->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_flipping_panel->SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
-    m_flipping_panel->SetBackgroundColour(*wxWHITE);
+    m_flipping_panel->SetBackgroundColour(cprint_panel_bg);
 
     m_flipping_page_sizer = new wxBoxSizer(wxHORIZONTAL);
     m_page_sizer = new wxBoxSizer(wxVERTICAL);
@@ -1100,6 +1504,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
         Layout();*/
     });
     st_page_number = new wxStaticText(m_flipping_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize);
+    st_page_number->SetForegroundColour(cprint_muted);
     btn_next_page = new Button(m_flipping_panel, "", "go_next_plate", wxBORDER_NONE, FromDIP(20));
     btn_next_page->SetMinSize(wxSize(FromDIP(20), FromDIP(20)));
     btn_next_page->SetMaxSize(wxSize(FromDIP(20), FromDIP(20)));
@@ -1152,7 +1557,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
     m_main_sizer->Add(m_flipping_panel, 0, wxALIGN_CENTER_HORIZONTAL, 0);
 
     m_ctrl_btn_panel = new wxPanel(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
-    m_ctrl_btn_panel->SetBackgroundColour(*wxWHITE);
+    m_ctrl_btn_panel->SetBackgroundColour(cprint_panel_bg);
     m_ctrl_btn_panel->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_ctrl_btn_panel->SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
     m_btn_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -1166,6 +1571,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
     btn_stop_all->SetBackgroundColor(ctrl_bg);
     btn_stop_all->SetCornerRadius(FromDIP(5));
     m_sel_text = new wxStaticText(m_ctrl_btn_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize);
+    m_sel_text->SetForegroundColour(cprint_muted);
 
     btn_pause_all->Bind(wxEVT_BUTTON, &CloudTaskManagerPage::pause_all, this);
     btn_continue_all->Bind(wxEVT_BUTTON, &CloudTaskManagerPage::resume_all, this);
@@ -1190,6 +1596,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent)
     wxGetApp().UpdateDarkUIWin(this);
 
     SetSizer(page_sizer);
+    update_media_mode_tabs();
     Layout();
     Fit();
 }
@@ -1199,6 +1606,138 @@ CloudTaskManagerPage::~CloudTaskManagerPage()
     if (m_flipping_timer)
         m_flipping_timer->Stop();
     delete m_flipping_timer;
+}
+
+void CloudTaskManagerPage::set_media_mode(bool timelapse)
+{
+    if (m_media_timelapse_mode == timelapse)
+        return;
+
+    m_media_timelapse_mode = timelapse;
+    update_media_mode_tabs();
+}
+
+void CloudTaskManagerPage::update_media_mode_tabs()
+{
+    if (!m_timelapse_tab || !m_model_tab)
+        return;
+
+    const wxColour selected_bg("#F1F3F4");
+    const wxColour selected_hover("#FFFFFF");
+    const wxColour inactive_bg("#23272D");
+    const wxColour inactive_hover("#2B3037");
+    const wxColour selected_text("#111418");
+    const wxColour inactive_text("#F1F3F4");
+
+    StateColor active_bg(
+        std::pair<wxColour, int>(selected_hover, StateColor::Pressed),
+        std::pair<wxColour, int>(selected_hover, StateColor::Hovered),
+        std::pair<wxColour, int>(selected_bg, StateColor::Normal)
+    );
+    StateColor normal_bg(
+        std::pair<wxColour, int>(inactive_hover, StateColor::Pressed),
+        std::pair<wxColour, int>(inactive_hover, StateColor::Hovered),
+        std::pair<wxColour, int>(inactive_bg, StateColor::Normal)
+    );
+
+    m_timelapse_tab->SetBackgroundColor(m_media_timelapse_mode ? active_bg : normal_bg);
+    m_timelapse_tab->SetTextColor(StateColor::darkModeColorFor(m_media_timelapse_mode ? selected_text : inactive_text));
+    m_model_tab->SetBackgroundColor(m_media_timelapse_mode ? normal_bg : active_bg);
+    m_model_tab->SetTextColor(StateColor::darkModeColorFor(m_media_timelapse_mode ? inactive_text : selected_text));
+
+    if (!m_table_head_panel || !m_tip_text || !m_loading_text || !m_task_list || !m_flipping_panel || !m_ctrl_btn_panel) {
+        m_timelapse_tab->Refresh();
+        m_model_tab->Refresh();
+        return;
+    }
+
+    if (m_timelapse_panel)
+        m_timelapse_panel->Show(m_media_timelapse_mode);
+    if (m_timelapse_top_actions)
+        m_timelapse_top_actions->Show(m_media_timelapse_mode);
+    if (m_table_head_panel)
+        m_table_head_panel->Show(!m_media_timelapse_mode && !m_task_items.empty());
+    if (m_tip_text)
+        m_tip_text->Show(!m_media_timelapse_mode && m_task_items.empty());
+    if (m_loading_text)
+        m_loading_text->Show(!m_media_timelapse_mode && m_loading_text->IsShown());
+    if (m_task_list)
+        m_task_list->Show(!m_media_timelapse_mode);
+    if (m_flipping_panel)
+        m_flipping_panel->Show(!m_media_timelapse_mode && m_total_page > 1);
+    if (m_ctrl_btn_panel)
+        m_ctrl_btn_panel->Show(false);
+
+    m_timelapse_tab->Refresh();
+    m_model_tab->Refresh();
+    Layout();
+    Refresh();
+}
+
+void CloudTaskManagerPage::set_timelapse_filter(int filter)
+{
+    if (m_timelapse_filter == filter)
+        return;
+
+    m_timelapse_filter = filter;
+    update_timelapse_filter_tabs();
+}
+
+void CloudTaskManagerPage::update_timelapse_filter_tabs()
+{
+    if (!m_timelapse_all_files || !m_timelapse_year || !m_timelapse_month)
+        return;
+
+    const wxColour active_bg("#2B3037");
+    const wxColour active_hover("#343A43");
+    const wxColour inactive_bg("#1C1E22");
+    const wxColour inactive_hover("#23272D");
+    StateColor active(
+        std::pair<wxColour, int>(active_hover, StateColor::Pressed),
+        std::pair<wxColour, int>(active_hover, StateColor::Hovered),
+        std::pair<wxColour, int>(active_bg, StateColor::Normal)
+    );
+    StateColor inactive(
+        std::pair<wxColour, int>(inactive_hover, StateColor::Pressed),
+        std::pair<wxColour, int>(inactive_hover, StateColor::Hovered),
+        std::pair<wxColour, int>(inactive_bg, StateColor::Normal)
+    );
+    StateColor active_text = StateColor::darkModeColorFor("#F1F3F4");
+    StateColor inactive_text = StateColor::darkModeColorFor("#A7ADB5");
+
+    auto apply = [&](Button* btn, bool selected) {
+        btn->SetBackgroundColor(selected ? active : inactive);
+        btn->SetTextColor(selected ? active_text : inactive_text);
+        btn->Refresh();
+    };
+
+    apply(m_timelapse_all_files, m_timelapse_filter == 0);
+    apply(m_timelapse_year, m_timelapse_filter == 1);
+    apply(m_timelapse_month, m_timelapse_filter == 2);
+
+    if (m_timelapse_date_range) {
+        if (m_timelapse_filter == 1)
+            m_timelapse_date_range->SetLabel(_L("2026"));
+        else if (m_timelapse_filter == 2)
+            m_timelapse_date_range->SetLabel(_L("July 2026"));
+        else
+            m_timelapse_date_range->SetLabel(_L("2026-07-13 - 2026-04-29"));
+    }
+
+    Layout();
+    Refresh();
+}
+
+void CloudTaskManagerPage::select_all_timelapse_cards()
+{
+    if (!m_timelapse_grid)
+        return;
+
+    for (wxWindowList::compatibility_iterator node = m_timelapse_grid->GetChildren().GetFirst(); node; node = node->GetNext()) {
+        wxWindow* child = node->GetData();
+        if (auto* card = dynamic_cast<TimelapsePreviewCard*>(child))
+            card->set_selected(true);
+    }
 }
 
 
@@ -1255,6 +1794,11 @@ void CloudTaskManagerPage::refresh_user_device(bool clear)
             mtitem->m_dev_id = task_state_info.params().dev_id;
 
             mtitem->m_send_time = utc_time_to_date(task_state_info.start_time);
+            const std::string date_source = !task_state_info.start_time.empty() ? task_state_info.start_time : task_state_info.end_time;
+            mtitem->set_history_info(task_state_info,
+                                     date_source.empty() ? wxString() : wxString::FromUTF8(utc_time_to_date(date_source).c_str()),
+                                     history_duration_text(task_state_info.start_time, task_state_info.end_time),
+                                     history_status_text(task_state_info.state()));
 
             if (task_state_info.state() == TS_PRINTING) {
                 mtitem->state_cloud_task = 0;
@@ -1307,15 +1851,18 @@ void CloudTaskManagerPage::refresh_user_device(bool clear)
         }
         m_sizer_task_list->Layout();
         int num = m_task_items.size() > 10 ? 10 : m_task_items.size();
-        m_task_list->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), num * FromDIP(DEVICE_ITEM_MAX_HEIGHT)));
+        m_task_list->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), num * FromDIP(CLOUD_HISTORY_ITEM_HEIGHT)));
         m_task_list->Layout();
     }
 
     update_page_number();
 
-    m_tip_text->Show(m_task_items.empty());
-    m_flipping_panel->Show(m_total_page > 1);
-    m_ctrl_btn_panel->Show(!m_task_items.empty());
+    m_table_head_panel->Show(!m_media_timelapse_mode && !m_task_items.empty());
+    m_tip_text->Show(!m_media_timelapse_mode && m_task_items.empty());
+    m_task_list->Show(!m_media_timelapse_mode);
+    m_timelapse_panel->Show(m_media_timelapse_mode);
+    m_flipping_panel->Show(!m_media_timelapse_mode && m_total_page > 1);
+    m_ctrl_btn_panel->Show(false);
     Layout();
 }
 

@@ -13,6 +13,7 @@
 #include "Widgets/ScrolledWindow.hpp"
 #include "Widgets/PopupWindow.hpp"
 #include "Widgets/TextInput.hpp"
+#include <wx/webrequest.h>
 
 namespace Slic3r { 
 namespace GUI {
@@ -31,7 +32,7 @@ class MultiTaskItem : public DeviceItem
 {
 public:
     MultiTaskItem(wxWindow* parent, MachineObject* obj, int type);
-    ~MultiTaskItem() {};
+    ~MultiTaskItem();
 
 
     void OnEnterWindow(wxMouseEvent& evt);
@@ -44,6 +45,8 @@ public:
     void         render(wxDC& dc);
     void         doRender(wxDC& dc);
     void         DrawTextWithEllipsis(wxDC& dc, const wxString& text, int maxWidth, int left, int top = 0);
+    void         set_history_info(TaskStateInfo& info, const wxString& date_text, const wxString& duration_text, const wxString& status_text);
+    void         on_thumbnail_request(wxWebRequestEvent& evt);
     void         post_event(wxCommandEvent&& event);
     virtual void DoSetSize(int x, int y, int width, int height, int sizeFlags = wxSIZE_AUTO);
 
@@ -58,6 +61,12 @@ public:
     int          m_task_type{0}; //0-local 1-cloud
     wxString     m_project_name;
     wxString     m_dev_name;
+    wxString     m_history_status;
+    wxString     m_history_date;
+    wxString     m_history_duration;
+    wxString     m_thumbnail_url;
+    wxImage      m_thumbnail_image;
+    wxWebRequest m_thumbnail_request;
     std::string  m_dev_id;
     TaskStateInfo* task_obj { nullptr };
     std::string  m_job_id;
@@ -147,10 +156,18 @@ public:
     void msw_rescale();
 
 private:
+    void set_media_mode(bool timelapse);
+    void update_media_mode_tabs();
+    void set_timelapse_filter(int filter);
+    void update_timelapse_filter_tabs();
+    void select_all_timelapse_cards();
+
     SortItem                    m_sort;
     bool                        device_name_big{ true };
     bool                        device_state_big{ true };
     bool                        device_send_time{ true };
+    bool                        m_media_timelapse_mode{ false };
+    int                         m_timelapse_filter{ 0 };
 
     /* job_id -> sel */
     std::map <std::string, MultiTaskItem*> m_task_items;
@@ -161,6 +178,19 @@ private:
     wxBoxSizer* m_main_sizer{ nullptr };
     wxScrolledWindow* m_task_list{ nullptr };
     wxStaticText* m_selected_num{ nullptr };
+    wxPanel* m_media_mode_panel{ nullptr };
+    Button* m_timelapse_tab{ nullptr };
+    Button* m_model_tab{ nullptr };
+    Button* m_refresh_tab{ nullptr };
+    wxPanel* m_timelapse_panel{ nullptr };
+    wxPanel* m_timelapse_top_actions{ nullptr };
+    wxScrolledWindow* m_timelapse_grid{ nullptr };
+    wxStaticText* m_timelapse_date_range{ nullptr };
+    Button* m_timelapse_select_all{ nullptr };
+    Button* m_timelapse_select{ nullptr };
+    Button* m_timelapse_all_files{ nullptr };
+    Button* m_timelapse_year{ nullptr };
+    Button* m_timelapse_month{ nullptr };
 
     // Flipping pages
     int                         m_current_page{ 0 };

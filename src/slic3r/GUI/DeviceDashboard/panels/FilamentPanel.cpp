@@ -15,6 +15,7 @@
 #include <utility>
 
 #include <wx/dcbuffer.h>
+#include <wx/font.h>
 #include <wx/graphics.h>
 #include <wx/image.h>
 #include <wx/popupwin.h>
@@ -291,8 +292,8 @@ private:
         gc->SetPen(wxPen(selected ? wxColour(170, 172, 176) : wxColour(58, 61, 66), FromDIP(1)));
         gc->DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, FromDIP(10));
 
-        draw_text(gc, tool_short_label(tool), wxRect(rect.x, rect.y + FromDIP(12), rect.width, FromDIP(36)), fg, FromDIP(28), true);
-        draw_text(gc, tool_material_label(tool), wxRect(rect.x, rect.y + FromDIP(50), rect.width, FromDIP(22)), sub, FromDIP(13), false);
+        draw_text(gc, tool_short_label(tool), wxRect(rect.x, rect.y + FromDIP(14), rect.width, FromDIP(32)), fg, 17, wxFONTWEIGHT_BOLD);
+        draw_text(gc, tool_material_label(tool), wxRect(rect.x, rect.y + FromDIP(48), rect.width, FromDIP(22)), sub, 10, wxFONTWEIGHT_SEMIBOLD);
     }
 
     void reload_icons()
@@ -312,11 +313,12 @@ private:
         draw_filament_track(gc, track, 0, wxColour(), false, FilamentTrackCenter::PlusSign, empty, this);
     }
 
-    void draw_text(wxGraphicsContext* gc, const wxString& text, const wxRect& rect, const wxColour& colour, int point_size, bool bold)
+    void draw_text(wxGraphicsContext* gc, const wxString& text, const wxRect& rect, const wxColour& colour, int point_size, wxFontWeight weight)
     {
-        wxFont font = GetFont();
-        font.SetPointSize(std::max(1, point_size));
-        font.SetWeight(bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL);
+        wxFont font(wxFontInfo(std::max(1, point_size))
+            .Family(wxFONTFAMILY_SWISS)
+            .FaceName(wxString::FromUTF8("Bahnschrift"))
+            .Weight(weight));
         gc->SetFont(font, colour);
         double tw = 0.0;
         double th = 0.0;
