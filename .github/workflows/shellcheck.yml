@@ -12,7 +12,8 @@ on:
   workflow_dispatch: # allows for manual dispatch
 
 name: "Shellcheck"
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   shellcheck:
