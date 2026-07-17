@@ -1695,9 +1695,6 @@ bool install_vendor_bundles_from_resources(
             auto dir_in_vendors = vendor_path / bundle;
 
             if (fs::exists(dir_in_rsrc) && fs::is_directory(dir_in_rsrc)) {
-                // Remove existing directory
-                if (fs::exists(dir_in_vendors))
-                    fs::remove_all(dir_in_vendors);
                 fs::create_directories(dir_in_vendors);
 
                 // Copy with file filter (same as PresetUpdater::install_bundles_rsrc)
@@ -1711,7 +1708,7 @@ bool install_vendor_bundles_from_resources(
                            boost::iends_with(name, ".3mf");
                 };
 
-                copy_directory_recursively(dir_in_rsrc, dir_in_vendors, file_filter);
+                copy_directory_recursively(dir_in_rsrc, dir_in_vendors, file_filter, true);
             }
 
             BOOST_LOG_TRIVIAL(info) << "Successfully installed bundle: " << bundle;

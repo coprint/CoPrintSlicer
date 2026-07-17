@@ -121,7 +121,7 @@ struct Update
 	void install() const
 	{
 	    if (is_directory) {
-            copy_directory_recursively(source, target, file_filter);
+            copy_directory_recursively(source, target, file_filter, true);
         }
         else {
             copy_file_fix(source, target);
@@ -1042,10 +1042,6 @@ bool PresetUpdater::priv::install_bundles_rsrc(const std::vector<std::string>& b
         //BBS: add directory support
         auto print_in_rsrc = this->rsrc_path / bundle;
 		auto print_in_vendors = this->vendor_path / bundle;
-        fs::path print_folder(print_in_vendors);
-        if (fs::exists(print_folder))
-            fs::remove_all(print_folder);
-        fs::create_directories(print_folder);
 		updates.updates.emplace_back(std::move(print_in_rsrc), std::move(print_in_vendors), Version(), bundle, "", "",[](const std::string name){
         // return false if name is end with .stl, case insensitive
         return boost::iends_with(name, ".stl") || boost::iends_with(name, ".png") || boost::iends_with(name, ".svg") ||

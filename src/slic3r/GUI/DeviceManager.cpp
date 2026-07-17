@@ -594,6 +594,8 @@ MachineObject::~MachineObject()
         delete *m_command_error_code_dlgs.begin();/*element will auto remove from m_command_error_code_dlgs on deleted*/
     }
 
+    m_token.reset();
+
     {
         delete m_lamp;
         m_lamp = nullptr;
@@ -2675,7 +2677,9 @@ int MachineObject::parse_json(std::string tunnel, std::string payload, bool key_
                                 if (print_json.is_need_request()) {
                                     BOOST_LOG_TRIVIAL(trace) << "parse_json: need request pushall, count = " << parse_msg_count;
                                     // request new push
-                                    GUI::wxGetApp().CallAfter([this]{
+                                    GUI::wxGetApp().CallAfter([this, token = std::weak_ptr<int>(m_token)]{
+                                        if (token.expired())
+                                            return;
                                         this->command_request_push_all();
                                     });
                                     return -1;
@@ -2847,12 +2851,15 @@ int MachineObject::parse_json(std::string tunnel, std::string payload, bool key_
                     if ((!check_version_valid() && get_version_retry-- >= 0)
                         && get_version_result) {
                             BOOST_LOG_TRIVIAL(info) << "get_version_retry = " << get_version_retry;
-                            boost::thread retry = boost::thread([this] {
+                            boost::thread retry = boost::thread([this, token = std::weak_ptr<int>(m_token)] {
                                 boost::this_thread::sleep_for(boost::chrono::milliseconds(RETRY_INTERNAL));
-                                GUI::wxGetApp().CallAfter([this] {
+                                GUI::wxGetApp().CallAfter([this, token] {
+                                    if (token.expired())
+                                        return;
                                     this->command_get_version(false);
                             });
                         });
+                            retry.detach();
                     }
                 }
                 std::string version = parse_version();
@@ -3218,7 +3225,9 @@ int MachineObject::parse_json(std::string tunnel, std::string payload, bool key_
                                 }
                                 if (last_online_version != online_version) {
                                     last_online_version = online_version;
-                                    GUI::wxGetApp().CallAfter([this] {
+                                    GUI::wxGetApp().CallAfter([this, token = std::weak_ptr<int>(m_token)] {
+                                        if (token.expired())
+                                            return;
                                         this->command_get_version();
                                         });
                                 }
@@ -3514,7 +3523,9 @@ int MachineObject::parse_json(std::string tunnel, std::string payload, bool key_
                             if (jj["upgrade_state"].contains("dis_state")) {
                                 if ((int)upgrade_display_state != jj["upgrade_state"]["dis_state"].get<int>()
                                     && jj["upgrade_state"]["dis_state"].get<int>() == 3) {
-                                    GUI::wxGetApp().CallAfter([this] {
+                                    GUI::wxGetApp().CallAfter([this, token = std::weak_ptr<int>(m_token)] {
+                                        if (token.expired())
+                                            return;
                                         this->command_get_version();
                                         });
                                 }

@@ -4,6 +4,8 @@
 #include <array>
 #include <vector>
 #include <string>
+#include <memory>
+#include <atomic>
 
 #include <wx/panel.h>
 #include <wx/gdicmn.h>
@@ -87,7 +89,7 @@ public:
 
     void sync_model_colors_from_plater();
 
-    /** Synchronous Moonraker filament_selections fetch; updates tool colour cache. */
+    /** Starts a background Moonraker filament_selections fetch; updates tool colour cache on the UI thread. */
     void sync_loaded_tool_filaments(MachineObject *obj);
 
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
@@ -165,6 +167,7 @@ private:
     std::vector<BBLocalMachine> m_discovered_moonraker_printers;
     bool m_lan_scan_in_progress{ false };
     bool m_lan_rescan_requested{ false };
+    std::shared_ptr<std::atomic_bool> m_lan_scan_cancel_token;
     wxPanel *m_sidebar_printer_list_panel{ nullptr };
     wxBoxSizer *m_sidebar_printer_list_sizer{ nullptr };
     wxString m_sidebar_printer_list_signature;
@@ -235,6 +238,10 @@ private:
     DeviceDashboard::FilamentPanel*           m_dashboard_filament_panel{nullptr};
     double m_axis_move_step{ 1.0 };
     int m_zoomFactor{ 100 };
+    std::shared_ptr<int> m_lifetime_token{ std::make_shared<int>(1) };
+    bool m_destroying{ false };
+    std::string m_last_refresh_machine_id;
+    int m_refresh_tick_counter{ 0 };
 };
 
 } // namespace GUI
