@@ -854,7 +854,9 @@ void MainFrame::update_layout()
 
     wxBusyCursor busy;
 
-    Freeze();
+    const bool can_freeze = IsShownOnScreen();
+    if (can_freeze)
+        Freeze();
 
     // Remove old settings
     if (m_layout != ESettingsLayout::Unknown)
@@ -934,7 +936,8 @@ void MainFrame::update_layout()
 #endif
 
     Layout();
-    Thaw();
+    if (can_freeze)
+        Thaw();
 }
 
 // Called when closing the application and when switching the application language.
