@@ -400,25 +400,6 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     update_layout();
     sizer->SetSizeHints(this);
 
-#ifdef WIN32
-    // SetMaximize causes the window to overlap the taskbar, due to the fact this window has wxMAXIMIZE_BOX off
-    // https://forums.wxwidgets.org/viewtopic.php?t=50634
-    // Fix it here
-    this->Bind(wxEVT_MAXIMIZE, [this](auto &e) {
-        wxDisplay display(this);
-        auto      size = display.GetClientArea().GetSize();
-        auto      pos  = display.GetClientArea().GetPosition();
-        HWND      hWnd = GetHandle();
-        RECT      borderThickness;
-        SetRectEmpty(&borderThickness);
-        AdjustWindowRectEx(&borderThickness, GetWindowLongPtr(hWnd, GWL_STYLE), FALSE, 0);
-        const auto max_size = size + wxSize{-borderThickness.left + borderThickness.right, -borderThickness.top + borderThickness.bottom};
-        const auto current_size = GetSize();
-        SetSize({std::min(max_size.x, current_size.x), std::min(max_size.y, current_size.y)});
-        Move(pos + wxPoint{borderThickness.left, borderThickness.top});
-        e.Skip();
-    });
-#endif // WIN32
     // BBS
     Fit();
 
@@ -659,6 +640,27 @@ void MainFrame::bind_diff_dialog()
 
 #ifdef __WIN32__
 
+static void ApplyWorkingAreaMaxInfo(const HWND hWnd, MINMAXINFO* mmi)
+{
+    HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitor_info;
+    monitor_info.cbSize = sizeof(MONITORINFO);
+    if (!GetMonitorInfo(monitor, &monitor_info))
+        return;
+
+    const RECT& work    = monitor_info.rcWork;
+    const RECT& monitor_rect = monitor_info.rcMonitor;
+    const LONG  width   = work.right - work.left;
+    const LONG  height  = work.bottom - work.top;
+
+    mmi->ptMaxPosition.x  = work.left - monitor_rect.left;
+    mmi->ptMaxPosition.y  = work.top - monitor_rect.top;
+    mmi->ptMaxSize.x      = width;
+    mmi->ptMaxSize.y      = height;
+    mmi->ptMaxTrackSize.x = width;
+    mmi->ptMaxTrackSize.y = height;
+}
+
 // Orca: Fix maximized window overlaps taskbar when taskbar auto hide is enabled (#8085)
 // Adopted from https://gist.github.com/MortenChristiansen/6463580
 static void AdjustWorkingAreaForAutoHide(const HWND hWnd, MINMAXINFO* mmi)
@@ -791,6 +793,7 @@ WXLRESULT MainFrame::MSWWindowProc(WXUINT nMsg, WXWPARAM wParam, WXLPARAM lParam
     case WM_GETMINMAXINFO: {
         auto mmi = (MINMAXINFO*) lParam;
         HandleGetMinMaxInfo(mmi);
+        ApplyWorkingAreaMaxInfo(hWnd, mmi);
         AdjustWorkingAreaForAutoHide(hWnd, mmi);
         return 0;
     }
