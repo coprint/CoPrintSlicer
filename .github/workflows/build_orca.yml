@@ -125,7 +125,7 @@ jobs:
         if: runner.os == 'macOS' && !inputs.macos-combine-only
         run: |
           if [ -z "${{ vars.SELF_HOSTED }}" ]; then
-            brew install libtool
+            brew install autoconf automake texinfo libtool
             brew list
           fi
           mkdir -p ${{ github.workspace }}/deps/build/${{ inputs.arch }}
