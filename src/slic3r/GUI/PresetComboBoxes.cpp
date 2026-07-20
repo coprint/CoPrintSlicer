@@ -60,6 +60,13 @@ namespace GUI {
 
 #define BORDER_W 10
 
+static bool is_coprint_printer_preset(const Preset& preset)
+{
+    const std::string printer_model = preset.config.opt_string("printer_model");
+    return boost::starts_with(preset.name, "Co Print") ||
+           boost::starts_with(printer_model, "Co Print");
+}
+
 // ---------------------------------
 // ***  PresetComboBox  ***
 // ---------------------------------
@@ -1186,6 +1193,9 @@ void PlaterPresetComboBox::update()
             selected_preset.is_visible = true;
         }
 
+        if (m_type == Preset::TYPE_PRINTER && !is_coprint_printer_preset(preset))
+            continue;
+
         bool single_bar = false;
         wxString name = from_u8(preset.name);
         preset_aliases[name] = get_preset_name(preset).utf8_string(); // ORCA
@@ -1461,10 +1471,8 @@ void PlaterPresetComboBox::update()
             set_label_marker(Append(separator(L("Add/Remove filaments")), *bmp), LABEL_ITEM_WIZARD_FILAMENTS);
         else if (m_type == Preset::TYPE_SLA_MATERIAL)
             set_label_marker(Append(separator(L("Add/Remove materials")), *bmp), LABEL_ITEM_WIZARD_MATERIALS);
-        else {
-            set_label_marker(Append(separator(L("Select/Remove printers (system presets)")), *bmp), LABEL_ITEM_WIZARD_PRINTERS);
-            set_label_marker(Append(separator(L("Create printer")), *bmp), LABEL_ITEM_WIZARD_ADD_PRINTERS);
-        }
+        // CoPrint printer presets are product-locked. Keep Orca's printer wizard entries out
+        // of the main printer dropdown so users only see CoPrint machines.
     }
 
     update_selection();
@@ -1690,6 +1698,9 @@ void TabPresetComboBox::update()
     {
         const Preset& preset = presets[i];
         if (!preset.is_visible || (!show_incompatible && !preset.is_compatible && i != idx_selected))
+            continue;
+
+        if (m_type == Preset::TYPE_PRINTER && !is_coprint_printer_preset(preset))
             continue;
 
         // marker used for disable incompatible printer models for the selected physical printer

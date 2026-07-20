@@ -138,6 +138,20 @@ jobs:
           sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/*
           df -hI /dev/disk3s1s1
 
+      - name: Ensure macOS dependency prefix
+        if: runner.os == 'macOS' && !inputs.macos-combine-only
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dep_prefix="${{ github.workspace }}/deps/build/${{ inputs.arch }}/CoPrintSlicer_dep/usr/local"
+          if ! find "$dep_prefix" -name 'BoostConfig.cmake' -print -quit 2>/dev/null | grep -q .; then
+            echo "BoostConfig.cmake was not restored from cache; rebuilding macOS deps for ${{ inputs.arch }}."
+            ./build_release_macos.sh -d -x ${{ !vars.SELF_HOSTED && '-1' || '' }} -a ${{ inputs.arch }} -t 10.15
+          fi
+          echo "Dependency prefix: $dep_prefix"
+          find "$dep_prefix" -name 'BoostConfig.cmake' -print
+
       - name: Build slicer mac
         if: runner.os == 'macOS' && !inputs.macos-combine-only
         working-directory: ${{ github.workspace }}
