@@ -127,7 +127,7 @@ jobs:
     # Tests are built on the aarch64 leg by default (faster GitHub arm runner),
     # so run them there; self-hosted builds them on the amd64 server instead.
     runs-on: ${{ vars.SELF_HOSTED && 'orca-lnx-server' || 'ubuntu-24.04-arm' }}
-    needs: build_linux
+    needs: build_all
     if: ${{ !cancelled() && success() }}
     steps:
       - name: Checkout
