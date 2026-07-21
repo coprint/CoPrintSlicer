@@ -1844,7 +1844,7 @@ void PreferencesDialog::create_items()
     auto item_region           = create_item_region_combobox(_L("Login region"), "");
     g_sizer->Add(item_region);
  
-    auto item_stealth_mode     = create_item_checkbox(_L("Stealth mode"), _L("This disables all cloud features, including Orca Cloud profile syncing. Users who prefer to work entirely offline can enable this option.\nNote: When Stealth Mode is enabled, your user profiles will not be backed up to Orca Cloud."), "stealth_mode");
+    auto item_stealth_mode     = create_item_checkbox(_L("Stealth mode"), _L("This disables all cloud features, including CoPrint Cloud profile syncing. Users who prefer to work entirely offline can enable this option.\nNote: When Stealth Mode is enabled, your user profiles will not be backed up to CoPrint Cloud."), "stealth_mode");
     g_sizer->Add(item_stealth_mode);
 
     auto item_hide_login_side_panel = create_item_checkbox(_L("Hide login side panel"), _L("Hide the login side panel on the home page."), "hide_login_side_panel");
@@ -1859,7 +1859,7 @@ void PreferencesDialog::create_items()
     //// ONLINE > Cloud Providers
     g_sizer->Add(create_item_title(_L("Cloud Providers")), 1, wxEXPAND);
 
-    auto item_bambu_cloud     = create_item_bambu_cloud(_L("Enable Bambu Cloud"), _L("Allow logging into Bambu Cloud alongside Orca Cloud. When enabled, a Bambu login section appears on the homepage."));
+    auto item_bambu_cloud     = create_item_bambu_cloud(_L("Enable Bambu Cloud"), _L("Allow logging into Bambu Cloud alongside CoPrint Cloud. When enabled, a Bambu login section appears on the homepage."));
     g_sizer->Add(item_bambu_cloud);
 
     //// ONLINE > Update & sync
@@ -1916,7 +1916,7 @@ void PreferencesDialog::create_items()
         g_sizer = f_sizers.back();
         g_sizer->AddGrowableCol(0, 1);
 
-        g_sizer->Add(create_item_title(_L("Associate files to OrcaSlicer")), 1, wxEXPAND);
+        g_sizer->Add(create_item_title(_L("Associate files to CoPrintSlicer")), 1, wxEXPAND);
 
         auto item_open_default_apps = create_item_button(
             _L("File associations for the Microsoft Store version are managed by Windows Settings."),

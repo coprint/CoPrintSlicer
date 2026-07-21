@@ -5,10 +5,14 @@
 #include "../../Widgets/Button.hpp"
 #include "../../Widgets/ProgressBar.hpp"
 #include "../../I18N.hpp"
+#include "libslic3r/Utils.hpp"
 
 #include <algorithm>
 #include <utility>
 
+#include <wx/dcmemory.h>
+#include <wx/font.h>
+#include <wx/image.h>
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
 #include <wx/stattext.h>
@@ -44,7 +48,7 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     m_thumbnail_host->SetBackgroundColour(*wxBLACK);
     m_thumbnail_host->SetMinSize(wxSize(FromDIP(240), FromDIP(170)));
     auto* thumbnail_sizer = new wxBoxSizer(wxVERTICAL);
-    m_thumbnail = new wxStaticBitmap(m_thumbnail_host, wxID_ANY, wxNullBitmap);
+    m_thumbnail = new wxStaticBitmap(m_thumbnail_host, wxID_ANY, make_thumbnail_placeholder());
     m_thumbnail->SetBackgroundColour(*wxBLACK);
     m_thumbnail->SetMinSize(wxSize(FromDIP(220), FromDIP(150)));
     m_thumbnail->SetMaxSize(wxSize(FromDIP(220), FromDIP(150)));
@@ -184,6 +188,55 @@ void PrintStatusPanel::set_pause_handler(ActionHandler handler)
 void PrintStatusPanel::set_stop_handler(ActionHandler handler)
 {
     m_stop_handler = std::move(handler);
+}
+
+void PrintStatusPanel::reset_thumbnail_placeholder()
+{
+    if (m_thumbnail == nullptr)
+        return;
+
+    m_thumbnail->SetBitmap(make_thumbnail_placeholder());
+    m_thumbnail->Refresh();
+}
+
+wxBitmap PrintStatusPanel::make_thumbnail_placeholder()
+{
+    const int width = FromDIP(220);
+    const int height = FromDIP(150);
+    wxBitmap bitmap(width, height);
+
+    wxMemoryDC dc(bitmap);
+    dc.SetBackground(wxBrush(*wxBLACK));
+    dc.Clear();
+
+    wxFont font = GetFont();
+    font.SetPointSize(std::max(18, font.GetPointSize() + 12));
+    font.SetWeight(wxFONTWEIGHT_BOLD);
+    dc.SetFont(font);
+    dc.SetTextForeground(wxColour(0xF4, 0xF6, 0xF8));
+
+    const wxString text = wxString::FromUTF8("Co Print");
+    const wxSize text_size = dc.GetTextExtent(text);
+    const int logo_size = FromDIP(56);
+    const int gap = FromDIP(12);
+    const int group_width = logo_size + gap + text_size.GetWidth();
+    const int start_x = std::max(FromDIP(12), (width - group_width) / 2);
+    const int center_y = height / 2;
+
+    wxImage logo(wxString::FromUTF8((resources_dir() + "/images/CoPrintSlicer_192px_transparent.png").c_str()), wxBITMAP_TYPE_PNG);
+    bool drew_logo = false;
+
+    if (logo.IsOk()) {
+        logo.Rescale(logo_size, logo_size, wxIMAGE_QUALITY_HIGH);
+        dc.DrawBitmap(wxBitmap(logo), start_x, center_y - logo_size / 2, true);
+        drew_logo = true;
+    }
+
+    const int text_x = drew_logo ? start_x + logo_size + gap : (width - text_size.GetWidth()) / 2;
+    dc.DrawText(text, text_x, center_y - text_size.GetHeight() / 2);
+
+    dc.SelectObject(wxNullBitmap);
+    return bitmap;
 }
 
 wxString PrintStatusPanel::time_text(int seconds)

@@ -423,9 +423,9 @@ public:
         // Dynamic Text
         m_action_line_y_position = int(height * 0.83);
 
-		// Based on Text
+		// CoPrint splash keeps product branding clean; detailed upstream attribution lives in About.
         memDc.SetFont(m_constant_text.based_on_font);
-        auto bs_version = wxString::Format(_L("Based on OrcaSlicer")).ToStdString();
+        auto bs_version = wxString::Format(_L("")).ToStdString();
         wxSize based_on_ext = memDc.GetTextExtent(bs_version);
         wxRect based_on_rect(
 			wxPoint(0, height - based_on_ext.GetHeight() * 2),

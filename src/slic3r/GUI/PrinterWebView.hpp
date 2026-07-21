@@ -179,6 +179,7 @@ private:
     wxWebView *m_camera_webview{ nullptr };
     wxPanel *m_camera_webview_host{ nullptr };
     bool m_camera_webview_initialized{ false };
+    bool m_camera_stream_requested{ false };
     wxStaticText *m_printer_name_value{ nullptr };
     wxStaticText *m_printer_model_value{ nullptr };
     wxStaticText *m_printer_serial_value{ nullptr };

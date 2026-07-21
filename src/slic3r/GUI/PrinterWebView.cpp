@@ -1815,14 +1815,18 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     left_container->SetBackgroundColour(wxColour(28, 30, 34));
     auto *left_sizer = new wxBoxSizer(wxVERTICAL);
     m_dashboard_camera_panel = new DeviceDashboard::CameraPanel(left_container);
-    m_dashboard_camera_panel->set_refresh_handler([this]() {
-        if (m_camera_webview == nullptr)
-            return;
+    auto start_camera_stream = [this]() {
         auto *dev_manager = wxGetApp().getDeviceManager();
         MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-        auto urls = configured_camera_stream_urls(obj);
-        m_camera_webview->SetPage(camera_stream_page(urls), m_camera_stream_url.BeforeLast('/'));
-    });
+        const std::string dev_id = obj != nullptr ? obj->get_dev_id() : "";
+        if (dev_id != m_camera_machine_id)
+            m_camera_machine_id = dev_id;
+        m_camera_stream_url.clear();
+        m_camera_stream_requested = true;
+        refresh_camera_stream(obj);
+    };
+    m_dashboard_camera_panel->set_refresh_handler(start_camera_stream);
+    m_dashboard_camera_panel->set_play_handler(start_camera_stream);
     // Host only until the panel is actually shown. Creating WebView2 while MainFrame / tabs are still
     // constructing has been observed to crash (ACCESS_VIOLATION in ntdll); defer to wxEVT_SHOW.
     m_camera_webview_host = new wxPanel(m_dashboard_camera_panel->webview_host(), wxID_ANY);
@@ -2823,6 +2827,9 @@ void PrinterWebView::rebuild_printers_popup()
         if (machine == nullptr)
             return;
         const bool online = machine->is_online();
+        const bool active = online && selected_machine != nullptr &&
+                            selected_machine->get_dev_id() == machine->get_dev_id();
+        const wxString status_text = active ? _L("Connected") : (online ? _L("Not active") : _L("Offline"));
         auto *card = new StaticBox(m_printers_popup_panel, wxID_ANY);
         card->SetCornerRadius(static_cast<double>(FromDIP(10)));
         card->SetBorderWidth(1);
@@ -2844,10 +2851,10 @@ void PrinterWebView::rebuild_printers_popup()
         vs->Add(name_lbl, 0);
         auto *status_row = new wxBoxSizer(wxHORIZONTAL);
         auto *dot = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("\xE2\x97\x8F"));
-        dot->SetForegroundColour(online ? k_green : wxColour(180, 180, 180));
+        dot->SetForegroundColour(active ? k_green : wxColour(180, 180, 180));
         status_row->Add(dot, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
-        auto *st = new wxStaticText(card, wxID_ANY, online ? _L("Connected") : _L("Offline"));
-        st->SetForegroundColour(online ? k_green : k_muted);
+        auto *st = new wxStaticText(card, wxID_ANY, status_text);
+        st->SetForegroundColour(active ? k_green : k_muted);
         status_row->Add(st, 0, wxALIGN_CENTER_VERTICAL);
         vs->Add(status_row, 0);
         hs->Add(vs, 1, wxALIGN_CENTER_VERTICAL);
@@ -3694,6 +3701,8 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         const bool can_forget = has_local_machine_record(machine);
         const bool selected = selected_machine != nullptr &&
                               selected_machine->get_dev_id() == machine->get_dev_id();
+        const bool active = online && selected;
+        const wxString status_text = active ? _L("Connected") : (online ? _L("Not active") : _L("Offline"));
         auto *card = new StaticBox(m_sidebar_printer_list_panel, wxID_ANY);
         card->SetMinSize(wxSize(-1, FromDIP(70)));
         card->SetMaxSize(wxSize(-1, FromDIP(70)));
@@ -3713,9 +3722,9 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         auto *content = new wxBoxSizer(wxVERTICAL);
         auto *status_row = new wxBoxSizer(wxHORIZONTAL);
         auto *dot = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("\xE2\x97\x8F"));
-        dot->SetForegroundColour(online ? k_green : wxColour("#767C84"));
-        auto *status = new wxStaticText(card, wxID_ANY, online ? _L("Connected") : _L("Offline"));
-        status->SetForegroundColour(online ? k_green : k_muted);
+        dot->SetForegroundColour(active ? k_green : wxColour("#767C84"));
+        auto *status = new wxStaticText(card, wxID_ANY, status_text);
+        status->SetForegroundColour(active ? k_green : k_muted);
         {
             wxFont f = status->GetFont();
             f.SetPointSize(7);
@@ -3755,7 +3764,7 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         content->Add(ip, 0);
         outer->Add(content, 1, wxALIGN_CENTER_VERTICAL);
 
-        if (online) {
+        if (active) {
             auto *check = new wxStaticBitmap(card, wxID_ANY, create_scaled_bitmap("device_sidebar_connected", this, 15));
             outer->Add(check, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
         }
@@ -3807,69 +3816,12 @@ void PrinterWebView::rebuild_sidebar_printer_list()
     add_label->Bind(wxEVT_LEFT_DOWN, open_add);
     m_sidebar_printer_list_sizer->Add(add_printer_wrap, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
 
-    auto add_secondary_nav_row = [&](const wxString &label,
-                                     const std::string &icon_name,
-                                     const std::function<void()> &on_activate,
-                                     bool add_top_divider) {
-        if (add_top_divider) {
-            auto *divider = new wxPanel(m_sidebar_printer_list_panel, wxID_ANY);
-            divider->SetMinSize(wxSize(-1, FromDIP(1)));
-            divider->SetMaxSize(wxSize(-1, FromDIP(1)));
-            divider->SetBackgroundColour(wxColour("#34373A"));
-            m_sidebar_printer_list_sizer->Add(divider, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
-        }
-
-        auto *row = new wxPanel(m_sidebar_printer_list_panel, wxID_ANY);
-        row->SetBackgroundColour(wxColour("#2A2C2E"));
-        row->SetMinSize(wxSize(-1, FromDIP(44)));
-        row->SetMaxSize(wxSize(-1, FromDIP(44)));
-        row->SetCursor(wxCursor(wxCURSOR_HAND));
-
-        auto *sz = new wxBoxSizer(wxHORIZONTAL);
-        sz->AddSpacer(FromDIP(16));
-        auto *icon = new wxStaticBitmap(row, wxID_ANY, create_scaled_bitmap(icon_name, row, 14));
-        sz->Add(icon, 0, wxALIGN_CENTER_VERTICAL);
-        sz->AddSpacer(FromDIP(10));
-
-        auto *text = new wxStaticText(row, wxID_ANY, label);
-        text->SetForegroundColour(wxColour("#D8DCE0"));
-        {
-            wxFont f = text->GetFont();
-            f.SetPointSize(10);
-            text->SetFont(f);
-        }
-        sz->Add(text, 1, wxALIGN_CENTER_VERTICAL);
-
-        auto *chev = new wxStaticText(row, wxID_ANY, ">");
-        chev->SetForegroundColour(wxColour("#B7BCC2"));
-        sz->Add(chev, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
-        row->SetSizer(sz);
-
-        auto on_click = [on_activate](wxMouseEvent &) { on_activate(); };
-        row->Bind(wxEVT_LEFT_DOWN, on_click);
-        icon->Bind(wxEVT_LEFT_DOWN, on_click);
-        text->Bind(wxEVT_LEFT_DOWN, on_click);
-        chev->Bind(wxEVT_LEFT_DOWN, on_click);
-
-        m_sidebar_printer_list_sizer->Add(row, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(3));
-    };
-
-    add_secondary_nav_row(_L("System Upgrade"), "monitor_upgrade_online",
-                          [this]() {
-                              select_tab(PrinterWebViewTab::Update);
-                              show_sidebar_root_view();
-                          },
-                          true);
-    add_secondary_nav_row(_L("Media"), "monitor_sdcard_thumbnail",
-                          [this]() {
-                              select_tab(PrinterWebViewTab::Storage);
-                              show_sidebar_root_view();
-                          },
-                          false);
-
     m_sidebar_printer_list_panel->Layout();
-    if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel))
+    if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel)) {
         scrolled->FitInside();
+        scrolled->SetMinSize(wxDefaultSize);
+        scrolled->SetMaxSize(wxDefaultSize);
+    }
     if (m_sidebar_printer_list_panel->GetParent() != nullptr)
         m_sidebar_printer_list_panel->GetParent()->Layout();
 }
@@ -6080,7 +6032,10 @@ void PrinterWebView::clear_preview_thumbnail()
 
     m_preview_thumbnail_url.clear();
     m_thumbnail_image = wxImage();
-    m_preview_thumbnail->SetBitmap(wxNullBitmap);
+    if (m_dashboard_print_status_panel != nullptr)
+        m_dashboard_print_status_panel->reset_thumbnail_placeholder();
+    else
+        m_preview_thumbnail->SetBitmap(wxNullBitmap);
     Layout();
 }
 
@@ -6414,22 +6369,29 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
 
     const bool machine_changed = next_machine_id != m_camera_machine_id;
     const bool stream_changed  = next_url != m_camera_stream_url;
+    if (machine_changed) {
+        m_camera_stream_requested = false;
+        if (m_camera_webview != nullptr)
+            m_camera_webview->SetPage(camera_stream_page({}), "");
+    }
     m_camera_machine_id = next_machine_id;
     m_camera_stream_url = next_url;
 
     const bool has_stream = !next_url.IsEmpty();
+    const bool should_load_stream = m_camera_stream_requested && has_stream;
 
     // WebView2'yi yalnızca stream URL varken oluştur — önceden oluşturulunca beyaz sayfa gösterir
-    if (m_camera_webview_host != nullptr && has_stream)
+    if (m_camera_webview_host != nullptr && should_load_stream)
         ensure_camera_webview_created();
 
-    if (m_camera_webview != nullptr && (machine_changed || stream_changed))
+    if (m_camera_webview != nullptr && should_load_stream && (machine_changed || stream_changed))
         m_camera_webview->SetPage(camera_stream_page(camera_urls), m_camera_stream_url.BeforeLast('/'));
 
     if (m_dashboard_camera_panel != nullptr) {
+        m_dashboard_camera_panel->set_stream_started(m_camera_stream_requested);
         DeviceDashboard::CameraState camera_state;
-        camera_state.available  = obj != nullptr && obj->is_online() && has_stream;
-        camera_state.stream_url = next_url;
+        camera_state.available  = should_load_stream && obj != nullptr && obj->is_online();
+        camera_state.stream_url = should_load_stream ? next_url : wxString();
         m_dashboard_camera_panel->apply_state(camera_state);
     }
 }

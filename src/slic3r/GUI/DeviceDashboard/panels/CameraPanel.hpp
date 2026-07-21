@@ -20,11 +20,14 @@ class CameraPanel : public wxPanel
 {
 public:
     using RefreshHandler = std::function<void()>;
+    using PlayHandler = std::function<void()>;
 
     explicit CameraPanel(wxWindow* parent);
 
     void apply_state(const CameraState& state);
     void set_refresh_handler(RefreshHandler handler);
+    void set_play_handler(PlayHandler handler);
+    void set_stream_started(bool started);
 
     wxPanel* webview_host() const { return m_viewport; }
 
@@ -33,7 +36,10 @@ private:
     wxPanel* m_viewport{nullptr};
     wxStaticText* m_empty_state{nullptr};
     wxStaticBitmap* m_refresh_btn{nullptr};
+    wxPanel* m_play_btn{nullptr};
     RefreshHandler m_refresh_handler;
+    PlayHandler m_play_handler;
+    bool m_stream_started{false};
 };
 
 } // namespace DeviceDashboard

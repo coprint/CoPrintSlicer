@@ -5,6 +5,7 @@
 
 #include <functional>
 
+#include <wx/bitmap.h>
 #include <wx/panel.h>
 
 class wxStaticBitmap;
@@ -28,11 +29,13 @@ public:
     void apply_state(const PrintJobState& state);
     void set_pause_handler(ActionHandler handler);
     void set_stop_handler(ActionHandler handler);
+    void reset_thumbnail_placeholder();
 
     wxStaticBitmap* thumbnail_widget() const { return m_thumbnail; }
 
 private:
     static wxString time_text(int seconds);
+    wxBitmap make_thumbnail_placeholder();
 
     DeviceCardFrame* m_frame{nullptr};
     wxPanel* m_thumbnail_host{nullptr};

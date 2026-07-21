@@ -127,7 +127,7 @@ TroubleshootDialog::TroubleshootDialog()
     // LEFT SIZER //////////////////////
 
     // HEADER
-    m_logo            = ScalableBitmap(this, is_dark ? "OrcaSlicer_horizontal_dark" : "OrcaSlicer_horizontal_light", 64);
+    m_logo            = ScalableBitmap(this, is_dark ? "CoPrintSlicer_about_dark" : "CoPrintSlicer_about", 64);
     m_header_logo     = new wxStaticBitmap(this, wxID_ANY, m_logo.bmp());
     auto logo_line    = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(2)));
     logo_line->SetBackgroundColour(StateColor::darkModeColorFor(wxColour("#009687")));
@@ -139,7 +139,7 @@ TroubleshootDialog::TroubleshootDialog()
 
     auto build = new Button(this, wxString(GIT_COMMIT_HASH));
     build->SetStyle(ButtonStyle::Regular, ButtonType::Window);
-    auto hash_url = "https://github.com/OrcaSlicer/OrcaSlicer/commit/" + wxString(GIT_COMMIT_HASH);
+    auto hash_url = "https://github.com/yusufaslan0704/CoPrintSlicer/commit/" + wxString(GIT_COMMIT_HASH);
     build->SetToolTip(hash_url);
     build->Bind(wxEVT_BUTTON, [hash_url](wxCommandEvent &e) {
          wxLaunchDefaultBrowser(hash_url);
@@ -248,7 +248,7 @@ TroubleshootDialog::TroubleshootDialog()
             return out;
         };
 
-        wxString url = "https://github.com/OrcaSlicer/OrcaSlicer/issues/new?template=bug_report.yml";
+        wxString url = "https://github.com/yusufaslan0704/CoPrintSlicer/issues/new?template=bug_report.yml";
         wxString os = GetOStype();
         if(!os.IsEmpty())
             url += "&os_type=%22" + os +"%22";
@@ -296,7 +296,7 @@ TroubleshootDialog::TroubleshootDialog()
     auto log_pack_btn = create_btn(_L("Pack") + "...", "");
     log_pack_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
         auto data_dir   = boost::filesystem::path(Slic3r::data_dir());
-        ExportAsZip({wxString((data_dir / "log").string())}, "OrcaSlicer_Logs_" + GetTimestamp());
+        ExportAsZip({wxString((data_dir / "log").string())}, "CoPrintSlicer_Logs_" + GetTimestamp());
     });
     log_pack_szr->Add(log_pack_btn, 0, wxALIGN_CENTER_VERTICAL);
 
@@ -942,7 +942,7 @@ void TroubleshootDialog::PackAll()
         ).ShowModal();
     }
 
-    ExportAsZip(include_zip, "OrcaSlicer_PackedDebugInfo_" + GetTimestamp());
+    ExportAsZip(include_zip, "CoPrintSlicer_PackedDebugInfo_" + GetTimestamp());
 }
 
 void TroubleshootDialog::RebuildSystemProfiles()
@@ -965,7 +965,7 @@ void TroubleshootDialog::RebuildSystemProfiles()
     
     MessageDialog msg(this,
         _L("Restart Required") + "\n" +
-        _L("Please make sure any instances of OrcaSlicer are not running") + "\n" +
+            _L("Please make sure any instances of CoPrintSlicer are not running") + "\n" +
         _L("Do you want to continue?")
         , wxString(SLIC3R_APP_FULL_NAME), wxICON_QUESTION | wxOK | wxCANCEL
     );
