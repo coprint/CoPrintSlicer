@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -233,6 +232,3 @@ ctest --test-dir ./tests/sla_print/sla_print_tests
 - **Performance benchmarks** help catch performance regressions
 - **Memory leak** detection important for long-running GUI application
 - **Cross-platform** testing required before releases
-=======
-@AGENTS.md
->>>>>>> orca-v2.4.2

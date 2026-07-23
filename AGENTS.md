@@ -1,6 +1,5 @@
 # CLAUDE.md
 
-<<<<<<< HEAD
 ## Project Structure & Module Organization
 CoPrintSlicer’s C++17 sources live in `src/`, split by feature modules and platform adapters. User assets, icons, and printer presets are in `resources/`; translations stay in `localization/`. Tests sit in `tests/`, grouped by domain (`libslic3r/`, `sla_print/`, etc.) with fixtures under `tests/data/`. CMake helpers reside in `cmake/`, and longer references in `doc/` and `SoftFever_doc/`. Automation scripts belong in `scripts/` and `tools/`. Treat everything in `deps/` and `deps_src/` as vendored snapshots—do not modify without mirroring upstream tags.
 
@@ -10,11 +9,6 @@ Use out-of-source builds:
 - `cmake --build build --target CoPrintSlicer --config Release` compiles the app; add `--parallel` to speed up.
 - `cmake --build build --target tests` then `ctest --test-dir build --output-on-failure` runs automated suites.
 Platform helpers such as `build_linux.sh`, `build_release_macos.sh`, and `build_release_vs2022.bat` wrap the same flow with toolchain flags. Use `build_release_macos.sh -sx` when reproducing macOS build issues, and `scripts/DockerBuild.sh` for reproducible container builds.
-=======
-OrcaSlicer — open-source C++17 3D slicer. wxWidgets GUI, CMake build system.
-
-## Build Commands
->>>>>>> orca-v2.4.2
 
 ```bash
 # macOS

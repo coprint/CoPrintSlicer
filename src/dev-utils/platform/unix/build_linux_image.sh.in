@@ -384,7 +384,6 @@ exec "\$DIR/libexec/@SLIC3R_APP_CMD@-env" "\$DIR/bin/@SLIC3R_APP_CMD@" "\$@"
 EOF
 
     chmod ug+x @SLIC3R_APP_CMD@
-<<<<<<< HEAD
     cp -fl @SLIC3R_APP_CMD@ package/@SLIC3R_APP_CMD@
     # Nothing uses this tar? Remove if nobody has complained and it's been a while since this comment added.
     # Original commit was https://github.com/CoPrintSlicer/CoPrintSlicer/commit/f5a4862da52fc68f77b5201ddf330a9800d83228
@@ -393,14 +392,6 @@ EOF
     #tar -cvf ../@SLIC3R_APP_KEY@.tar .  &>/dev/null
     #popd > /dev/null
 #} &> $ROOT/Build.log # Capture all command output
-=======
-    cp -fl @SLIC3R_APP_CMD@ "$APPDIR/@SLIC3R_APP_CMD@"
-
-    if [ -x "${CHECK_SCRIPT}" ] && [ -z "${ORCA_SKIP_APPIMAGE_AUDIT}" ]; then
-        "${CHECK_SCRIPT}" "$APPDIR" "$BIN_DIR/@SLIC3R_APP_CMD@"
-    fi
-# } &> $ROOT/Build.log # Capture all command output
->>>>>>> orca-v2.4.2
 echo "done"
 
 if [[ -n "$BUILD_IMAGE" ]]

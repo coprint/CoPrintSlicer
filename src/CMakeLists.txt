@@ -232,10 +232,6 @@ else ()
             COMMAND ln -sf CoPrintSlicer coprintslicer
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:CoPrintSlicer>"
             VERBATIM)
-    else ()
-        add_custom_command(TARGET CoPrintSlicer POST_BUILD
-            WORKING_DIRECTORY "$<TARGET_FILE_DIR:CoPrintSlicer>"
-            VERBATIM)
     endif ()
     if (XCODE)
         # Because of Debug/Release/etc. configurations (similar to MSVC) the slic3r binary is located in an extra level

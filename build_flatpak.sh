@@ -255,13 +255,8 @@ mkdir -p "$BUILD_DIR"
 rm -rf "$BUILD_DIR/build-dir"
 
 # Check if flatpak manifest exists
-<<<<<<< HEAD
 if [[ ! -f "./scripts/flatpak/io.github.softfever.CoPrintSlicer.yml" ]]; then
     echo -e "${RED}Error: Flatpak manifest not found at scripts/flatpak/io.github.softfever.CoPrintSlicer.yml${NC}"
-=======
-if [[ ! -f "./scripts/flatpak/com.orcaslicer.OrcaSlicer.yml" ]]; then
-    echo -e "${RED}Error: Flatpak manifest not found at scripts/flatpak/com.orcaslicer.OrcaSlicer.yml${NC}"
->>>>>>> orca-v2.4.2
     exit 1
 fi
 
@@ -332,11 +327,7 @@ fi
 if ! flatpak-builder \
     "${BUILDER_ARGS[@]}" \
     "$BUILD_DIR/build-dir" \
-<<<<<<< HEAD
     scripts/flatpak/io.github.softfever.CoPrintSlicer.yml; then
-=======
-    "$MANIFEST"; then
->>>>>>> orca-v2.4.2
     echo -e "${RED}Error: flatpak-builder failed${NC}"
     echo -e "${YELLOW}Check the build log above for details${NC}"
     rm -f "scripts/flatpak/com.orcaslicer.OrcaSlicer.no-debug.yml"
@@ -351,11 +342,7 @@ echo -e "${YELLOW}Creating Flatpak bundle...${NC}"
 if ! flatpak build-bundle \
     "$BUILD_DIR/repo" \
     "$BUNDLE_NAME" \
-<<<<<<< HEAD
     io.github.softfever.CoPrintSlicer \
-=======
-    com.orcaslicer.OrcaSlicer \
->>>>>>> orca-v2.4.2
     --arch="$ARCH"; then
     echo -e "${RED}Error: Failed to create Flatpak bundle${NC}"
     exit 1
@@ -373,19 +360,11 @@ echo ""
 echo -e "${BLUE}To install the Flatpak:${NC}"
 echo -e "flatpak install --user $BUNDLE_NAME"
 echo ""
-<<<<<<< HEAD
 echo -e "${BLUE}To run CoPrintSlicer:${NC}"
 echo -e "flatpak run io.github.softfever.CoPrintSlicer"
 echo ""
 echo -e "${BLUE}To uninstall:${NC}"
 echo -e "flatpak uninstall --user io.github.softfever.CoPrintSlicer"
-=======
-echo -e "${BLUE}To run OrcaSlicer:${NC}"
-echo -e "flatpak run com.orcaslicer.OrcaSlicer"
-echo ""
-echo -e "${BLUE}To uninstall:${NC}"
-echo -e "flatpak uninstall --user com.orcaslicer.OrcaSlicer"
->>>>>>> orca-v2.4.2
 echo ""
 if [[ "$FORCE_CLEAN" != true ]]; then
     echo -e "${BLUE}Cache Management:${NC}"
