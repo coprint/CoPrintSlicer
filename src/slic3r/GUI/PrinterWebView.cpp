@@ -46,6 +46,7 @@
 #include <wx/display.h>
 #include <wx/filedlg.h>
 #include <wx/filefn.h>
+#include <wx/file.h>
 #include <wx/frame.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
@@ -5989,11 +5990,11 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     export_log_button->SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour("#59616B"), StateColor::Normal)));
     export_log_button->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour("#AEB6C1"), StateColor::Normal)));
     export_log_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-        flush_logs();
-
-        const boost::filesystem::path current_log = get_log_file_name();
-        if (current_log.empty() || !boost::filesystem::exists(current_log)) {
-            wxMessageBox("No log file is available for the current session.", "Export Log", wxOK | wxICON_INFORMATION, this);
+        auto *dev_manager = wxGetApp().getDeviceManager();
+        MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+        const std::string base = moonraker_base_url(obj);
+        if (base.empty()) {
+            wxMessageBox("No printer address is available for log export.", "Export Log", wxOK | wxICON_INFORMATION, this);
             return;
         }
 
@@ -6001,7 +6002,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
             this,
             "Export Log",
             wxEmptyString,
-            wxString::FromUTF8(current_log.filename().string()),
+            "klippy.log",
             "Log files (*.log)|*.log|All files (*.*)|*.*",
             wxFD_SAVE | wxFD_OVERWRITE_PROMPT
         );
@@ -6009,15 +6010,57 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
         if (save_dialog.ShowModal() != wxID_OK)
             return;
 
-        if (!wxCopyFile(wxString::FromUTF8(current_log.string()), save_dialog.GetPath(), true)) {
-            BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to export log from " << current_log.string()
-                                     << " to " << save_dialog.GetPath().ToUTF8().data();
-            wxMessageBox("Failed to export the log file.", "Export Log", wxOK | wxICON_ERROR, this);
-            return;
-        }
+        const std::string url = base + "/server/files/logs/klippy.log";
+        const wxString save_path = save_dialog.GetPath();
+        const std::weak_ptr<int> lifetime = m_lifetime_token;
 
-        BOOST_LOG_TRIVIAL(info) << "PrinterWebView: exported log to " << save_dialog.GetPath().ToUTF8().data();
-        wxMessageBox("Log file exported successfully.", "Export Log", wxOK | wxICON_INFORMATION, this);
+        std::thread([this, lifetime, url, save_path]() {
+            std::string body;
+            std::string error;
+            unsigned status = 0;
+
+            try {
+                Http::get(url)
+                    .timeout_connect(5)
+                    .timeout_max(30)
+                    .size_limit(100 * 1024 * 1024)
+                    .on_complete([&](std::string response, unsigned http_status) {
+                        body = std::move(response);
+                        status = http_status;
+                    })
+                    .on_error([&](std::string response, std::string err, unsigned http_status) {
+                        body = std::move(response);
+                        error = std::move(err);
+                        status = http_status;
+                    })
+                    .perform_sync();
+            } catch (const std::exception &e) {
+                error = e.what();
+            }
+
+            wxGetApp().CallAfter([this, lifetime, save_path, url, body = std::move(body), error = std::move(error), status]() {
+                if (lifetime.expired())
+                    return;
+
+                if (!error.empty() || status >= 400 || body.empty()) {
+                    BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to download printer log from " << url
+                                             << ", status=" << status << ", error=" << error;
+                    wxMessageBox("Failed to download the printer log file.", "Export Log", wxOK | wxICON_ERROR, this);
+                    return;
+                }
+
+                wxFile file(save_path, wxFile::write);
+                if (!file.IsOpened() || file.Write(body.data(), body.size()) != body.size()) {
+                    BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to save printer log to " << save_path.ToUTF8().data();
+                    wxMessageBox("Failed to save the printer log file.", "Export Log", wxOK | wxICON_ERROR, this);
+                    return;
+                }
+
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: exported printer log from " << url
+                                        << " to " << save_path.ToUTF8().data();
+                wxMessageBox("Printer log exported successfully.", "Export Log", wxOK | wxICON_INFORMATION, this);
+            });
+        }).detach();
     });
     right_col->Add(export_log_button, 0, wxALIGN_RIGHT | wxBOTTOM, FromDIP(14));
 
