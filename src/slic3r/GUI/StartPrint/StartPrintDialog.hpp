@@ -52,6 +52,7 @@ private:
     wxPanel       *m_model_half{nullptr};
     wxPanel       *m_printer_half{nullptr};
     wxStaticText  *m_model_type{nullptr};
+    wxStaticBitmap *m_printer_filament_icon{nullptr};
     wxStaticText  *m_printer_tag{nullptr};
     wxStaticText  *m_printer_type{nullptr};
 };
@@ -86,6 +87,7 @@ private:
     void on_cancel(wxCommandEvent &event);
     void on_start_print(wxCommandEvent &event);
     void on_timer(wxTimerEvent &event);
+    void reset_print_options();
 
     Plater *m_plater{nullptr};
     int     m_print_plate_idx{0};

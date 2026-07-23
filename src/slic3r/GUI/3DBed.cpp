@@ -472,8 +472,7 @@ void Bed3D::render_axes()
 
 void Bed3D::render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom)
 {
-    if (!bottom)
-        render_model(view_matrix, projection_matrix);
+    render_model(view_matrix, projection_matrix);
 
     /*if (show_texture)
         render_texture(bottom, canvas);*/
@@ -724,8 +723,7 @@ void Bed3D::render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, co
         return;
     }
 
-    if (!bottom)
-        render_model(view_matrix, projection_matrix);
+    render_model(view_matrix, projection_matrix);
 
     /*if (show_texture)
         render_texture(bottom, canvas);*/

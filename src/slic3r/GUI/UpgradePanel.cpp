@@ -7,9 +7,12 @@
 #include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "libslic3r/Thread.hpp"
+#include "slic3r/Utils/Http.hpp"
 
 #include "DeviceCore/DevFilaSystem.h"
 #include "DeviceCore/DevManager.h"
+
+#include <nlohmann/json.hpp>
 
 namespace Slic3r {
 namespace GUI {
@@ -28,6 +31,35 @@ static const std::unordered_map<wxString, wxString> ACCESSORY_DISPLAY_STR = {
     {"O2L_UCM", "Ultrasonic Cutting Module"},
     {"O2L-AFP", L("Auto Fire Extinguishing System")},
 };
+
+static std::string coprint_info_host(MachineObject *obj)
+{
+    if (!obj)
+        return {};
+
+    std::string host = obj->get_dev_ip();
+    if (host.empty())
+        host = obj->get_dev_id();
+
+    const std::string http_prefix = "http://";
+    const std::string https_prefix = "https://";
+    if (host.rfind(http_prefix, 0) == 0 || host.rfind(https_prefix, 0) == 0)
+        host = Http::get_host_from_url(host);
+
+    const size_t port_pos = host.find(':');
+    if (port_pos != std::string::npos)
+        host = host.substr(0, port_pos);
+
+    return host;
+}
+
+static std::string json_string_or_empty(const nlohmann::json &object, const char *key)
+{
+    if (!object.is_object() || !object.contains(key) || !object[key].is_string())
+        return {};
+
+    return object[key].get<std::string>();
+}
 
 enum FIRMWARE_STASUS
 {
@@ -579,13 +611,78 @@ void MachineInfoPanel::update(MachineObject* obj)
         }
 
         wxString model_id_text = obj->get_printer_type_display_str();
+        if (!m_coprint_model_text.empty() && m_coprint_info_host == coprint_info_host(obj))
+            model_id_text = m_coprint_model_text;
         m_staticText_model_id_val->SetLabelText(model_id_text);
+        if (obj->is_connected())
+            fetch_coprint_model_info(obj);
+
         wxString sn_text = obj->get_dev_id();
         m_staticText_sn_val->SetLabelText(sn_text.MakeUpper());
 
         this->Layout();
         this->Thaw();
     }
+}
+
+void MachineInfoPanel::fetch_coprint_model_info(MachineObject *obj)
+{
+    const std::string host = coprint_info_host(obj);
+    if (host.empty())
+        return;
+
+    if (host != m_coprint_info_host) {
+        m_coprint_info_host.clear();
+        m_coprint_model_text.clear();
+        m_coprint_info_fetching = false;
+        m_coprint_info_requested = false;
+    }
+
+    if (m_coprint_info_fetching || m_coprint_info_requested)
+        return;
+
+    m_coprint_info_host = host;
+    m_coprint_info_fetching = true;
+    m_coprint_info_requested = true;
+    const std::string url = "http://" + host + "/machine/coprint/info";
+
+    Http::get(url)
+        .timeout_connect(2)
+        .timeout_max(4)
+        .size_limit(16 * 1024)
+        .on_complete([this, host](std::string body, unsigned status) {
+            wxString model_text;
+            if (status >= 200 && status < 300) {
+                auto parsed = nlohmann::json::parse(body, nullptr, false, true);
+                if (!parsed.is_discarded()) {
+                    const nlohmann::json &result = parsed.contains("result") ? parsed["result"] : parsed;
+                    std::string model = json_string_or_empty(result, "model");
+                    if (model.empty())
+                        model = json_string_or_empty(result, "device_name");
+                    if (model.empty())
+                        model = json_string_or_empty(result, "manufacturer");
+                    if (!model.empty())
+                        model_text = from_u8(model);
+                }
+            }
+
+            CallAfter([this, host, model_text]() {
+                m_coprint_info_fetching = false;
+                if (model_text.empty())
+                    return;
+
+                m_coprint_info_host = host;
+                m_coprint_model_text = model_text;
+                if (m_obj && coprint_info_host(m_obj) == host) {
+                    m_staticText_model_id_val->SetLabelText(model_text);
+                    Layout();
+                }
+            });
+        })
+        .on_error([this](std::string, std::string, unsigned) {
+            CallAfter([this]() { m_coprint_info_fetching = false; });
+        })
+        .perform();
 }
 
 void MachineInfoPanel::update_version_text(MachineObject* obj)

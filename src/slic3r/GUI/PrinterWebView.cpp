@@ -46,6 +46,7 @@
 #include <wx/display.h>
 #include <wx/filedlg.h>
 #include <wx/filefn.h>
+#include <wx/frame.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/simplebook.h>
@@ -1735,8 +1736,10 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     m_sidebar_add_printer_panel->Hide();
     preview_menu_sizer->Add(m_sidebar_add_printer_panel, 1, wxEXPAND);
 
-    m_sidebar_printer_list_panel = new wxScrolledWindow(preview_menu_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
+    m_sidebar_printer_list_panel = new wxScrolledWindow(m_sidebar_root_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
     m_sidebar_printer_list_panel->SetBackgroundColour(wxColour("#2A2C2E"));
+    m_sidebar_printer_list_panel->SetMinSize(wxSize(-1, FromDIP(330)));
+    m_sidebar_printer_list_panel->SetMaxSize(wxSize(-1, FromDIP(330)));
     if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel)) {
         scrolled->SetScrollRate(0, FromDIP(8));
         scrolled->ShowScrollbars(wxSHOW_SB_NEVER, wxSHOW_SB_DEFAULT);
@@ -1744,7 +1747,6 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     m_sidebar_printer_list_sizer = new wxBoxSizer(wxVERTICAL);
     m_sidebar_printer_list_panel->SetSizer(m_sidebar_printer_list_sizer);
     m_sidebar_printer_list_panel->Hide();
-    preview_menu_sizer->Add(m_sidebar_printer_list_panel, 1, wxEXPAND);
 
     auto add_sidebar_nav_row = [this](wxWindow *parent,
                                       wxBoxSizer *parent_sizer,
@@ -1761,8 +1763,14 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
         auto *icon = new wxStaticBitmap(row, wxID_ANY, create_scaled_bitmap(icon_name, row, 14));
         auto *text = new wxStaticText(row, wxID_ANY, label);
         text->SetForegroundColour(wxColour("#E1E3E5"));
-        auto *chev = new wxStaticText(row, wxID_ANY, ">");
+        auto *chev = new wxStaticText(row, wxID_ANY, wxString::FromUTF8("\xE2\x80\xBA"));
         chev->SetForegroundColour(wxColour("#B7BCC2"));
+        chev->SetMinSize(wxSize(FromDIP(18), -1));
+        auto chev_font = chev->GetFont();
+        chev_font.SetPointSize(chev_font.GetPointSize() + 1);
+        chev->SetFont(chev_font);
+        if (label == _L("Printers"))
+            chev->SetName("sidebar_printers_chevron");
         sz->Add(icon, 0, wxALIGN_CENTER_VERTICAL);
         sz->AddSpacer(FromDIP(10));
         sz->Add(text, 1, wxALIGN_CENTER_VERTICAL);
@@ -1778,7 +1786,13 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
 
     m_sidebar_root_sizer->AddSpacer(FromDIP(10));
     add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("Printers"), k_cprint_printer_nav_bitmap,
-                        [this]() { show_sidebar_printers_view(); });
+                        [this]() {
+                            if (m_sidebar_printer_list_panel != nullptr && m_sidebar_printer_list_panel->IsShown())
+                                show_sidebar_root_view();
+                            else
+                                show_sidebar_printers_view();
+                        });
+    m_sidebar_root_sizer->Add(m_sidebar_printer_list_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(3));
     add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("System Upgrade"), "monitor_upgrade_online",
                         [this]() { select_tab(PrinterWebViewTab::Update); });
     auto *sidebar_divider = new wxPanel(m_sidebar_root_panel, wxID_ANY);
@@ -1827,6 +1841,12 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     };
     m_dashboard_camera_panel->set_refresh_handler(start_camera_stream);
     m_dashboard_camera_panel->set_play_handler(start_camera_stream);
+    m_dashboard_camera_panel->set_timelapse_handler([this]() {
+        toggle_camera_timelapse();
+    });
+    m_dashboard_camera_panel->set_fullscreen_handler([this]() {
+        show_camera_fullscreen();
+    });
     // Host only until the panel is actually shown. Creating WebView2 while MainFrame / tabs are still
     // constructing has been observed to crash (ACCESS_VIOLATION in ntdll); defer to wxEVT_SHOW.
     m_camera_webview_host = new wxPanel(m_dashboard_camera_panel->webview_host(), wxID_ANY);
@@ -2965,7 +2985,10 @@ void PrinterWebView::show_sidebar_root_view()
         m_sidebar_add_printer_panel->Hide();
     if (m_sidebar_header_panel != nullptr)
         m_sidebar_header_panel->Hide();
-
+    if (m_sidebar_root_panel != nullptr) {
+        if (auto *chev = dynamic_cast<wxStaticText *>(wxWindow::FindWindowByName("sidebar_printers_chevron", m_sidebar_root_panel)))
+            chev->SetLabelText(wxString::FromUTF8("\xE2\x80\xBA"));
+    }
     Layout();
 }
 
@@ -3082,20 +3105,23 @@ void PrinterWebView::begin_moonraker_lan_scan()
 void PrinterWebView::show_sidebar_printers_view()
 {
     if (m_sidebar_root_panel != nullptr)
-        m_sidebar_root_panel->Hide();
+        m_sidebar_root_panel->Show();
     if (m_sidebar_printer_list_panel != nullptr)
         m_sidebar_printer_list_panel->Show();
     if (m_sidebar_add_printer_panel != nullptr)
         m_sidebar_add_printer_panel->Hide();
     if (m_sidebar_header_back != nullptr)
-        m_sidebar_header_back->Show();
+        m_sidebar_header_back->Hide();
     if (m_sidebar_header_title != nullptr)
         m_sidebar_header_title->SetLabelText(_L("Printers"));
     if (m_sidebar_header_add != nullptr)
-        m_sidebar_header_add->Show();
+        m_sidebar_header_add->Hide();
     if (m_sidebar_header_panel != nullptr)
-        m_sidebar_header_panel->Show();
-
+        m_sidebar_header_panel->Hide();
+    if (m_sidebar_root_panel != nullptr) {
+        if (auto *chev = dynamic_cast<wxStaticText *>(wxWindow::FindWindowByName("sidebar_printers_chevron", m_sidebar_root_panel)))
+            chev->SetLabelText(wxString::FromUTF8("\xE2\x8C\x84"));
+    }
     rebuild_sidebar_printer_list();
     Layout();
 }
@@ -3733,7 +3759,7 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         status_row->Add(dot, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
         status_row->Add(status, 0, wxALIGN_CENTER_VERTICAL);
         if (can_forget) {
-            auto *forget_icon = new wxStaticBitmap(card, wxID_ANY, create_scaled_bitmap("device_sidebar_forget", this, 12));
+            auto *forget_icon = new wxStaticBitmap(card, wxID_ANY, create_scaled_bitmap("device_sidebar_forget", this, 18));
             forget_icon->SetCursor(wxCursor(wxCURSOR_HAND));
             status_row->AddSpacer(FromDIP(8));
             status_row->Add(forget_icon, 0, wxALIGN_CENTER_VERTICAL);
@@ -3819,8 +3845,8 @@ void PrinterWebView::rebuild_sidebar_printer_list()
     m_sidebar_printer_list_panel->Layout();
     if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel)) {
         scrolled->FitInside();
-        scrolled->SetMinSize(wxDefaultSize);
-        scrolled->SetMaxSize(wxDefaultSize);
+        scrolled->SetMinSize(wxSize(-1, FromDIP(330)));
+        scrolled->SetMaxSize(wxSize(-1, FromDIP(330)));
     }
     if (m_sidebar_printer_list_panel->GetParent() != nullptr)
         m_sidebar_printer_list_panel->GetParent()->Layout();
@@ -6394,6 +6420,80 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
         camera_state.stream_url = should_load_stream ? next_url : wxString();
         m_dashboard_camera_panel->apply_state(camera_state);
     }
+}
+
+void PrinterWebView::show_camera_fullscreen()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr || !obj->is_online()) {
+        wxMessageBox(_L("Camera stream unavailable."), _L("Live Camera"), wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    std::vector<wxString> camera_urls = configured_camera_stream_urls(obj);
+    if (camera_urls.empty()) {
+        wxMessageBox(_L("Camera stream unavailable."), _L("Live Camera"), wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    m_camera_stream_requested = true;
+    m_camera_machine_id = obj->get_dev_id();
+    m_camera_stream_url = camera_urls.front();
+
+    wxWindow *parent = wxGetTopLevelParent(this);
+    auto *frame = new wxFrame(parent, wxID_ANY, wxString::FromUTF8("Live Camera"),
+        wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT);
+    frame->SetBackgroundColour(*wxBLACK);
+
+    wxWebView *const webview = ::WebView::CreateWebView(frame, wxString{});
+    if (webview == nullptr) {
+        frame->Destroy();
+        wxMessageBox(_L("Camera preview could not start. Install or repair Microsoft WebView2 Runtime."),
+            _L("Live Camera"), wxOK | wxICON_WARNING, this);
+        return;
+    }
+
+    webview->SetBackgroundColour(*wxBLACK);
+    auto *sizer = new wxBoxSizer(wxVERTICAL);
+    sizer->Add(webview, 1, wxEXPAND);
+    frame->SetSizer(sizer);
+
+    frame->Bind(wxEVT_CHAR_HOOK, [frame](wxKeyEvent &evt) {
+        if (evt.GetKeyCode() == WXK_ESCAPE) {
+            frame->Close();
+            return;
+        }
+        evt.Skip();
+    });
+    frame->Bind(wxEVT_CLOSE_WINDOW, [frame](wxCloseEvent &) {
+        frame->Destroy();
+    });
+
+    webview->SetPage(camera_stream_page(camera_urls), m_camera_stream_url.BeforeLast('/'));
+    frame->Show();
+    frame->ShowFullScreen(true, wxFULLSCREEN_ALL);
+}
+
+void PrinterWebView::toggle_camera_timelapse()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr || !obj->is_online()) {
+        wxMessageBox(_L("Timelapse is unavailable."), _L("Timelapse"), wxOK | wxICON_INFORMATION, this);
+        return;
+    }
+
+    const bool enable = !obj->is_timelapse();
+    if (enable) {
+        wxString error_message;
+        if (!obj->canEnableTimelapse(error_message)) {
+            wxMessageBox(error_message, _L("Timelapse"), wxOK | wxICON_INFORMATION, this);
+            return;
+        }
+    }
+
+    obj->command_ipcam_timelapse(enable);
 }
 
 void PrinterWebView::refresh_layer_info_from_selected_machine()

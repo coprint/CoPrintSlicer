@@ -91,13 +91,37 @@ CameraPanel::CameraPanel(wxWindow* parent)
     m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
     auto* content_sizer = new wxBoxSizer(wxVERTICAL);
 
-    m_refresh_btn = new wxStaticBitmap(m_frame, wxID_ANY,
+    auto* header_actions = new wxPanel(m_frame, wxID_ANY);
+    header_actions->SetBackgroundColour(DeviceUiStyle::card_background());
+    auto* header_actions_sizer = new wxBoxSizer(wxHORIZONTAL);
+    m_timelapse_btn = new wxStaticBitmap(header_actions, wxID_ANY,
+        create_scaled_bitmap("camera_timelapse_white", header_actions, 18));
+    m_timelapse_btn->SetCursor(wxCursor(wxCURSOR_HAND));
+    m_timelapse_btn->SetToolTip(wxString::FromUTF8("Timelapse"));
+    m_timelapse_btn->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &) {
+        if (m_timelapse_handler) m_timelapse_handler();
+    });
+    header_actions_sizer->Add(m_timelapse_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
+
+    m_fullscreen_btn = new wxStaticBitmap(header_actions, wxID_ANY,
+        create_scaled_bitmap("camera_fullscreen_white", header_actions, 18));
+    m_fullscreen_btn->SetCursor(wxCursor(wxCURSOR_HAND));
+    m_fullscreen_btn->SetToolTip(wxString::FromUTF8("Fullscreen"));
+    m_fullscreen_btn->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &) {
+        if (m_fullscreen_handler) m_fullscreen_handler();
+    });
+    header_actions_sizer->Add(m_fullscreen_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
+
+    m_refresh_btn = new wxStaticBitmap(header_actions, wxID_ANY,
         create_scaled_bitmap("camera_refresh_white", m_frame, 16));
     m_refresh_btn->SetCursor(wxCursor(wxCURSOR_HAND));
+    m_refresh_btn->SetToolTip(wxString::FromUTF8("Refresh"));
     m_refresh_btn->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &) {
         if (m_refresh_handler) m_refresh_handler();
     });
-    m_frame->set_header_action(m_refresh_btn);
+    header_actions_sizer->Add(m_refresh_btn, 0, wxALIGN_CENTER_VERTICAL);
+    header_actions->SetSizer(header_actions_sizer);
+    m_frame->set_header_action(header_actions);
 
     m_viewport = new wxPanel(m_frame->content_parent(), wxID_ANY);
     m_viewport->SetBackgroundColour(*wxBLACK);
@@ -146,6 +170,16 @@ void CameraPanel::set_refresh_handler(RefreshHandler handler)
 void CameraPanel::set_play_handler(PlayHandler handler)
 {
     m_play_handler = std::move(handler);
+}
+
+void CameraPanel::set_fullscreen_handler(FullscreenHandler handler)
+{
+    m_fullscreen_handler = std::move(handler);
+}
+
+void CameraPanel::set_timelapse_handler(TimelapseHandler handler)
+{
+    m_timelapse_handler = std::move(handler);
 }
 
 void CameraPanel::set_stream_started(bool started)

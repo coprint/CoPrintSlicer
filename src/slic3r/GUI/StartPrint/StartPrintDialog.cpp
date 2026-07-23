@@ -24,6 +24,7 @@
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
 #include <wx/popupwin.h>
+#include <wx/statbmp.h>
 
 #include <boost/filesystem.hpp>
 #include <nlohmann/json.hpp>
@@ -232,9 +233,9 @@ bool is_dark_fill(const wxColour &colour)
     return brightness < 140;
 }
 
-wxColour readable_on_fill(const wxColour &fill, const wxColour &fallback = wxColour(235, 235, 235))
+wxColour readable_on_fill(const wxColour &fill)
 {
-    return is_dark_fill(fill) ? *wxWHITE : fallback;
+    return is_dark_fill(fill) ? *wxWHITE : wxColour(35, 39, 46);
 }
 
 class RoundedColorBlock : public wxPanel
@@ -556,6 +557,8 @@ StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_
     m_printer_half->SetCursor(wxCursor(wxCURSOR_HAND));
 
     auto *printer_inner = new wxBoxSizer(wxHORIZONTAL);
+    m_printer_filament_icon = new wxStaticBitmap(m_printer_half, wxID_ANY,
+        create_scaled_bitmap("start_print_filament_spool", m_printer_half, 18));
     m_printer_tag = new wxStaticText(m_printer_half, wxID_ANY, wxEmptyString);
     m_printer_type = new wxStaticText(m_printer_half, wxID_ANY, wxEmptyString);
     wxFont tag_font = m_printer_tag->GetFont();
@@ -563,9 +566,11 @@ StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_
     tag_font.SetWeight(wxFONTWEIGHT_BOLD);
     m_printer_tag->SetFont(tag_font);
     m_printer_type->SetFont(type_font);
+    m_printer_filament_icon->SetCursor(wxCursor(wxCURSOR_HAND));
     m_printer_tag->SetCursor(wxCursor(wxCURSOR_HAND));
     m_printer_type->SetCursor(wxCursor(wxCURSOR_HAND));
     printer_inner->AddStretchSpacer();
+    printer_inner->Add(m_printer_filament_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(5));
     printer_inner->Add(m_printer_tag, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(4));
     printer_inner->Add(m_printer_type, 0, wxALIGN_CENTER_VERTICAL);
     printer_inner->AddStretchSpacer();
@@ -575,6 +580,7 @@ StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_
         win->Bind(wxEVT_LEFT_DOWN, &StartPrintFilamentSlot::on_printer_half_clicked, this);
     };
     bind_printer_click(m_printer_half);
+    bind_printer_click(m_printer_filament_icon);
     bind_printer_click(m_printer_tag);
     bind_printer_click(m_printer_type);
 
@@ -608,6 +614,8 @@ void StartPrintFilamentSlot::style_half(wxPanel *half, wxStaticText *tag, wxStat
             tag->Show();
         }
     }
+    if (m_printer_filament_icon != nullptr && half == m_printer_half)
+        m_printer_filament_icon->SetBackgroundColour(bg);
     if (type_label != nullptr) {
         type_label->SetLabel(type_text);
         type_label->SetForegroundColour(text);
@@ -884,6 +892,8 @@ void StartPrintDialog::on_dpi_changed(const wxRect &suggested_rect)
 
 int StartPrintDialog::ShowModal()
 {
+    reset_print_options();
+
     if (m_plater) {
         PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
         if (plate && pick_plate_thumbnail(plate) == nullptr)
@@ -901,6 +911,16 @@ int StartPrintDialog::ShowModal()
     const int result = DPIDialog::ShowModal();
     m_refresh_timer.Stop();
     return result;
+}
+
+void StartPrintDialog::reset_print_options()
+{
+    if (m_bed_leveling)
+        m_bed_leveling->SetValue(true);
+    if (m_flow_calibration)
+        m_flow_calibration->SetValue(false);
+    if (m_timelapse)
+        m_timelapse->SetValue(false);
 }
 
 void StartPrintDialog::refresh_from_plate()

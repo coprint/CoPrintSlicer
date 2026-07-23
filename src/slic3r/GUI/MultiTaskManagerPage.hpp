@@ -13,7 +13,12 @@
 #include "Widgets/ScrolledWindow.hpp"
 #include "Widgets/PopupWindow.hpp"
 #include "Widgets/TextInput.hpp"
+#include <wx/image.h>
 #include <wx/webrequest.h>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace Slic3r { 
 namespace GUI {
@@ -132,6 +137,16 @@ private:
     wxStaticText* m_tip_text{ nullptr };
 };
 
+struct MoonrakerModelFileView
+{
+    std::string   path;
+    std::string   thumbnail_url;
+    std::uint64_t size{ 0 };
+    double        modified{ 0.0 };
+    double        estimated_time_seconds{ 0.0 };
+    double        filament_weight_grams{ 0.0 };
+};
+
 class CloudTaskManagerPage : public wxPanel
 {
 public:
@@ -161,6 +176,8 @@ private:
     void set_timelapse_filter(int filter);
     void update_timelapse_filter_tabs();
     void select_all_timelapse_cards();
+    void refresh_moonraker_model_status();
+    void render_moonraker_model_files(const std::vector<MoonrakerModelFileView>& files);
 
     SortItem                    m_sort;
     bool                        device_name_big{ true };
@@ -191,6 +208,10 @@ private:
     Button* m_timelapse_all_files{ nullptr };
     Button* m_timelapse_year{ nullptr };
     Button* m_timelapse_month{ nullptr };
+    wxStaticText* m_model_status_text{ nullptr };
+    wxScrolledWindow* m_model_file_grid{ nullptr };
+    wxGridSizer* m_model_file_grid_sizer{ nullptr };
+    std::shared_ptr<int> m_model_status_lifetime{ std::make_shared<int>(0) };
 
     // Flipping pages
     int                         m_current_page{ 0 };

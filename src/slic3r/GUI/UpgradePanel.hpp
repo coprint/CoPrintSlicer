@@ -189,6 +189,7 @@ public:
     void msw_rescale();
     void update(MachineObject *obj);
     void update_version_text(MachineObject *obj);
+    void fetch_coprint_model_info(MachineObject *obj);
     void update_ams_ext(MachineObject *obj);
     void show_status(int status, std::string upgrade_status_str = "");
     void show_ams(bool show = false, bool force_update = false);
@@ -201,6 +202,10 @@ public:
     MachineObject *m_obj{nullptr};
     FirmwareInfo  m_ota_info;
     FirmwareInfo  m_ams_info;
+    std::string   m_coprint_info_host;
+    wxString      m_coprint_model_text;
+    bool          m_coprint_info_fetching { false };
+    bool          m_coprint_info_requested { false };
 
     bool is_upgrading = false;
 

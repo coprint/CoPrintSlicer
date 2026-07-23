@@ -21,12 +21,16 @@ class CameraPanel : public wxPanel
 public:
     using RefreshHandler = std::function<void()>;
     using PlayHandler = std::function<void()>;
+    using FullscreenHandler = std::function<void()>;
+    using TimelapseHandler = std::function<void()>;
 
     explicit CameraPanel(wxWindow* parent);
 
     void apply_state(const CameraState& state);
     void set_refresh_handler(RefreshHandler handler);
     void set_play_handler(PlayHandler handler);
+    void set_fullscreen_handler(FullscreenHandler handler);
+    void set_timelapse_handler(TimelapseHandler handler);
     void set_stream_started(bool started);
 
     wxPanel* webview_host() const { return m_viewport; }
@@ -36,9 +40,13 @@ private:
     wxPanel* m_viewport{nullptr};
     wxStaticText* m_empty_state{nullptr};
     wxStaticBitmap* m_refresh_btn{nullptr};
+    wxStaticBitmap* m_timelapse_btn{nullptr};
+    wxStaticBitmap* m_fullscreen_btn{nullptr};
     wxPanel* m_play_btn{nullptr};
     RefreshHandler m_refresh_handler;
     PlayHandler m_play_handler;
+    FullscreenHandler m_fullscreen_handler;
+    TimelapseHandler m_timelapse_handler;
     bool m_stream_started{false};
 };
 

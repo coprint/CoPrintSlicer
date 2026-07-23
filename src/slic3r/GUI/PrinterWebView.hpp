@@ -123,6 +123,8 @@ private:
     void refresh_connected_printer_header(MachineObject *obj);
     void refresh_printer_info_labels(MachineObject *obj);
     void refresh_camera_stream(MachineObject *obj);
+    void show_camera_fullscreen();
+    void toggle_camera_timelapse();
     void apply_printer_status_tool_selection(int tool_index);
     void prompt_ps_target_temperature(bool is_bed, int extruder_index);
     void show_toolhead_temperature_dialog(int active_extruder_index);
