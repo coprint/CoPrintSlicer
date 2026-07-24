@@ -123,8 +123,8 @@ static void update_sidebar_scrollbar(wxScrolledWindow *scrolled, wxPanel *track,
     const int max_scroll_px = (std::max)(1, content_height - viewport_height);
     const int scroll_px = y * uy;
     const int thumb_y = (track_height - thumb_height) * scroll_px / max_scroll_px;
-    thumb->SetSize(dip_source->FromDIP(6), thumb_height);
-    thumb->SetPosition(wxPoint(dip_source->FromDIP(1), thumb_y));
+    thumb->SetSize(dip_source->FromDIP(4), thumb_height);
+    thumb->SetPosition(wxPoint(dip_source->FromDIP(2), thumb_y));
     track->Refresh();
     thumb->Refresh();
 }
@@ -1770,7 +1770,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     m_sidebar_printer_list_container->SetBackgroundColour(wxColour("#2A2C2E"));
     auto *printer_list_row = new wxBoxSizer(wxHORIZONTAL);
 
-    m_sidebar_printer_list_panel = new wxScrolledWindow(m_sidebar_printer_list_container, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
+    m_sidebar_printer_list_panel = new wxScrolledWindow(m_sidebar_printer_list_container, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
     m_sidebar_printer_list_panel->SetBackgroundColour(wxColour("#2A2C2E"));
     m_sidebar_printer_list_panel->SetMinSize(wxSize(-1, FromDIP(330)));
     m_sidebar_printer_list_panel->SetMaxSize(wxSize(-1, FromDIP(330)));
@@ -1792,9 +1792,6 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
         dc.SetBackground(wxBrush(m_sidebar_printer_scroll_track->GetParent()->GetBackgroundColour()));
         dc.Clear();
         dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(wxColour("#34373A")));
-        const wxSize sz = m_sidebar_printer_scroll_track->GetClientSize();
-        dc.DrawRoundedRectangle(FromDIP(2), FromDIP(1), FromDIP(4), (std::max)(FromDIP(1), sz.GetHeight() - FromDIP(2)), FromDIP(2));
     });
 
     m_sidebar_printer_scroll_thumb = new wxPanel(m_sidebar_printer_scroll_track, wxID_ANY);
@@ -3317,7 +3314,7 @@ void PrinterWebView::show_sidebar_add_printer_view()
             begin_moonraker_lan_scan();
 
         auto *auto_list_row = new wxBoxSizer(wxHORIZONTAL);
-        auto *auto_list = new wxScrolledWindow(m_sidebar_add_printer_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
+        auto *auto_list = new wxScrolledWindow(m_sidebar_add_printer_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
         m_auto_connect_list_window = auto_list;
         auto_list->SetBackgroundColour(wxColour("#2A2C2E"));
         auto_list->SetScrollRate(0, FromDIP(8));
@@ -3338,9 +3335,6 @@ void PrinterWebView::show_sidebar_add_printer_view()
             dc.SetBackground(wxBrush(scroll_track->GetParent()->GetBackgroundColour()));
             dc.Clear();
             dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(wxColour("#34373A")));
-            const wxSize sz = scroll_track->GetClientSize();
-            dc.DrawRoundedRectangle(scroll_track->FromDIP(2), scroll_track->FromDIP(1), scroll_track->FromDIP(4), (std::max)(scroll_track->FromDIP(1), sz.GetHeight() - scroll_track->FromDIP(2)), scroll_track->FromDIP(2));
         });
         auto *scroll_thumb = new wxPanel(scroll_track, wxID_ANY);
         m_auto_connect_scroll_thumb = scroll_thumb;
@@ -3432,8 +3426,8 @@ void PrinterWebView::show_sidebar_add_printer_view()
             const int max_scroll_px = (std::max)(1, content_height - viewport_height);
             const int scroll_px = y * uy;
             const int thumb_y = (track_height - thumb_height) * scroll_px / max_scroll_px;
-            m_auto_connect_scroll_thumb->SetSize(FromDIP(6), thumb_height);
-            m_auto_connect_scroll_thumb->SetPosition(wxPoint(FromDIP(1), thumb_y));
+            m_auto_connect_scroll_thumb->SetSize(FromDIP(4), thumb_height);
+            m_auto_connect_scroll_thumb->SetPosition(wxPoint(FromDIP(2), thumb_y));
             m_auto_connect_scroll_track->Refresh();
             m_auto_connect_scroll_thumb->Refresh();
         };
