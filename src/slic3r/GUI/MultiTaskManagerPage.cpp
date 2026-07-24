@@ -371,7 +371,7 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
     const wxColour muted_text("#AEB6C1");
     const wxColour main_text("#F1F3F4");
 
-    wxDialog dlg(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    wxDialog dlg(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxFRAME_SHAPED);
     dlg.SetBackgroundColour(dialog_bg);
 
     auto* root = new wxBoxSizer(wxVERTICAL);
@@ -417,7 +417,8 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
     };
 
     card->Bind(wxEVT_PAINT, [card, dialog_bg, card_bg, border, accent, muted_text, main_text, display_name, button_rects, draw_text_ellipsis](wxPaintEvent&) {
-        wxAutoBufferedPaintDC dc(card);
+        wxAutoBufferedPaintDC raw_dc(card);
+        wxGCDC dc(raw_dc);
         const wxSize size = card->GetClientSize();
         const int pad = card->FromDIP(24);
         dc.SetBackground(wxBrush(dialog_bg));
@@ -455,7 +456,7 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
         auto draw_button = [&dc, card](const wxRect& rect, const wxString& label, const wxColour& bg, const wxColour& border_colour, const wxColour& text_colour) {
             dc.SetPen(wxPen(border_colour, card->FromDIP(1)));
             dc.SetBrush(wxBrush(bg));
-            dc.DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, card->FromDIP(17));
+            dc.DrawRoundedRectangle(rect.x, rect.y, rect.width - 1, rect.height - 1, card->FromDIP(12));
 
             dc.SetFont(Label::Body_14);
             dc.SetTextForeground(text_colour);
@@ -503,6 +504,21 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
 
     root->Add(card, 0, wxEXPAND);
     dlg.SetSizerAndFit(root);
+    {
+        const wxSize size = dlg.GetSize();
+        wxBitmap shape_bmp(size.GetWidth(), size.GetHeight());
+        wxMemoryDC dc(shape_bmp);
+        dc.SetBackground(wxBrush(wxColour(0, 0, 0)));
+        dc.Clear();
+        dc.SetBrush(wxBrush(wxColour(255, 255, 255)));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.DrawRoundedRectangle(0, 0, size.GetWidth(), size.GetHeight(), dlg.FromDIP(12));
+        dc.SelectObject(wxNullBitmap);
+
+        wxRegion region(shape_bmp, wxColour(0, 0, 0));
+        if (region.IsOk())
+            dlg.SetShape(region);
+    }
     dlg.CentreOnParent();
 
     return dlg.ShowModal() == wxID_OK;
