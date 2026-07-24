@@ -362,6 +362,82 @@ MoonrakerModelDeleteResult delete_moonraker_model_file_sync(const std::string& b
     return result;
 }
 
+bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_name)
+{
+    wxDialog dlg(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    dlg.SetBackgroundColour(wxColour("#1C1E22"));
+
+    auto* root = new wxBoxSizer(wxVERTICAL);
+
+    auto* card = new wxPanel(&dlg, wxID_ANY);
+    card->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    card->Bind(wxEVT_PAINT, [card](wxPaintEvent&) {
+        wxAutoBufferedPaintDC dc(card);
+        const wxSize size = card->GetClientSize();
+        dc.SetBackground(wxBrush(wxColour("#1C1E22")));
+        dc.Clear();
+        dc.SetPen(wxPen(wxColour("#3A3F47"), card->FromDIP(1)));
+        dc.SetBrush(wxBrush(wxColour("#23272D")));
+        dc.DrawRoundedRectangle(0, 0, size.x - 1, size.y - 1, card->FromDIP(12));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour("#00A886")));
+        dc.DrawRoundedRectangle(card->FromDIP(18), card->FromDIP(18), card->FromDIP(42), card->FromDIP(4), card->FromDIP(2));
+    });
+
+    auto* content = new wxBoxSizer(wxVERTICAL);
+    content->AddSpacer(dlg.FromDIP(28));
+
+    auto* title = new wxStaticText(card, wxID_ANY, _L("Delete model?"));
+    title->SetForegroundColour(wxColour("#F1F3F4"));
+    wxFont title_font = title->GetFont();
+    title_font.SetPointSize(title_font.GetPointSize() + 3);
+    title_font.SetWeight(wxFONTWEIGHT_BOLD);
+    title->SetFont(title_font);
+    content->Add(title, 0, wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
+
+    auto* message = new wxStaticText(card, wxID_ANY, _L("This model will be removed from the printer storage."));
+    message->SetForegroundColour(wxColour("#AEB6C1"));
+    message->Wrap(dlg.FromDIP(330));
+    content->Add(message, 0, wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
+
+    auto* filename = new wxStaticText(card, wxID_ANY, display_name);
+    filename->SetForegroundColour(wxColour("#F1F3F4"));
+    filename->Wrap(dlg.FromDIP(330));
+    wxFont filename_font = filename->GetFont();
+    filename_font.SetWeight(wxFONTWEIGHT_BOLD);
+    filename->SetFont(filename_font);
+    content->Add(filename, 0, wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
+
+    auto* buttons = new wxBoxSizer(wxHORIZONTAL);
+    buttons->AddStretchSpacer(1);
+
+    auto* cancel = new Button(card, _L("Cancel"));
+    cancel->SetMinSize(wxSize(dlg.FromDIP(104), dlg.FromDIP(34)));
+    cancel->SetCornerRadius(dlg.FromDIP(17));
+    cancel->SetBackgroundColor(StateColor(std::pair<wxColour, int>(wxColour("#2B3037"), StateColor::Normal)));
+    cancel->SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour("#59616B"), StateColor::Normal)));
+    cancel->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour("#F1F3F4"), StateColor::Normal)));
+    buttons->Add(cancel, 0, wxRIGHT, dlg.FromDIP(12));
+
+    auto* remove = new Button(card, _L("Delete"));
+    remove->SetMinSize(wxSize(dlg.FromDIP(104), dlg.FromDIP(34)));
+    remove->SetCornerRadius(dlg.FromDIP(17));
+    remove->SetBackgroundColor(StateColor(std::pair<wxColour, int>(wxColour("#00A886"), StateColor::Normal)));
+    remove->SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour("#00A886"), StateColor::Normal)));
+    remove->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour("#FFFFFF"), StateColor::Normal)));
+    buttons->Add(remove, 0);
+
+    content->Add(buttons, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
+    card->SetSizer(content);
+    root->Add(card, 1, wxEXPAND);
+    dlg.SetSizerAndFit(root);
+    dlg.CentreOnParent();
+
+    cancel->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent&) { dlg.EndModal(wxID_CANCEL); });
+    remove->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent&) { dlg.EndModal(wxID_OK); });
+    return dlg.ShowModal() == wxID_OK;
+}
+
 class MoonrakerModelFileCard : public wxPanel
 {
 public:
@@ -2347,6 +2423,9 @@ void CloudTaskManagerPage::render_moonraker_model_files(const std::vector<Moonra
             const std::string file_path = clicked_file.path;
             const wxString card_name = moonraker_model_card_name(file_path);
             std::weak_ptr<int> lifetime = m_model_status_lifetime;
+
+            if (!confirm_delete_moonraker_model(this, display_name))
+                return;
 
             m_model_status_text->SetLabel(wxString::Format(_L("Deleting: %s"), display_name));
             m_model_status_text->Show(!m_media_timelapse_mode);
