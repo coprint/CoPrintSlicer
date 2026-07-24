@@ -1787,25 +1787,30 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     m_sidebar_printer_scroll_track->SetMaxSize(wxSize(FromDIP(8), -1));
     m_sidebar_printer_scroll_track->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_sidebar_printer_scroll_track->Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
-        wxAutoBufferedPaintDC dc(m_sidebar_printer_scroll_track);
+        wxAutoBufferedPaintDC raw_dc(m_sidebar_printer_scroll_track);
+        wxGCDC dc(raw_dc);
         dc.SetBackground(wxBrush(m_sidebar_printer_scroll_track->GetParent()->GetBackgroundColour()));
         dc.Clear();
         dc.SetPen(*wxTRANSPARENT_PEN);
         dc.SetBrush(wxBrush(wxColour("#34373A")));
         const wxSize sz = m_sidebar_printer_scroll_track->GetClientSize();
-        dc.DrawRoundedRectangle(FromDIP(2), 0, FromDIP(4), sz.GetHeight(), FromDIP(2));
+        dc.DrawRoundedRectangle(FromDIP(2), FromDIP(1), FromDIP(4), (std::max)(FromDIP(1), sz.GetHeight() - FromDIP(2)), FromDIP(2));
     });
 
     m_sidebar_printer_scroll_thumb = new wxPanel(m_sidebar_printer_scroll_track, wxID_ANY);
     m_sidebar_printer_scroll_thumb->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_sidebar_printer_scroll_thumb->Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
-        wxAutoBufferedPaintDC dc(m_sidebar_printer_scroll_thumb);
+        wxAutoBufferedPaintDC raw_dc(m_sidebar_printer_scroll_thumb);
+        wxGCDC dc(raw_dc);
         dc.SetBackground(wxBrush(m_sidebar_printer_scroll_thumb->GetParent()->GetBackgroundColour()));
         dc.Clear();
         dc.SetPen(*wxTRANSPARENT_PEN);
         dc.SetBrush(wxBrush(wxColour("#7A8088")));
         const wxSize sz = m_sidebar_printer_scroll_thumb->GetClientSize();
-        dc.DrawRoundedRectangle(0, 0, sz.GetWidth(), sz.GetHeight(), sz.GetWidth() / 2.0);
+        const int inset = FromDIP(1);
+        const int width = (std::max)(FromDIP(1), sz.GetWidth() - inset * 2);
+        const int height = (std::max)(FromDIP(1), sz.GetHeight() - inset * 2);
+        dc.DrawRoundedRectangle(inset, inset, width, height, (std::min)(width, height) / 2.0);
     });
     printer_list_row->Add(m_sidebar_printer_scroll_track, 0, wxEXPAND | wxLEFT, FromDIP(4));
 
@@ -3328,25 +3333,30 @@ void PrinterWebView::show_sidebar_add_printer_view()
         scroll_track->SetMaxSize(wxSize(FromDIP(8), -1));
         scroll_track->SetBackgroundStyle(wxBG_STYLE_PAINT);
         scroll_track->Bind(wxEVT_PAINT, [scroll_track](wxPaintEvent &) {
-            wxAutoBufferedPaintDC dc(scroll_track);
+            wxAutoBufferedPaintDC raw_dc(scroll_track);
+            wxGCDC dc(raw_dc);
             dc.SetBackground(wxBrush(scroll_track->GetParent()->GetBackgroundColour()));
             dc.Clear();
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.SetBrush(wxBrush(wxColour("#34373A")));
             const wxSize sz = scroll_track->GetClientSize();
-            dc.DrawRoundedRectangle(scroll_track->FromDIP(2), 0, scroll_track->FromDIP(4), sz.GetHeight(), scroll_track->FromDIP(2));
+            dc.DrawRoundedRectangle(scroll_track->FromDIP(2), scroll_track->FromDIP(1), scroll_track->FromDIP(4), (std::max)(scroll_track->FromDIP(1), sz.GetHeight() - scroll_track->FromDIP(2)), scroll_track->FromDIP(2));
         });
         auto *scroll_thumb = new wxPanel(scroll_track, wxID_ANY);
         m_auto_connect_scroll_thumb = scroll_thumb;
         scroll_thumb->SetBackgroundStyle(wxBG_STYLE_PAINT);
         scroll_thumb->Bind(wxEVT_PAINT, [scroll_thumb](wxPaintEvent &) {
-            wxAutoBufferedPaintDC dc(scroll_thumb);
+            wxAutoBufferedPaintDC raw_dc(scroll_thumb);
+            wxGCDC dc(raw_dc);
             dc.SetBackground(wxBrush(scroll_thumb->GetParent()->GetBackgroundColour()));
             dc.Clear();
             dc.SetPen(*wxTRANSPARENT_PEN);
             dc.SetBrush(wxBrush(wxColour("#7A8088")));
             const wxSize sz = scroll_thumb->GetClientSize();
-            dc.DrawRoundedRectangle(0, 0, sz.GetWidth(), sz.GetHeight(), sz.GetWidth() / 2.0);
+            const int inset = scroll_thumb->FromDIP(1);
+            const int width = (std::max)(scroll_thumb->FromDIP(1), sz.GetWidth() - inset * 2);
+            const int height = (std::max)(scroll_thumb->FromDIP(1), sz.GetHeight() - inset * 2);
+            dc.DrawRoundedRectangle(inset, inset, width, height, (std::min)(width, height) / 2.0);
         });
         auto_list_row->Add(scroll_track, 0, wxEXPAND | wxLEFT, FromDIP(4));
 
