@@ -368,6 +368,8 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
     const wxColour card_bg("#23272D");
     const wxColour border("#3A3F47");
     const wxColour accent("#00A886");
+    const wxColour muted_text("#AEB6C1");
+    const wxColour main_text("#F1F3F4");
 
     wxDialog dlg(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
     dlg.SetBackgroundColour(dialog_bg);
@@ -375,11 +377,49 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
     auto* root = new wxBoxSizer(wxVERTICAL);
 
     auto* card = new wxPanel(&dlg, wxID_ANY);
-    card->SetBackgroundColour(card_bg);
     card->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    card->Bind(wxEVT_PAINT, [card, dialog_bg, card_bg, border, accent](wxPaintEvent&) {
+    card->SetMinSize(wxSize(dlg.FromDIP(360), dlg.FromDIP(220)));
+
+    auto button_rects = [card]() {
+        const wxSize size = card->GetClientSize();
+        const int button_w = card->FromDIP(104);
+        const int button_h = card->FromDIP(34);
+        const int gap = card->FromDIP(12);
+        const int right = card->FromDIP(24);
+        const int bottom = card->FromDIP(24);
+        const int y = size.y - bottom - button_h;
+        const int delete_x = size.x - right - button_w;
+        const int cancel_x = delete_x - gap - button_w;
+        return std::make_pair(wxRect(cancel_x, y, button_w, button_h), wxRect(delete_x, y, button_w, button_h));
+    };
+
+    auto draw_text_ellipsis = [](wxDC& dc, wxString text, int x, int y, int max_width) {
+        wxCoord text_w = 0;
+        wxCoord text_h = 0;
+        dc.GetTextExtent(text, &text_w, &text_h);
+        if (text_w <= max_width) {
+            dc.DrawText(text, x, y);
+            return;
+        }
+
+        wxString trimmed = text;
+        const wxString suffix("...");
+        while (!trimmed.empty()) {
+            trimmed.RemoveLast();
+            wxString candidate = trimmed + suffix;
+            dc.GetTextExtent(candidate, &text_w, &text_h);
+            if (text_w <= max_width) {
+                dc.DrawText(candidate, x, y);
+                return;
+            }
+        }
+        dc.DrawText(suffix, x, y);
+    };
+
+    card->Bind(wxEVT_PAINT, [card, dialog_bg, card_bg, border, accent, muted_text, main_text, display_name, button_rects, draw_text_ellipsis](wxPaintEvent&) {
         wxAutoBufferedPaintDC dc(card);
         const wxSize size = card->GetClientSize();
+        const int pad = card->FromDIP(24);
         dc.SetBackground(wxBrush(dialog_bg));
         dc.Clear();
         dc.SetPen(wxPen(border, card->FromDIP(1)));
@@ -388,81 +428,83 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
         dc.SetPen(*wxTRANSPARENT_PEN);
         dc.SetBrush(wxBrush(accent));
         dc.DrawRoundedRectangle(card->FromDIP(18), card->FromDIP(18), card->FromDIP(42), card->FromDIP(4), card->FromDIP(2));
-    });
 
-    auto* content = new wxBoxSizer(wxVERTICAL);
-    content->AddSpacer(dlg.FromDIP(28));
+        wxFont title_font = card->GetFont();
+        title_font.SetPointSize(title_font.GetPointSize() + 3);
+        title_font.SetWeight(wxFONTWEIGHT_BOLD);
+        dc.SetFont(title_font);
+        dc.SetTextForeground(main_text);
+        dc.DrawText(_L("Delete model?"), pad, card->FromDIP(42));
 
-    auto* title = new wxStaticText(card, wxID_ANY, _L("Delete model?"));
-    title->SetBackgroundColour(card_bg);
-    title->SetForegroundColour(wxColour("#F1F3F4"));
-    wxFont title_font = title->GetFont();
-    title_font.SetPointSize(title_font.GetPointSize() + 3);
-    title_font.SetWeight(wxFONTWEIGHT_BOLD);
-    title->SetFont(title_font);
-    content->Add(title, 0, wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
+        wxFont body_font = card->GetFont();
+        body_font.SetPointSize(body_font.GetPointSize() + 1);
+        dc.SetFont(body_font);
+        dc.SetTextForeground(muted_text);
+        draw_text_ellipsis(dc, _L("This model will be removed from the printer storage."), pad, card->FromDIP(86), size.x - pad * 2);
 
-    auto* message = new wxStaticText(card, wxID_ANY, _L("This model will be removed from the printer storage."));
-    message->SetBackgroundColour(card_bg);
-    message->SetForegroundColour(wxColour("#AEB6C1"));
-    message->Wrap(dlg.FromDIP(330));
-    content->Add(message, 0, wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
+        wxFont filename_font = body_font;
+        filename_font.SetWeight(wxFONTWEIGHT_BOLD);
+        dc.SetFont(filename_font);
+        dc.SetTextForeground(main_text);
+        draw_text_ellipsis(dc, display_name, pad, card->FromDIP(124), size.x - pad * 2);
 
-    auto* filename = new wxStaticText(card, wxID_ANY, display_name);
-    filename->SetBackgroundColour(card_bg);
-    filename->SetForegroundColour(wxColour("#F1F3F4"));
-    filename->Wrap(dlg.FromDIP(330));
-    wxFont filename_font = filename->GetFont();
-    filename_font.SetWeight(wxFONTWEIGHT_BOLD);
-    filename->SetFont(filename_font);
-    content->Add(filename, 0, wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
+        const auto rects = button_rects();
+        const wxRect cancel_rect = rects.first;
+        const wxRect delete_rect = rects.second;
 
-    auto* buttons = new wxBoxSizer(wxHORIZONTAL);
-    buttons->AddStretchSpacer(1);
-
-    auto make_dialog_button = [&dlg, card_bg](wxWindow* parent,
-                                               const wxString& label,
-                                               const wxColour& bg,
-                                               const wxColour& border_colour,
-                                               const wxColour& text_colour) {
-        auto* button = new wxPanel(parent, wxID_ANY);
-        button->SetMinSize(wxSize(dlg.FromDIP(104), dlg.FromDIP(34)));
-        button->SetMaxSize(wxSize(dlg.FromDIP(104), dlg.FromDIP(34)));
-        button->SetCursor(wxCursor(wxCURSOR_HAND));
-        button->SetBackgroundStyle(wxBG_STYLE_PAINT);
-        button->Bind(wxEVT_PAINT, [button, label, card_bg, bg, border_colour, text_colour](wxPaintEvent&) {
-            wxAutoBufferedPaintDC dc(button);
-            const wxSize size = button->GetClientSize();
-            dc.SetBackground(wxBrush(card_bg));
-            dc.Clear();
-            dc.SetPen(wxPen(border_colour, button->FromDIP(1)));
+        auto draw_button = [&dc, card](const wxRect& rect, const wxString& label, const wxColour& bg, const wxColour& border_colour, const wxColour& text_colour) {
+            dc.SetPen(wxPen(border_colour, card->FromDIP(1)));
             dc.SetBrush(wxBrush(bg));
-            dc.DrawRoundedRectangle(0, 0, size.x - 1, size.y - 1, button->FromDIP(17));
+            dc.DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, card->FromDIP(17));
 
             dc.SetFont(Label::Body_14);
             dc.SetTextForeground(text_colour);
             wxCoord text_w = 0;
             wxCoord text_h = 0;
             dc.GetTextExtent(label, &text_w, &text_h);
-            dc.DrawText(label, (size.x - text_w) / 2, (size.y - text_h) / 2);
-        });
-        return button;
-    };
+            dc.DrawText(label, rect.x + (rect.width - text_w) / 2, rect.y + (rect.height - text_h) / 2);
+        };
 
-    auto* cancel = make_dialog_button(card, _L("Cancel"), wxColour("#2B3037"), wxColour("#59616B"), wxColour("#F1F3F4"));
-    buttons->Add(cancel, 0, wxRIGHT, dlg.FromDIP(12));
+        draw_button(cancel_rect, _L("Cancel"), wxColour("#2B3037"), wxColour("#59616B"), main_text);
+        draw_button(delete_rect, _L("Delete"), accent, accent, wxColour("#FFFFFF"));
+    });
 
-    auto* remove = make_dialog_button(card, _L("Delete"), accent, accent, wxColour("#FFFFFF"));
-    buttons->Add(remove, 0);
+    card->Bind(wxEVT_MOTION, [card, button_rects](wxMouseEvent& evt) {
+        const auto rects = button_rects();
+        if (rects.first.Contains(evt.GetPosition()) || rects.second.Contains(evt.GetPosition()))
+            card->SetCursor(wxCursor(wxCURSOR_HAND));
+        else
+            card->SetCursor(wxCursor(wxCURSOR_ARROW));
+    });
 
-    content->Add(buttons, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, dlg.FromDIP(24));
-    card->SetSizer(content);
-    root->Add(card, 1, wxEXPAND);
+    card->Bind(wxEVT_LEFT_UP, [&dlg, button_rects](wxMouseEvent& evt) {
+        const auto rects = button_rects();
+        if (rects.first.Contains(evt.GetPosition())) {
+            dlg.EndModal(wxID_CANCEL);
+            return;
+        }
+        if (rects.second.Contains(evt.GetPosition())) {
+            dlg.EndModal(wxID_OK);
+            return;
+        }
+    });
+
+    dlg.Bind(wxEVT_CHAR_HOOK, [&dlg](wxKeyEvent& evt) {
+        if (evt.GetKeyCode() == WXK_ESCAPE) {
+            dlg.EndModal(wxID_CANCEL);
+            return;
+        }
+        if (evt.GetKeyCode() == WXK_RETURN || evt.GetKeyCode() == WXK_NUMPAD_ENTER) {
+            dlg.EndModal(wxID_OK);
+            return;
+        }
+        evt.Skip();
+    });
+
+    root->Add(card, 0, wxEXPAND);
     dlg.SetSizerAndFit(root);
     dlg.CentreOnParent();
 
-    cancel->Bind(wxEVT_LEFT_UP, [&dlg](wxMouseEvent&) { dlg.EndModal(wxID_CANCEL); });
-    remove->Bind(wxEVT_LEFT_UP, [&dlg](wxMouseEvent&) { dlg.EndModal(wxID_OK); });
     return dlg.ShowModal() == wxID_OK;
 }
 
