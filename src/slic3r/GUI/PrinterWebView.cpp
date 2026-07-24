@@ -100,9 +100,46 @@ static bool set_text_if_changed(wxStaticText *label, const wxString &text)
     return true;
 }
 
-static void update_sidebar_scrollbar(wxScrolledWindow *scrolled, wxPanel *track, wxPanel *thumb, wxWindow *dip_source)
+class SidebarScrollbar : public wxPanel
 {
-    if (scrolled == nullptr || track == nullptr || thumb == nullptr || dip_source == nullptr)
+public:
+    explicit SidebarScrollbar(wxWindow *parent)
+        : wxPanel(parent, wxID_ANY)
+    {
+        SetMinSize(wxSize(FromDIP(8), -1));
+        SetMaxSize(wxSize(FromDIP(8), -1));
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
+            wxAutoBufferedPaintDC raw_dc(this);
+            wxGCDC dc(raw_dc);
+            dc.SetBackground(wxBrush(GetParent()->GetBackgroundColour()));
+            dc.Clear();
+            if (m_thumb_height <= 0)
+                return;
+
+            const int thumb_w = FromDIP(4);
+            const int thumb_x = (GetClientSize().GetWidth() - thumb_w) / 2;
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.SetBrush(wxBrush(wxColour("#7A8088")));
+            dc.DrawRoundedRectangle(thumb_x, m_thumb_y, thumb_w, m_thumb_height, thumb_w / 2.0);
+        });
+    }
+
+    void set_thumb(int y, int height)
+    {
+        m_thumb_y = y;
+        m_thumb_height = height;
+        Refresh();
+    }
+
+private:
+    int m_thumb_y{ 0 };
+    int m_thumb_height{ 0 };
+};
+
+static void update_sidebar_scrollbar(wxScrolledWindow *scrolled, wxPanel *track, wxWindow *dip_source)
+{
+    if (scrolled == nullptr || track == nullptr || dip_source == nullptr)
         return;
 
     int x = 0, y = 0;
@@ -123,10 +160,10 @@ static void update_sidebar_scrollbar(wxScrolledWindow *scrolled, wxPanel *track,
     const int max_scroll_px = (std::max)(1, content_height - viewport_height);
     const int scroll_px = y * uy;
     const int thumb_y = (track_height - thumb_height) * scroll_px / max_scroll_px;
-    thumb->SetSize(dip_source->FromDIP(4), thumb_height);
-    thumb->SetPosition(wxPoint(dip_source->FromDIP(2), thumb_y));
-    track->Refresh();
-    thumb->Refresh();
+    if (auto *custom_scrollbar = dynamic_cast<SidebarScrollbar *>(track))
+        custom_scrollbar->set_thumb(thumb_y, thumb_height);
+    else
+        track->Refresh();
 }
 
 static bool looks_like_network_identifier(const std::string &value)
@@ -1782,40 +1819,13 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     m_sidebar_printer_list_panel->SetSizer(m_sidebar_printer_list_sizer);
     printer_list_row->Add(m_sidebar_printer_list_panel, 1, wxEXPAND);
 
-    m_sidebar_printer_scroll_track = new wxPanel(m_sidebar_printer_list_container, wxID_ANY);
-    m_sidebar_printer_scroll_track->SetMinSize(wxSize(FromDIP(8), -1));
-    m_sidebar_printer_scroll_track->SetMaxSize(wxSize(FromDIP(8), -1));
-    m_sidebar_printer_scroll_track->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_sidebar_printer_scroll_track->Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
-        wxAutoBufferedPaintDC raw_dc(m_sidebar_printer_scroll_track);
-        wxGCDC dc(raw_dc);
-        dc.SetBackground(wxBrush(m_sidebar_printer_scroll_track->GetParent()->GetBackgroundColour()));
-        dc.Clear();
-        dc.SetPen(*wxTRANSPARENT_PEN);
-    });
-
-    m_sidebar_printer_scroll_thumb = new wxPanel(m_sidebar_printer_scroll_track, wxID_ANY);
-    m_sidebar_printer_scroll_thumb->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_sidebar_printer_scroll_thumb->Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
-        wxAutoBufferedPaintDC raw_dc(m_sidebar_printer_scroll_thumb);
-        wxGCDC dc(raw_dc);
-        dc.SetBackground(wxBrush(m_sidebar_printer_scroll_thumb->GetParent()->GetBackgroundColour()));
-        dc.Clear();
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(wxColour("#7A8088")));
-        const wxSize sz = m_sidebar_printer_scroll_thumb->GetClientSize();
-        const int inset = FromDIP(1);
-        const int width = (std::max)(FromDIP(1), sz.GetWidth() - inset * 2);
-        const int height = (std::max)(FromDIP(1), sz.GetHeight() - inset * 2);
-        dc.DrawRoundedRectangle(inset, inset, width, height, (std::min)(width, height) / 2.0);
-    });
+    m_sidebar_printer_scroll_track = new SidebarScrollbar(m_sidebar_printer_list_container);
     printer_list_row->Add(m_sidebar_printer_scroll_track, 0, wxEXPAND | wxLEFT, FromDIP(4));
 
     auto update_printer_scrollbar = [this]() {
         update_sidebar_scrollbar(
             dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel),
             m_sidebar_printer_scroll_track,
-            m_sidebar_printer_scroll_thumb,
             this);
     };
     auto on_printer_scroll = [update_printer_scrollbar](wxScrollWinEvent &evt) {
@@ -3227,7 +3237,6 @@ void PrinterWebView::show_sidebar_printers_view()
         update_sidebar_scrollbar(
             dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel),
             m_sidebar_printer_scroll_track,
-            m_sidebar_printer_scroll_thumb,
             this);
     });
     Layout();
@@ -3324,34 +3333,8 @@ void PrinterWebView::show_sidebar_add_printer_view()
         auto_list->SetSizer(auto_list_sizer);
         auto_list_row->Add(auto_list, 1, wxEXPAND);
 
-        auto *scroll_track = new wxPanel(m_sidebar_add_printer_panel, wxID_ANY);
+        auto *scroll_track = new SidebarScrollbar(m_sidebar_add_printer_panel);
         m_auto_connect_scroll_track = scroll_track;
-        scroll_track->SetMinSize(wxSize(FromDIP(8), -1));
-        scroll_track->SetMaxSize(wxSize(FromDIP(8), -1));
-        scroll_track->SetBackgroundStyle(wxBG_STYLE_PAINT);
-        scroll_track->Bind(wxEVT_PAINT, [scroll_track](wxPaintEvent &) {
-            wxAutoBufferedPaintDC raw_dc(scroll_track);
-            wxGCDC dc(raw_dc);
-            dc.SetBackground(wxBrush(scroll_track->GetParent()->GetBackgroundColour()));
-            dc.Clear();
-            dc.SetPen(*wxTRANSPARENT_PEN);
-        });
-        auto *scroll_thumb = new wxPanel(scroll_track, wxID_ANY);
-        m_auto_connect_scroll_thumb = scroll_thumb;
-        scroll_thumb->SetBackgroundStyle(wxBG_STYLE_PAINT);
-        scroll_thumb->Bind(wxEVT_PAINT, [scroll_thumb](wxPaintEvent &) {
-            wxAutoBufferedPaintDC raw_dc(scroll_thumb);
-            wxGCDC dc(raw_dc);
-            dc.SetBackground(wxBrush(scroll_thumb->GetParent()->GetBackgroundColour()));
-            dc.Clear();
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(wxColour("#7A8088")));
-            const wxSize sz = scroll_thumb->GetClientSize();
-            const int inset = scroll_thumb->FromDIP(1);
-            const int width = (std::max)(scroll_thumb->FromDIP(1), sz.GetWidth() - inset * 2);
-            const int height = (std::max)(scroll_thumb->FromDIP(1), sz.GetHeight() - inset * 2);
-            dc.DrawRoundedRectangle(inset, inset, width, height, (std::min)(width, height) / 2.0);
-        });
         auto_list_row->Add(scroll_track, 0, wxEXPAND | wxLEFT, FromDIP(4));
 
         auto rebuild_auto_cards = [this, auto_list, auto_list_sizer, k_text, k_muted, k_card, k_border]() {
@@ -3407,29 +3390,7 @@ void PrinterWebView::show_sidebar_add_printer_view()
         };
         rebuild_auto_cards();
         auto update_custom_scrollbar = [this]() {
-            if (m_auto_connect_list_window == nullptr || m_auto_connect_scroll_track == nullptr ||
-                m_auto_connect_scroll_thumb == nullptr)
-                return;
-            int x = 0, y = 0;
-            m_auto_connect_list_window->GetViewStart(&x, &y);
-            int ux = 0, uy = 0;
-            m_auto_connect_list_window->GetScrollPixelsPerUnit(&ux, &uy);
-            const int content_height = m_auto_connect_list_window->GetVirtualSize().GetHeight();
-            const int viewport_height = m_auto_connect_list_window->GetClientSize().GetHeight();
-            const int track_height = m_auto_connect_scroll_track->GetClientSize().GetHeight();
-            if (content_height <= viewport_height || track_height <= 0) {
-                m_auto_connect_scroll_track->Hide();
-                return;
-            }
-            m_auto_connect_scroll_track->Show();
-            const int thumb_height = (std::max)(FromDIP(28), track_height * viewport_height / content_height);
-            const int max_scroll_px = (std::max)(1, content_height - viewport_height);
-            const int scroll_px = y * uy;
-            const int thumb_y = (track_height - thumb_height) * scroll_px / max_scroll_px;
-            m_auto_connect_scroll_thumb->SetSize(FromDIP(4), thumb_height);
-            m_auto_connect_scroll_thumb->SetPosition(wxPoint(FromDIP(2), thumb_y));
-            m_auto_connect_scroll_track->Refresh();
-            m_auto_connect_scroll_thumb->Refresh();
+            update_sidebar_scrollbar(m_auto_connect_list_window, m_auto_connect_scroll_track, this);
         };
         auto on_scroll = [update_custom_scrollbar](wxScrollWinEvent &evt) {
             evt.Skip();
@@ -3958,7 +3919,7 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         scrolled->FitInside();
         scrolled->SetMinSize(wxSize(-1, FromDIP(330)));
         scrolled->SetMaxSize(wxSize(-1, FromDIP(330)));
-        update_sidebar_scrollbar(scrolled, m_sidebar_printer_scroll_track, m_sidebar_printer_scroll_thumb, this);
+        update_sidebar_scrollbar(scrolled, m_sidebar_printer_scroll_track, this);
     }
     if (m_sidebar_printer_list_container != nullptr)
         m_sidebar_printer_list_container->Layout();

@@ -164,7 +164,6 @@ private:
     wxPanel *m_sidebar_user_avatar_panel{ nullptr };
     wxBitmap m_sidebar_user_avatar_bitmap;
     wxPanel *m_auto_connect_scroll_track{ nullptr };
-    wxPanel *m_auto_connect_scroll_thumb{ nullptr };
     wxScrolledWindow *m_auto_connect_list_window{ nullptr };
     std::vector<BBLocalMachine> m_discovered_moonraker_printers;
     bool m_lan_scan_in_progress{ false };
@@ -173,7 +172,6 @@ private:
     wxPanel *m_sidebar_printer_list_panel{ nullptr };
     wxPanel *m_sidebar_printer_list_container{ nullptr };
     wxPanel *m_sidebar_printer_scroll_track{ nullptr };
-    wxPanel *m_sidebar_printer_scroll_thumb{ nullptr };
     wxBoxSizer *m_sidebar_printer_list_sizer{ nullptr };
     wxString m_sidebar_printer_list_signature;
     wxPanel *m_sidebar_add_printer_panel{ nullptr };
