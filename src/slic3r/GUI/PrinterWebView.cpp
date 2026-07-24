@@ -6097,7 +6097,6 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
                 Http::get(url)
                     .timeout_connect(5)
                     .timeout_max(30)
-                    .size_limit(100 * 1024 * 1024)
                     .on_complete([&](std::string response, unsigned http_status) {
                         body = std::move(response);
                         status = http_status;
