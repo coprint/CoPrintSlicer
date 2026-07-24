@@ -100,6 +100,35 @@ static bool set_text_if_changed(wxStaticText *label, const wxString &text)
     return true;
 }
 
+static void update_sidebar_scrollbar(wxScrolledWindow *scrolled, wxPanel *track, wxPanel *thumb, wxWindow *dip_source)
+{
+    if (scrolled == nullptr || track == nullptr || thumb == nullptr || dip_source == nullptr)
+        return;
+
+    int x = 0, y = 0;
+    scrolled->GetViewStart(&x, &y);
+    int ux = 0, uy = 0;
+    scrolled->GetScrollPixelsPerUnit(&ux, &uy);
+
+    const int content_height = scrolled->GetVirtualSize().GetHeight();
+    const int viewport_height = scrolled->GetClientSize().GetHeight();
+    const int track_height = track->GetClientSize().GetHeight();
+    if (content_height <= viewport_height || track_height <= 0 || uy <= 0) {
+        track->Hide();
+        return;
+    }
+
+    track->Show();
+    const int thumb_height = (std::max)(dip_source->FromDIP(34), track_height * viewport_height / content_height);
+    const int max_scroll_px = (std::max)(1, content_height - viewport_height);
+    const int scroll_px = y * uy;
+    const int thumb_y = (track_height - thumb_height) * scroll_px / max_scroll_px;
+    thumb->SetSize(dip_source->FromDIP(6), thumb_height);
+    thumb->SetPosition(wxPoint(dip_source->FromDIP(1), thumb_y));
+    track->Refresh();
+    thumb->Refresh();
+}
+
 static bool looks_like_network_identifier(const std::string &value)
 {
     if (value.empty())
@@ -1737,17 +1766,81 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     m_sidebar_add_printer_panel->Hide();
     preview_menu_sizer->Add(m_sidebar_add_printer_panel, 1, wxEXPAND);
 
-    m_sidebar_printer_list_panel = new wxScrolledWindow(m_sidebar_root_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
+    m_sidebar_printer_list_container = new wxPanel(m_sidebar_root_panel, wxID_ANY);
+    m_sidebar_printer_list_container->SetBackgroundColour(wxColour("#2A2C2E"));
+    auto *printer_list_row = new wxBoxSizer(wxHORIZONTAL);
+
+    m_sidebar_printer_list_panel = new wxScrolledWindow(m_sidebar_printer_list_container, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
     m_sidebar_printer_list_panel->SetBackgroundColour(wxColour("#2A2C2E"));
     m_sidebar_printer_list_panel->SetMinSize(wxSize(-1, FromDIP(330)));
     m_sidebar_printer_list_panel->SetMaxSize(wxSize(-1, FromDIP(330)));
     if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel)) {
         scrolled->SetScrollRate(0, FromDIP(8));
-        scrolled->ShowScrollbars(wxSHOW_SB_NEVER, wxSHOW_SB_DEFAULT);
+        scrolled->ShowScrollbars(wxSHOW_SB_NEVER, wxSHOW_SB_NEVER);
     }
     m_sidebar_printer_list_sizer = new wxBoxSizer(wxVERTICAL);
     m_sidebar_printer_list_panel->SetSizer(m_sidebar_printer_list_sizer);
-    m_sidebar_printer_list_panel->Hide();
+    printer_list_row->Add(m_sidebar_printer_list_panel, 1, wxEXPAND);
+
+    m_sidebar_printer_scroll_track = new wxPanel(m_sidebar_printer_list_container, wxID_ANY);
+    m_sidebar_printer_scroll_track->SetMinSize(wxSize(FromDIP(8), -1));
+    m_sidebar_printer_scroll_track->SetMaxSize(wxSize(FromDIP(8), -1));
+    m_sidebar_printer_scroll_track->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_sidebar_printer_scroll_track->Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
+        wxAutoBufferedPaintDC dc(m_sidebar_printer_scroll_track);
+        dc.SetBackground(wxBrush(m_sidebar_printer_scroll_track->GetParent()->GetBackgroundColour()));
+        dc.Clear();
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour("#34373A")));
+        const wxSize sz = m_sidebar_printer_scroll_track->GetClientSize();
+        dc.DrawRoundedRectangle(FromDIP(2), 0, FromDIP(4), sz.GetHeight(), FromDIP(2));
+    });
+
+    m_sidebar_printer_scroll_thumb = new wxPanel(m_sidebar_printer_scroll_track, wxID_ANY);
+    m_sidebar_printer_scroll_thumb->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_sidebar_printer_scroll_thumb->Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
+        wxAutoBufferedPaintDC dc(m_sidebar_printer_scroll_thumb);
+        dc.SetBackground(wxBrush(m_sidebar_printer_scroll_thumb->GetParent()->GetBackgroundColour()));
+        dc.Clear();
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour("#7A8088")));
+        const wxSize sz = m_sidebar_printer_scroll_thumb->GetClientSize();
+        dc.DrawRoundedRectangle(0, 0, sz.GetWidth(), sz.GetHeight(), sz.GetWidth() / 2.0);
+    });
+    printer_list_row->Add(m_sidebar_printer_scroll_track, 0, wxEXPAND | wxLEFT, FromDIP(4));
+
+    auto update_printer_scrollbar = [this]() {
+        update_sidebar_scrollbar(
+            dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel),
+            m_sidebar_printer_scroll_track,
+            m_sidebar_printer_scroll_thumb,
+            this);
+    };
+    auto on_printer_scroll = [update_printer_scrollbar](wxScrollWinEvent &evt) {
+        evt.Skip();
+        update_printer_scrollbar();
+    };
+    if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel)) {
+        scrolled->Bind(wxEVT_SCROLLWIN_TOP, on_printer_scroll);
+        scrolled->Bind(wxEVT_SCROLLWIN_BOTTOM, on_printer_scroll);
+        scrolled->Bind(wxEVT_SCROLLWIN_LINEUP, on_printer_scroll);
+        scrolled->Bind(wxEVT_SCROLLWIN_LINEDOWN, on_printer_scroll);
+        scrolled->Bind(wxEVT_SCROLLWIN_PAGEUP, on_printer_scroll);
+        scrolled->Bind(wxEVT_SCROLLWIN_PAGEDOWN, on_printer_scroll);
+        scrolled->Bind(wxEVT_SCROLLWIN_THUMBTRACK, on_printer_scroll);
+        scrolled->Bind(wxEVT_SCROLLWIN_THUMBRELEASE, on_printer_scroll);
+        scrolled->Bind(wxEVT_MOUSEWHEEL, [update_printer_scrollbar](wxMouseEvent &evt) {
+            evt.Skip();
+            update_printer_scrollbar();
+        });
+        scrolled->Bind(wxEVT_SIZE, [update_printer_scrollbar](wxSizeEvent &evt) {
+            evt.Skip();
+            update_printer_scrollbar();
+        });
+    }
+
+    m_sidebar_printer_list_container->SetSizer(printer_list_row);
+    m_sidebar_printer_list_container->Hide();
 
     auto add_sidebar_nav_row = [this](wxWindow *parent,
                                       wxBoxSizer *parent_sizer,
@@ -1793,7 +1886,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
                             else
                                 show_sidebar_printers_view();
                         });
-    m_sidebar_root_sizer->Add(m_sidebar_printer_list_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(3));
+    m_sidebar_root_sizer->Add(m_sidebar_printer_list_container, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(3));
     add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("System Upgrade"), "monitor_upgrade_online",
                         [this]() { select_tab(PrinterWebViewTab::Update); });
     auto *sidebar_divider = new wxPanel(m_sidebar_root_panel, wxID_ANY);
@@ -2980,6 +3073,8 @@ void PrinterWebView::show_sidebar_root_view()
 {
     if (m_sidebar_root_panel != nullptr)
         m_sidebar_root_panel->Show();
+    if (m_sidebar_printer_list_container != nullptr)
+        m_sidebar_printer_list_container->Hide();
     if (m_sidebar_printer_list_panel != nullptr)
         m_sidebar_printer_list_panel->Hide();
     if (m_sidebar_add_printer_panel != nullptr)
@@ -3107,6 +3202,8 @@ void PrinterWebView::show_sidebar_printers_view()
 {
     if (m_sidebar_root_panel != nullptr)
         m_sidebar_root_panel->Show();
+    if (m_sidebar_printer_list_container != nullptr)
+        m_sidebar_printer_list_container->Show();
     if (m_sidebar_printer_list_panel != nullptr)
         m_sidebar_printer_list_panel->Show();
     if (m_sidebar_add_printer_panel != nullptr)
@@ -3124,6 +3221,13 @@ void PrinterWebView::show_sidebar_printers_view()
             chev->SetLabelText(wxString::FromUTF8("\xE2\x8C\x84"));
     }
     rebuild_sidebar_printer_list();
+    CallAfter([this]() {
+        update_sidebar_scrollbar(
+            dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel),
+            m_sidebar_printer_scroll_track,
+            m_sidebar_printer_scroll_thumb,
+            this);
+    });
     Layout();
 }
 
@@ -3134,6 +3238,8 @@ void PrinterWebView::show_sidebar_add_printer_view()
 
     if (m_sidebar_root_panel != nullptr)
         m_sidebar_root_panel->Hide();
+    if (m_sidebar_printer_list_container != nullptr)
+        m_sidebar_printer_list_container->Hide();
     if (m_sidebar_printer_list_panel != nullptr)
         m_sidebar_printer_list_panel->Hide();
     m_sidebar_add_printer_panel->Show();
@@ -3848,7 +3954,10 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         scrolled->FitInside();
         scrolled->SetMinSize(wxSize(-1, FromDIP(330)));
         scrolled->SetMaxSize(wxSize(-1, FromDIP(330)));
+        update_sidebar_scrollbar(scrolled, m_sidebar_printer_scroll_track, m_sidebar_printer_scroll_thumb, this);
     }
+    if (m_sidebar_printer_list_container != nullptr)
+        m_sidebar_printer_list_container->Layout();
     if (m_sidebar_printer_list_panel->GetParent() != nullptr)
         m_sidebar_printer_list_panel->GetParent()->Layout();
 }

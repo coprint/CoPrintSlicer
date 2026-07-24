@@ -171,6 +171,9 @@ private:
     bool m_lan_rescan_requested{ false };
     std::shared_ptr<std::atomic_bool> m_lan_scan_cancel_token;
     wxPanel *m_sidebar_printer_list_panel{ nullptr };
+    wxPanel *m_sidebar_printer_list_container{ nullptr };
+    wxPanel *m_sidebar_printer_scroll_track{ nullptr };
+    wxPanel *m_sidebar_printer_scroll_thumb{ nullptr };
     wxBoxSizer *m_sidebar_printer_list_sizer{ nullptr };
     wxString m_sidebar_printer_list_signature;
     wxPanel *m_sidebar_add_printer_panel{ nullptr };
