@@ -6116,10 +6116,24 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
                 if (lifetime.expired())
                     return;
 
-                if (!error.empty() || status >= 400 || body.empty()) {
+                if (!error.empty() || status == 0 || status >= 400) {
                     BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to download printer log from " << url
                                              << ", status=" << status << ", error=" << error;
-                    wxMessageBox("Failed to download the printer log file.", "Export Log", wxOK | wxICON_ERROR, this);
+                    wxString reason;
+                    if (!error.empty())
+                        reason = wxString::FromUTF8(error);
+                    else if (status != 0)
+                        reason = wxString::Format("HTTP %u", status);
+                    else
+                        reason = "No response from printer";
+
+                    wxMessageBox(
+                        wxString::Format("Failed to download the printer log file.\n\nURL: %s\nReason: %s",
+                                         wxString::FromUTF8(url),
+                                         reason),
+                        "Export Log",
+                        wxOK | wxICON_ERROR,
+                        this);
                     return;
                 }
 
