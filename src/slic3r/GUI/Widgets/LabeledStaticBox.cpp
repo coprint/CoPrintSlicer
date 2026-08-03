@@ -98,6 +98,14 @@ void LabeledStaticBox::SetBorderColor(StateColor const &color)
     Refresh();
 }
 
+void LabeledStaticBox::SetTextColor(StateColor const &color)
+{
+    text_color = color;
+    state_handler.update_binds();
+    SetForegroundColour(text_color.colorForStates(state_handler.states()));
+    Refresh();
+}
+
 void LabeledStaticBox::SetFont(wxFont set_font)
 {
     m_font = set_font;

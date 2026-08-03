@@ -177,6 +177,11 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
 
             // Resolve selected agent: use config value if valid, otherwise fall back to default
             std::string selected_agent = m_config->opt_string("printer_agent");
+            const std::string printer_model = m_config->opt_string("printer_model");
+            const bool is_coprint_printer = boost::icontains(printer_model, "Co Print") || boost::icontains(printer_model, "CoPrint");
+            if (is_coprint_printer)
+                selected_agent = COPRINT_PRINTER_AGENT_ID;
+
             auto it = std::find_if(agents.begin(), agents.end(), [&selected_agent](const auto& a) { return a.id == selected_agent; });
             if (it == agents.end()) {
                 selected_agent = ORCA_PRINTER_AGENT_ID;
@@ -833,6 +838,16 @@ void PhysicalPrinterDialog::update_printer_agent_type()
     const std::string current_agent = m_config->opt_string("printer_agent");
 
     auto agents = NetworkAgentFactory::get_registered_printer_agents();
+    const std::string printer_model = m_config->opt_string("printer_model");
+    if (boost::icontains(printer_model, "Co Print") || boost::icontains(printer_model, "CoPrint")) {
+        for (size_t i = 0; i < agents.size(); ++i) {
+            if (agents[i].id == COPRINT_PRINTER_AGENT_ID) {
+                agent_choice->set_value(i);
+                return;
+            }
+        }
+    }
+
     for (size_t i = 0; i < agents.size(); ++i) {
         if (agents[i].id == current_agent) {
             agent_choice->set_value(i);

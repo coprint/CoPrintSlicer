@@ -1,0 +1,15 @@
+{
+	"type": "process",
+	"name": "0.08mm Optimal @CP Quadro 0.2",
+	"inherits": "0.08mm High Quality @CP Quadro 0.2",
+	"from": "system",
+	"setting_id": "CoPrintQuadro02Optimal008",
+	"instantiation": "true",
+	"default_acceleration": [
+		"6000"
+	],
+	"sparse_infill_pattern": "alignedrectilinear",
+	"compatible_printers": [
+		"Co Print Quadro 0.2 nozzle"
+	]
+}

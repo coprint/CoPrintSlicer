@@ -11,6 +11,8 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <algorithm>
+#include <cctype>
 
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/fstream.hpp>
@@ -188,6 +190,20 @@ private:
 /*special transform*/
 static std::string _parse_printer_type(const std::string& type_str)
 {
+    if (type_str.empty())
+        return "Co_Print_ChromaSet";
+
+    std::string normalized = type_str;
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (normalized.find("chromaset") != std::string::npos ||
+        normalized.find("chroma set") != std::string::npos)
+        return "Co_Print_ChromaSet";
+    if (normalized.find("quadro") != std::string::npos)
+        return "Co_Print_Quadro";
+    if (normalized.find("moonraker") != std::string::npos)
+        return "Co_Print_ChromaSet";
+
     if (type_str.compare("3DPrinter-X1") == 0)
     {
         return "BL-P002";
@@ -213,8 +229,8 @@ static std::string _parse_printer_type(const std::string& type_str)
         }
     }
 
-    BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << " Unsupported printer type: " << type_str;
-    return type_str;
+    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << " Unsupported printer type, falling back to Co_Print_ChromaSet: " << type_str;
+    return "Co_Print_ChromaSet";
 }
 
 };// namespace Slic3r

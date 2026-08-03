@@ -8,6 +8,12 @@ This profile uses a custom CoPrint PEI build plate:
 
 The texture SVG is based on the PEI sheet artwork with outer stroke lines disabled and logo opacity strengthened for slicer visibility.
 
+Default printable contour:
+
+- All Co Print machine presets should use the tuned Quadro PEI contour stored in their `printable_area`.
+- The contour is based on a 300 mm Y-axis plate and intentionally follows the rounded/grooved STL outline instead of a simple `0x0, 300x0, 300x300, 0x300` rectangle.
+- Do not replace it with a plain square: the square makes dark edge artifacts visible around the physical bed model.
+
 To regenerate the PNG:
 
 ```powershell

@@ -45,6 +45,7 @@ function HandleModelList( pVal )
 		return;
 
 	pModel=pVal['model'];
+	pModel = pModel.filter(i => i.vendor === "Co Print");
 
 	// ORCA ensure list correctly ordered
 	pModel = pModel.sort((a, b)=>(a["vendor"].localeCompare(b["vendor"])))

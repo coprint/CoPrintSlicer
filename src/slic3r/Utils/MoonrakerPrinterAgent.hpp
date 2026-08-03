@@ -6,9 +6,13 @@
 
 #include <memory>
 #include <mutex>
+#include <condition_variable>
+#include <map>
 #include <set>
 #include <string>
 #include <thread>
+#include <vector>
+#include <atomic>
 
 #include <nlohmann/json.hpp>
 
@@ -71,6 +75,11 @@ public:
     // Pull-mode agent (on-demand filament sync)
     FilamentSyncMode get_filament_sync_mode() const override { return FilamentSyncMode::pull; }
     bool fetch_filament_info(std::string dev_id) override;
+
+    // Use the existing Moonraker websocket when HTTP connect is saturated/unavailable.
+    bool list_gcode_files(nlohmann::json& files_out, std::string& error, int timeout_ms = 20000);
+    bool fetch_gcode_metadata(const std::string& filename, nlohmann::json& metadata_out, std::string& error, int timeout_ms = 15000);
+    bool is_websocket_connected() const { return ws_connected.load(); }
 
 protected:
     struct MoonrakerDeviceInfo
@@ -141,6 +150,12 @@ private:
     void handle_ws_message(const std::string& dev_id, const std::string& payload);
     void update_status_cache(const nlohmann::json& updates);
     nlohmann::json build_print_payload_locked() const;
+    bool request_over_websocket(const std::string& method,
+                                const nlohmann::json& params,
+                                nlohmann::json& result_out,
+                                std::string& error,
+                                int timeout_ms);
+    void enqueue_websocket_message(std::string message);
 
     // Print control helpers
     int pause_print(const std::string& dev_id);
@@ -191,13 +206,27 @@ private:
     mutable std::recursive_mutex payload_mutex;
     nlohmann::json     status_cache;
 
-    std::atomic<int>       next_jsonrpc_id{1};
+    std::atomic<int>       next_jsonrpc_id{100};
     std::set<std::string>  available_objects;  // Track for feature detection
 
     std::atomic<bool>   ws_stop{false};
     std::atomic<bool>   ws_reconnect_requested{false};  // Flag to trigger reconnection
+    std::atomic<bool>   ws_connected{false};
     std::atomic<uint64_t> ws_last_emit_ms{0};
     std::thread         ws_thread;
+
+    mutable std::mutex              ws_outbound_mutex;
+    std::vector<std::string>        ws_outbound;
+    struct PendingWsRpc {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        bool                    done{false};
+        bool                    ok{false};
+        nlohmann::json          result;
+        std::string             error;
+    };
+    mutable std::mutex                                      pending_ws_rpc_mutex;
+    std::map<int, std::shared_ptr<PendingWsRpc>>            pending_ws_rpcs;
 
     // Throttling configuration for WebSocket updates
     // Critical changes (state transitions) dispatch immediately; telemetry is throttled

@@ -454,9 +454,13 @@ wxBitmap create_scaled_bitmap(  const std::string& bmp_name_in,
     }
 
     if (bmp == nullptr) {
-        // Neither SVG nor PNG has been found, raise error
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Could not load bitmap: " << bmp_name;
-        throw Slic3r::RuntimeError("Could not load bitmap: " + bmp_name);
+        const unsigned fallback_size = height != 0 ? height : (width != 0 ? width : (unsigned)px_cnt);
+        wxBitmap fallback = cache.mkclear(fallback_size, fallback_size);
+#ifdef __WXMSW__
+        fallback.SetScaleFactor(win ? win->GetDPIScaleFactor() : (wxWindow::FromDIP(100, nullptr) / 100.0));
+#endif
+        return fallback;
     }
 
 #ifdef __WXMSW__
@@ -478,9 +482,13 @@ wxBitmap create_scaled_bitmap2(const std::string& bmp_name_in, Slic3r::GUI::Bitm
 
     wxBitmap* bmp = cache.load_svg2(bmp_name, width, height, grayscale, false, array_new_color, resize ? em_unit(win) * 0.1f : 0.f);
     if (bmp == nullptr) {
-        // No SVG found
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << "Could not load bitmap: " << bmp_name;
-        throw Slic3r::RuntimeError("Could not load bitmap: " + bmp_name);
+        const unsigned fallback_size = height != 0 ? height : (width != 0 ? width : (unsigned)px_cnt);
+        wxBitmap fallback = cache.mkclear(fallback_size, fallback_size);
+#ifdef __WXMSW__
+        fallback.SetScaleFactor(win ? win->GetDPIScaleFactor() : (wxWindow::FromDIP(100, nullptr) / 100.0));
+#endif
+        return fallback;
     }
 #ifdef __WXMSW__
     // ORCA MSW needs to set scale factor for bitmaps loaded from cache because they arent auto scaled by wxBitmapBundle like bitmaps

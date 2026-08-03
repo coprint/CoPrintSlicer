@@ -150,11 +150,19 @@ struct MoonrakerModelFileView
 class CloudTaskManagerPage : public wxPanel
 {
 public:
+    enum class MediaPresentation {
+        Combined,
+        TimelapseOnly,
+        ModelOnly
+    };
+
     CloudTaskManagerPage(wxWindow* parent);
+    CloudTaskManagerPage(wxWindow* parent, MediaPresentation presentation);
     ~CloudTaskManagerPage();
 
     void update_page();
     void refresh_user_device(bool clear = false);
+    void set_media_presentation(MediaPresentation presentation);
     std::string utc_time_to_date(std::string utc_time);
     bool Show(bool show);
     void update_page_number();
@@ -183,6 +191,7 @@ private:
     bool                        device_name_big{ true };
     bool                        device_state_big{ true };
     bool                        device_send_time{ true };
+    MediaPresentation           m_media_presentation{ MediaPresentation::Combined };
     bool                        m_media_timelapse_mode{ false };
     int                         m_timelapse_filter{ 0 };
 

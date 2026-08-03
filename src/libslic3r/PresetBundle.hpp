@@ -390,6 +390,10 @@ public:
     void                        load_config_model(const std::string &name, DynamicPrintConfig config, Semver file_version = Semver())
         { this->load_config_file_config(name, true, std::move(config), file_version); }
 
+    // CoPrint: remap foreign (BBL/etc.) printer/filament/process presets to Co Print identity
+    // after opening an external project, while preserving filament colors and slot count.
+    void                        enforce_coprint_identity();
+
     // Load an external config file containing the print, filament and printer presets.
     // Instead of a config file, a G-code may be loaded containing the full set of parameters.
     // In the future the configuration will likely be read from an AMF file as well.

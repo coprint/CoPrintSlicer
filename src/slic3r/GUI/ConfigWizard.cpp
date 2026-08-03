@@ -63,6 +63,17 @@ namespace GUI {
 using Config::Snapshot;
 using Config::SnapshotDB;
 
+static bool is_coprint_vendor_bundle(const std::string& vendor_id)
+{
+    return boost::iequals(vendor_id, "Co Print");
+}
+
+static std::string coprint_model_display_name(const std::string& model_name)
+{
+    static const std::string prefix = "Co Print ";
+    return boost::algorithm::starts_with(model_name, prefix) ? model_name.substr(prefix.size()) : model_name;
+}
+
 
 // Configuration data structures extensions needed for the wizard
 //BBS: set BBL as default
@@ -145,6 +156,8 @@ BundleMap BundleMap::load()
             //BBS: add json logic for vendor bundle
             if (Slic3r::is_json_file(dir_entry.path().string())) {
                 std::string id = dir_entry.path().stem().string();  // stem() = filename() without the trailing ".json" part
+                if (!is_coprint_vendor_bundle(id))
+                    continue;
 
                 // Don't load this bundle if we've already loaded it.
                 if (res.find(id) != res.end()) { continue; }
@@ -252,7 +265,8 @@ PrinterPicker::PrinterPicker(wxWindow *parent, const VendorProfile &vendor, wxSt
                 load_bitmap(Slic3r::var(PRINTER_PLACEHOLDER), bitmap, bitmap_width);
             }
         }
-        auto *title = new wxStaticText(this, wxID_ANY, from_u8(model.name), wxDefaultPosition, wxDefaultSize, wxALIGN_LEFT);
+        const std::string display_name = is_coprint_vendor_bundle(vendor.id) ? coprint_model_display_name(model.name) : model.name;
+        auto *title = new wxStaticText(this, wxID_ANY, from_u8(display_name), wxDefaultPosition, wxDefaultSize, wxALIGN_LEFT);
         title->SetFont(font_name);
         const int wrap_width = std::max((int)MODEL_MIN_WRAP, bitmap_width);
         title->Wrap(wrap_width);
@@ -1841,6 +1855,14 @@ void ConfigWizard::priv::load_vendors()
     AppConfig *app_config = wxGetApp().app_config;
     if (! app_config->legacy_datadir()) {
         appconfig_new.set_vendors(*app_config);
+        auto coprint_vendors = appconfig_new.vendors();
+        for (auto it = coprint_vendors.begin(); it != coprint_vendors.end();) {
+            if (!is_coprint_vendor_bundle(it->first))
+                it = coprint_vendors.erase(it);
+            else
+                ++it;
+        }
+        appconfig_new.set_vendors(std::move(coprint_vendors));
     } else {
         // In case of legacy datadir, try to guess the preference based on the printer preset files that are present
         //BBS: change directories by design
@@ -1877,6 +1899,9 @@ void ConfigWizard::priv::load_vendors()
 				    	const PresetCollection &materials = bundle.second.preset_bundle->materials(technology);
 				    	const Preset           *preset    = materials.find_preset(material_name);
                         if (preset != nullptr) {
+                            const std::string &vendor = (technology == ptFFF) ? Materials::get_filament_vendor(preset) : Materials::get_material_vendor(preset);
+                            if (!boost::iequals(vendor, "Co Print"))
+                                continue;
                             // Materal preset was found, mark it as installed.
                             section_new[preset->name] = "true";
                             ++ num_found;
@@ -1977,7 +2002,11 @@ void ConfigWizard::priv::update_materials(Technology technology)
         aliases_fff.clear();
         // Iterate filaments in all bundles
         for (const auto &pair : bundles) {
+            if (!is_coprint_vendor_bundle(pair.first))
+                continue;
             for (const auto &filament : pair.second.preset_bundle->filaments) {
+                if (!boost::iequals(Materials::get_filament_vendor(&filament), "Co Print"))
+                    continue;
                 // Check if filament is already added
                 if (filaments.containts(&filament))
 					continue;
@@ -2374,8 +2403,8 @@ bool ConfigWizard::priv::apply_config(AppConfig *app_config, PresetBundle *prese
         }
         return pt;
     };
-    // Prusa printers are considered first, then 3rd party.
-    if (preferred_pt = get_preferred_printer_technology("BBL", bundles.bbl_bundle());
+    // Default bundle printers are considered first, then additional vendors.
+    if (preferred_pt = get_preferred_printer_technology(PresetBundle::ORCA_DEFAULT_BUNDLE, bundles.bbl_bundle());
         preferred_pt == ptAny || (preferred_pt == ptSLA && suppress_sla_printer)) {
         for (const auto& bundle : bundles) {
             //BBS: set BBL as default
@@ -2496,8 +2525,8 @@ bool ConfigWizard::priv::apply_config(AppConfig *app_config, PresetBundle *prese
             variant.clear();
         return std::string();
     };
-    // Prusa printers are considered first, then 3rd party.
-    if (preferred_model = get_preferred_printer_model("BBL", bundles.bbl_bundle(), preferred_variant);
+    // Default bundle printers are considered first, then additional vendors.
+    if (preferred_model = get_preferred_printer_model(PresetBundle::ORCA_DEFAULT_BUNDLE, bundles.bbl_bundle(), preferred_variant);
         preferred_model.empty()) {
         for (const auto& bundle : bundles) {
             if (bundle.second.is_bbl_bundle) { continue; }
@@ -2505,6 +2534,22 @@ bool ConfigWizard::priv::apply_config(AppConfig *app_config, PresetBundle *prese
                 !preferred_model.empty())
                     break;
         }
+    }
+
+    if (const auto coprint_vendor = enabled_vendors.find("Co Print"); coprint_vendor != enabled_vendors.end()) {
+        const auto prefer_coprint_model = [&coprint_vendor, &preferred_model, &preferred_variant](const std::string& model_id) {
+            const auto model_it = coprint_vendor->second.find(model_id);
+            if (model_it == coprint_vendor->second.end() || model_it->second.empty())
+                return false;
+
+            preferred_model = model_id;
+            preferred_variant = *model_it->second.begin();
+            return true;
+        };
+
+        // On first setup, the selected Co Print product should become the active Prepare printer.
+        // If both are selected, keep Quadro as the primary default for this slicer.
+        prefer_coprint_model("Co Print Quadro") || prefer_coprint_model("Co Print ChromaSet");
     }
 
     // if unsaved changes was not cheched till this moment
@@ -2688,10 +2733,8 @@ ConfigWizard::ConfigWizard(wxWindow *parent)
     wxGetApp().UpdateDarkUI(p->btn_finish);
     wxGetApp().UpdateDarkUI(p->btn_cancel);
 
-    //BBS: add BBL as default
-    const auto bbl_it = p->bundles.find("BBL");
-    wxCHECK_RET(bbl_it != p->bundles.cend(), "Vendor BambooLab not found");
-    const VendorProfile * vendor_bbl = bbl_it->second.vendor_profile;
+    const auto default_bundle_it = p->bundles.find(PresetBundle::ORCA_DEFAULT_BUNDLE);
+    wxCHECK_RET(default_bundle_it != p->bundles.cend(), "Default vendor bundle not found");
     
     p->only_sla_mode = false;
     p->any_sla_selected = p->check_sla_selected();

@@ -1062,8 +1062,6 @@ void PresetUpdater::priv::check_installed_vendor_profiles() const
     const auto enabled_vendors = app_config->vendors();
 
     std::set<std::string> bundles;
-    // Orca: always install filament library
-    bundles.insert(PresetBundle::ORCA_FILAMENT_LIBRARY);
     for (auto &dir_entry : boost::filesystem::directory_iterator(rsrc_path)) {
         const auto &path = dir_entry.path();
         std::string file_path = path.string();

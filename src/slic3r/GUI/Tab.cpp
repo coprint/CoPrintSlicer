@@ -6502,11 +6502,13 @@ bool Tab::tree_sel_change_delayed(wxCommandEvent& event)
     //BBS: GUI refactor
     Page* page = nullptr;
     const auto sel_item = m_tabctrl->GetSelection();
+    if (sel_item < 0)
+        return false;
     // BBS: bold selection
     //OutputDebugStringA("tree_sel_change_delayed ");
     //OutputDebugStringA(m_title.c_str());
     m_tabctrl->SetItemBold(sel_item, true);
-    const auto selection = sel_item >= 0 ? m_tabctrl->GetItemText(sel_item) : "";
+    const auto selection = m_tabctrl->GetItemText(sel_item);
     //OutputDebugString(selection);
     //OutputDebugStringA("\n");
     for (auto p : m_pages)

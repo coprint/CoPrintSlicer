@@ -1,0 +1,14 @@
+{
+	"type": "process",
+	"name": "0.12mm Draft @CP Quadro 0.2",
+	"inherits": "0.06mm Fine @CP Quadro 0.2",
+	"from": "system",
+	"setting_id": "CoPrintQuadro02Draft012",
+	"instantiation": "true",
+	"layer_height": "0.12",
+	"support_bottom_z_distance": "0.12",
+	"support_top_z_distance": "0.12",
+	"compatible_printers": [
+		"Co Print Quadro 0.2 nozzle"
+	]
+}

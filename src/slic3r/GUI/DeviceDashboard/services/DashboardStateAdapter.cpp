@@ -99,6 +99,7 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
 
     if (auto* extruders = machine->GetExtderSystem()) {
         const int extruder_count = std::max(0, extruders->GetTotalExtderCount());
+        state.movement.available_tool_count = std::clamp(extruder_count, 1, MaxDashboardTools);
         for (int i = 0; i < MaxDashboardTools; ++i) {
             if (i >= extruder_count)
                 continue;

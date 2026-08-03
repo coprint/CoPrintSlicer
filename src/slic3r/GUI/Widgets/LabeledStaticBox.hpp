@@ -42,6 +42,8 @@ public:
 
     void SetBorderColor(StateColor const &color);
 
+    void SetTextColor(StateColor const &color);
+
     void SetFont(wxFont set_font);
 
     bool Enable(bool enable) override;

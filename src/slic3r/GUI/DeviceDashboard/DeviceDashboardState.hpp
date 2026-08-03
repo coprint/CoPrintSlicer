@@ -104,6 +104,7 @@ struct FilamentState {
 
 struct MovementState {
     int selected_tool{0};
+    int available_tool_count{MaxDashboardTools};
     double selected_distance_mm{1.0};
     int print_speed_percent{100};
     bool can_move{false};

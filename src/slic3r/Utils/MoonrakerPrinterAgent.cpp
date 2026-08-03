@@ -1360,6 +1360,94 @@ bool MoonrakerPrinterAgent::fetch_device_info(const std::string&   base_url,
     info.version          = result.value("moonraker_version", "");
     info.klippy_state     = result.value("klippy_state", "");
 
+    bool coprint_identity_found = false;
+    nlohmann::json coprint_json;
+    if (fetch_json(join_url(base_url, "/machine/coprint/info"), coprint_json)) {
+        nlohmann::json coprint_result = coprint_json.contains("result") ? coprint_json["result"] : coprint_json;
+        const std::string manufacturer = coprint_result.value("manufacturer", "");
+        const std::string model        = coprint_result.value("model", "");
+        const std::string device_name  = coprint_result.value("device_name", "");
+        const std::string printer_type = coprint_result.value("printer_type", "");
+        const std::string identity     = manufacturer + " " + model + " " + device_name + " " + printer_type;
+
+        if (!device_name.empty())
+            info.dev_name = device_name;
+
+        const bool is_coprint_brand =
+            boost::icontains(manufacturer, "Co Print") ||
+            boost::icontains(manufacturer, "CoPrint") ||
+            boost::icontains(manufacturer, "co-print");
+        const bool is_quadro =
+            boost::icontains(model, "Quadro") ||
+            boost::icontains(model, "quadorya") ||
+            boost::icontains(device_name, "Quadro") ||
+            boost::icontains(device_name, "quadorya") ||
+            boost::icontains(printer_type, "Quadro") ||
+            boost::icontains(identity, "quadorya");
+        const bool is_chromaset =
+            boost::icontains(model, "ChromaSet") ||
+            boost::icontains(model, "Chroma Set") ||
+            boost::icontains(model, "chromahead") ||
+            boost::icontains(device_name, "ChromaSet") ||
+            boost::icontains(device_name, "chromahead") ||
+            boost::icontains(printer_type, "ChromaSet");
+
+        // Prefer explicit model fields from /machine/coprint/info — do not require
+        // manufacturer when the model/device_name already identifies Quadro/ChromaSet.
+        if (is_quadro || (is_coprint_brand && boost::icontains(identity, "quadro"))) {
+            info.model_name = "Co Print Quadro";
+            info.model_id   = "Co_Print_Quadro";
+            info.dev_name   = "Co Print Quadro";
+            coprint_identity_found = true;
+        } else if (is_chromaset || (is_coprint_brand && (boost::icontains(identity, "chroma")))) {
+            info.model_name = "Co Print ChromaSet";
+            info.model_id   = "Co_Print_ChromaSet";
+            info.dev_name   = "Co Print ChromaSet";
+            coprint_identity_found = true;
+        }
+    }
+
+    if (!coprint_identity_found) {
+        nlohmann::json objects_json;
+        if (fetch_json(join_url(base_url, "/printer/objects/list"), objects_json)) {
+            nlohmann::json objects_result = objects_json.contains("result") ? objects_json["result"] : objects_json;
+            const auto &objects = objects_result.contains("objects") ? objects_result["objects"] : nlohmann::json();
+            if (objects.is_array()) {
+                const auto has_object = [&](const char *name) {
+                    return std::find(objects.begin(), objects.end(), std::string(name)) != objects.end();
+                };
+
+                // Older ChromaSet firmware does not expose /machine/coprint/info.
+                // It has a single real hotend object ("extruder") while Quadro exposes
+                // extruder1..extruder3 and also has an explicit CoPrint identity endpoint.
+                if (has_object("extruder1") || has_object("extruder2") || has_object("extruder3")) {
+                    info.model_name = "Co Print Quadro";
+                    info.model_id   = "Co_Print_Quadro";
+                    if (info.dev_name.empty() ||
+                        boost::iequals(info.dev_name, "CO-PRINT") ||
+                        boost::iequals(info.dev_name, "Unknown Printer") ||
+                        boost::iequals(info.dev_name, "Moonraker Printer") ||
+                        boost::icontains(info.dev_name, "quadorya") ||
+                        boost::icontains(info.dev_name, "Quadro")) {
+                        info.dev_name = "Co Print Quadro";
+                    }
+                    coprint_identity_found = true;
+                } else if (has_object("extruder") && !has_object("extruder1") && !has_object("extruder2") && !has_object("extruder3")) {
+                    info.model_name = "Co Print ChromaSet";
+                    info.model_id   = "Co_Print_ChromaSet";
+                    if (info.dev_name.empty() || boost::iequals(info.dev_name, "CO-PRINT") ||
+                        boost::iequals(info.dev_name, "Unknown Printer") ||
+                        boost::iequals(info.dev_name, "Moonraker Printer") ||
+                        boost::icontains(info.dev_name, "Quadro") ||
+                        boost::icontains(info.dev_name, "chroma")) {
+                        info.dev_name = "Co Print ChromaSet";
+                    }
+                    coprint_identity_found = true;
+                }
+            }
+        }
+    }
+
     return true;
 }
 
@@ -1642,36 +1730,113 @@ void MoonrakerPrinterAgent::announce_printhost_device()
         if (!ssdp_fn) {
             return;
         }
-        if (ssdp_announced_host == device_info.base_url && !ssdp_announced_id.empty()) {
-            return;
-        }
     }
 
-    // Use already-fetched device name if available, otherwise fetch from Moonraker
-    // Priority: 1) already known dev_name, 2) Moonraker hostname, 3) model name, 4) generic fallback
     std::string dev_name = device_info.dev_name;
-    if (dev_name.empty() || dev_name == device_info.dev_id) {
+    std::string model_id = device_info.model_id;
+    {
         MoonrakerDeviceInfo info;
         std::string         fetch_error;
         if (fetch_device_info(device_info.base_url, device_info.api_key, info, fetch_error) && !info.dev_name.empty()) {
             dev_name = info.dev_name;
-        } else {
-            dev_name = device_info.model_name.empty() ? "Moonraker Printer" : device_info.model_name;
+            if (!info.model_id.empty())
+                model_id = info.model_id;
         }
     }
 
-    const std::string model_id = device_info.model_id;
+    if (dev_name.empty() || dev_name == device_info.dev_id)
+        dev_name = device_info.model_name.empty() ? "Moonraker Printer" : device_info.model_name;
 
     if (auto* app_config = GUI::wxGetApp().app_config) {
         const std::string access_code = device_info.api_key.empty() ? "88888888" : device_info.api_key;
         app_config->set_str("access_code", device_info.dev_id, access_code);
         app_config->set_str("user_access_code", device_info.dev_id, access_code);
+
+        const bool has_stable_coprint_identity =
+            model_id == "Co_Print_ChromaSet" || model_id == "Co_Print_Quadro";
+        if (!device_info.dev_id.empty() && has_stable_coprint_identity) {
+            Slic3r::BBLocalMachine local_machine;
+            local_machine.dev_id       = device_info.dev_id;
+            local_machine.dev_ip       = device_info.dev_ip.empty() ? device_info.dev_id : device_info.dev_ip;
+            local_machine.dev_name     = dev_name;
+            local_machine.printer_type = model_id;
+            app_config->update_local_machine(local_machine);
+        }
+    }
+
+    // Keep the in-memory MachineObject in sync. update_local_machine above only
+    // writes AppConfig; the sidebar reads MachineObject::get_dev_name().
+    {
+        const std::string apply_dev_id = device_info.dev_id;
+        const std::string apply_name   = dev_name;
+        const std::string apply_type   = model_id;
+        QueueOnMainFn queue_fn;
+        {
+            std::lock_guard<std::recursive_mutex> lock(state_mutex);
+            queue_fn = queue_on_main_fn;
+        }
+        auto apply_identity = [apply_dev_id, apply_name, apply_type]() {
+            auto *dev_manager = GUI::wxGetApp().getDeviceManager();
+            if (dev_manager == nullptr || apply_dev_id.empty())
+                return;
+            MachineObject *obj = dev_manager->get_my_machine(apply_dev_id);
+            if (obj == nullptr)
+                obj = dev_manager->get_local_machine(apply_dev_id);
+            if (obj == nullptr)
+                return;
+
+            const std::string current = obj->get_dev_name();
+            const bool placeholder =
+                current.empty() ||
+                boost::iequals(current, "Unknown Printer") ||
+                boost::iequals(current, "Moonraker Printer") ||
+                boost::iequals(current, "Moonraker") ||
+                boost::iequals(current, "CO-PRINT") ||
+                current.find(':') != std::string::npos;
+            bool changed = false;
+            if (!apply_name.empty() && (placeholder || current != apply_name) &&
+                (placeholder || apply_type == "Co_Print_Quadro" || apply_type == "Co_Print_ChromaSet")) {
+                // Always replace placeholders; also replace hostname-like names with product names.
+                if (placeholder || boost::icontains(current, "quadorya") || boost::icontains(current, "chromahead")) {
+                    obj->set_dev_name(apply_name);
+                    changed = true;
+                }
+            }
+            if (!apply_type.empty() && obj->printer_type != apply_type) {
+                obj->printer_type = apply_type;
+                changed = true;
+            }
+            if (changed)
+                DeviceManager::update_local_machine(*obj);
+        };
+        if (queue_fn)
+            queue_fn(apply_identity);
+        else
+            apply_identity();
     }
 
     nlohmann::json payload;
     payload["dev_name"]     = dev_name;
     payload["dev_id"]       = device_info.dev_id;
-    payload["dev_ip"]       = device_info.dev_ip;
+    // Never announce an empty IP — that creates a second "Unknown" sidebar card.
+    std::string announce_ip = device_info.dev_ip;
+    if (announce_ip.empty())
+        announce_ip = device_info.dev_id;
+    if (announce_ip.empty() && !device_info.base_url.empty()) {
+        std::string host = device_info.base_url;
+        const auto scheme = host.find("://");
+        if (scheme != std::string::npos)
+            host = host.substr(scheme + 3);
+        const auto slash = host.find('/');
+        if (slash != std::string::npos)
+            host = host.substr(0, slash);
+        announce_ip = host;
+    }
+    if (announce_ip.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "MoonrakerPrinterAgent: skip SSDP announce with empty identity";
+        return;
+    }
+    payload["dev_ip"]       = announce_ip;
     payload["dev_type"]     = model_id.empty() ? dev_name : model_id;
     payload["dev_signal"]   = "0";
     payload["connect_type"] = "lan";
@@ -1844,6 +2009,7 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
             }
             ws.handshake(host_header, endpoint.target);
             ws.text(true);
+            ws_connected.store(true);
 
             // Send client identification
             nlohmann::json identify;
@@ -1928,6 +2094,24 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
 
             // Read loop
             while (!ws_stop.load()) {
+                // Flush outbound JSON-RPC requests (e.g. Print Models file list).
+                std::vector<std::string> outbound;
+                {
+                    std::lock_guard<std::mutex> lock(ws_outbound_mutex);
+                    outbound.swap(ws_outbound);
+                }
+                for (const auto& message : outbound) {
+                    beast::error_code write_ec;
+                    ws.write(net::buffer(message), write_ec);
+                    if (write_ec) {
+                        BOOST_LOG_TRIVIAL(warning) << "MoonrakerPrinterAgent: websocket write error: " << write_ec.message();
+                        connection_lost = true;
+                        break;
+                    }
+                }
+                if (connection_lost)
+                    break;
+
                 ws.next_layer().expires_after(std::chrono::seconds(2));
                 beast::flat_buffer buffer;
                 beast::error_code  ec;
@@ -1964,6 +2148,24 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
                 }
             }
 
+            ws_connected.store(false);
+            {
+                // Fail any RPCs waiting on this socket.
+                std::lock_guard<std::mutex> lock(pending_ws_rpc_mutex);
+                for (auto& entry : pending_ws_rpcs) {
+                    if (!entry.second)
+                        continue;
+                    std::lock_guard<std::mutex> pending_lock(entry.second->mutex);
+                    if (!entry.second->done) {
+                        entry.second->ok = false;
+                        entry.second->error = "WebSocket disconnected";
+                        entry.second->done = true;
+                        entry.second->cv.notify_all();
+                    }
+                }
+                pending_ws_rpcs.clear();
+            }
+
             beast::error_code ec;
             ws.close(websocket::close_code::normal, ec);
 
@@ -1973,6 +2175,7 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
             }
 
         } catch (const std::exception& e) {
+            ws_connected.store(false);
             BOOST_LOG_TRIVIAL(warning) << "MoonrakerPrinterAgent: websocket disconnected: " << e.what();
             connection_lost = true;
         }
@@ -2006,6 +2209,39 @@ void MoonrakerPrinterAgent::handle_ws_message(const std::string& dev_id, const s
     if (json.is_discarded()) {
         BOOST_LOG_TRIVIAL(warning) << "MoonrakerPrinterAgent: Invalid WebSocket message JSON";
         return;
+    }
+
+    // Fulfill pending request/response RPCs first (Print Models, metadata, etc.).
+    if (json.contains("id") && json["id"].is_number_integer()) {
+        const int id = json["id"].get<int>();
+        std::shared_ptr<PendingWsRpc> pending;
+        {
+            std::lock_guard<std::mutex> lock(pending_ws_rpc_mutex);
+            auto it = pending_ws_rpcs.find(id);
+            if (it != pending_ws_rpcs.end()) {
+                pending = it->second;
+                pending_ws_rpcs.erase(it);
+            }
+        }
+        if (pending) {
+            std::lock_guard<std::mutex> lock(pending->mutex);
+            if (json.contains("error")) {
+                pending->ok = false;
+                if (json["error"].is_object() && json["error"].contains("message") && json["error"]["message"].is_string())
+                    pending->error = json["error"]["message"].get<std::string>();
+                else
+                    pending->error = json["error"].dump();
+            } else {
+                pending->ok = true;
+                if (json.contains("result"))
+                    pending->result = json["result"];
+                else
+                    pending->result = nlohmann::json();
+            }
+            pending->done = true;
+            pending->cv.notify_all();
+            return;
+        }
     }
 
     bool updated     = false;
@@ -2626,6 +2862,95 @@ bool MoonrakerPrinterAgent::send_jsonrpc_command(const std::string&    base_url,
     return success;
 }
 
+void MoonrakerPrinterAgent::enqueue_websocket_message(std::string message)
+{
+    std::lock_guard<std::mutex> lock(ws_outbound_mutex);
+    ws_outbound.push_back(std::move(message));
+}
+
+bool MoonrakerPrinterAgent::request_over_websocket(const std::string& method,
+                                                   const nlohmann::json& params,
+                                                   nlohmann::json& result_out,
+                                                   std::string& error,
+                                                   int timeout_ms)
+{
+    if (!ws_connected.load()) {
+        error = "WebSocket not connected";
+        return false;
+    }
+
+    const int id = next_jsonrpc_id.fetch_add(1);
+    auto pending = std::make_shared<PendingWsRpc>();
+    {
+        std::lock_guard<std::mutex> lock(pending_ws_rpc_mutex);
+        pending_ws_rpcs[id] = pending;
+    }
+
+    nlohmann::json request;
+    request["jsonrpc"] = "2.0";
+    request["method"]  = method;
+    request["params"]  = params.is_null() ? nlohmann::json::object() : params;
+    request["id"]      = id;
+    enqueue_websocket_message(request.dump());
+
+    std::unique_lock<std::mutex> lock(pending->mutex);
+    const bool completed = pending->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&]() {
+        return pending->done;
+    });
+    if (!completed) {
+        {
+            std::lock_guard<std::mutex> map_lock(pending_ws_rpc_mutex);
+            pending_ws_rpcs.erase(id);
+        }
+        error = "WebSocket RPC timeout";
+        return false;
+    }
+    if (!pending->ok) {
+        error = pending->error.empty() ? "WebSocket RPC failed" : pending->error;
+        return false;
+    }
+
+    result_out = std::move(pending->result);
+    return true;
+}
+
+bool MoonrakerPrinterAgent::list_gcode_files(nlohmann::json& files_out, std::string& error, int timeout_ms)
+{
+    nlohmann::json params;
+    params["root"] = "gcodes";
+    nlohmann::json result;
+    if (!request_over_websocket("server.files.list", params, result, error, timeout_ms))
+        return false;
+    if (!result.is_array()) {
+        error = "Unexpected server.files.list result";
+        return false;
+    }
+    files_out = std::move(result);
+    return true;
+}
+
+bool MoonrakerPrinterAgent::fetch_gcode_metadata(const std::string& filename,
+                                                 nlohmann::json& metadata_out,
+                                                 std::string& error,
+                                                 int timeout_ms)
+{
+    if (filename.empty()) {
+        error = "Missing filename";
+        return false;
+    }
+    nlohmann::json params;
+    params["filename"] = filename;
+    nlohmann::json result;
+    if (!request_over_websocket("server.files.metadata", params, result, error, timeout_ms))
+        return false;
+    if (!result.is_object()) {
+        error = "Unexpected server.files.metadata result";
+        return false;
+    }
+    metadata_out = std::move(result);
+    return true;
+}
+
 void MoonrakerPrinterAgent::perform_connection_async(const std::string& dev_id, const std::string& base_url, const std::string& api_key, uint64_t generation)
 {
     auto is_stale = [&]() { return generation != connect_generation.load(); };
@@ -2654,6 +2979,10 @@ void MoonrakerPrinterAgent::perform_connection_async(const std::string& dev_id, 
                 return;
             }
             device_info.dev_name     = fetched_info.dev_name;
+            if (!fetched_info.model_name.empty())
+                device_info.model_name = fetched_info.model_name;
+            if (!fetched_info.model_id.empty())
+                device_info.model_id = fetched_info.model_id;
             device_info.version      = fetched_info.version;
             device_info.klippy_state = fetched_info.klippy_state;
         }

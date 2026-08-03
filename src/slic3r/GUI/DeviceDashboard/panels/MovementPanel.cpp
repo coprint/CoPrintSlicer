@@ -372,17 +372,44 @@ void set_button_active(Button* button, bool active, int8_t& cached_active, bool 
     const wxColour text = active ? DeviceUiStyle::accent() : DeviceUiStyle::text_primary();
 
     button->SetBorderColor(StateColor(
+        std::pair(wxColour(55, 58, 64), (int) StateColor::Disabled),
         std::pair(normal_border, (int) StateColor::Normal),
         std::pair(hover_border, (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
     button->SetTextColor(StateColor(
+        std::pair(wxColour(126, 132, 142), (int) StateColor::Disabled),
         std::pair(text, (int) StateColor::Normal),
         std::pair(active ? DeviceUiStyle::accent() : DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
     button->SetBackgroundColor(StateColor(
+        std::pair(wxColour(38, 41, 46), (int) StateColor::Disabled),
         std::pair(normal_bg, (int) StateColor::Normal),
         std::pair(hover_bg, (int) StateColor::Hovered),
         std::pair(pressed_bg, (int) StateColor::Pressed)));
+}
+
+void set_button_enabled(Button* button, bool enabled)
+{
+    if (button == nullptr)
+        return;
+
+    button->Enable(enabled);
+    button->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
+    button->SetBorderColor(StateColor(
+        std::pair(wxColour(55, 58, 64), (int) StateColor::Disabled),
+        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Normal),
+        std::pair(wxColour(82, 88, 98), (int) StateColor::Hovered),
+        std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
+    button->SetTextColor(StateColor(
+        std::pair(wxColour(126, 132, 142), (int) StateColor::Disabled),
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal),
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
+        std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
+    button->SetBackgroundColor(StateColor(
+        std::pair(wxColour(38, 41, 46), (int) StateColor::Disabled),
+        std::pair(DeviceUiStyle::control_background(), (int) StateColor::Normal),
+        std::pair(wxColour(53, 57, 64), (int) StateColor::Hovered),
+        std::pair(wxColour(35, 38, 44), (int) StateColor::Pressed)));
 }
 
 } // namespace
@@ -394,6 +421,11 @@ MovementPanel::MovementPanel(wxWindow* parent)
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Movement"));
+    m_frame->SetBorderColor(StateColor(
+        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Disabled),
+        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Normal),
+        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Hovered),
+        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Pressed)));
     m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
     wxWindow* content = m_frame->content_parent();
 
@@ -441,6 +473,8 @@ MovementPanel::MovementPanel(wxWindow* parent)
         m_tool_buttons[i] = make_tool_button(content, wxString::Format("T%d", i + 1));
         set_button_active(m_tool_buttons[i], i == 0, m_tool_button_active[i], true);
         m_tool_buttons[i]->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent&) {
+            if (i >= m_available_tool_count)
+                return;
             DeviceCommand command;
             command.kind = DeviceCommandKind::SelectTool;
             command.tool_index = i;
@@ -476,10 +510,13 @@ MovementPanel::MovementPanel(wxWindow* parent)
     center_btn->SetBackgroundColorNormal(*wxWHITE);
     center_btn->SetBackgroundColour(DeviceUiStyle::page_background());
     center_btn->SetCursor(wxCursor(wxCURSOR_HAND));
+    center_btn->SetCanFocus(false);
     center_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
         DeviceCommand command;
         command.kind = DeviceCommandKind::Home;
         dispatch(command);
+        if (m_center_button != nullptr)
+            m_center_button->Refresh();
     });
 
     controls->AddSpacer(FromDIP(20));
@@ -571,6 +608,7 @@ MovementPanel::MovementPanel(wxWindow* parent)
 
 void MovementPanel::apply_state(const MovementState& state)
 {
+    set_available_tool_count(state.available_tool_count);
     set_active_tool_button(state.selected_tool);
     set_active_distance_button(state.selected_distance_mm);
 
@@ -713,11 +751,34 @@ void MovementPanel::dispatch(DeviceCommand command) const
 
 void MovementPanel::set_active_tool_button(int tool_index)
 {
+    if (m_available_tool_count <= 0)
+        m_available_tool_count = 1;
     if (tool_index < 0 || tool_index >= MaxDashboardTools)
+        tool_index = 0;
+    if (tool_index >= m_available_tool_count)
         tool_index = 0;
     if (m_selected_tool == tool_index)
         return;
     m_selected_tool = tool_index;
+    for (int i = 0; i < MaxDashboardTools; ++i)
+        set_button_active(m_tool_buttons[i], i == m_selected_tool, m_tool_button_active[i], true);
+}
+
+void MovementPanel::set_available_tool_count(int tool_count)
+{
+    const int clamped_count = std::clamp(tool_count, 1, MaxDashboardTools);
+    if (m_available_tool_count == clamped_count)
+        return;
+
+    m_available_tool_count = clamped_count;
+    for (int i = 0; i < MaxDashboardTools; ++i) {
+        const bool enabled = i < m_available_tool_count;
+        set_button_enabled(m_tool_buttons[i], enabled);
+        m_tool_button_active[i] = -1;
+    }
+
+    if (m_selected_tool >= m_available_tool_count)
+        m_selected_tool = 0;
     for (int i = 0; i < MaxDashboardTools; ++i)
         set_button_active(m_tool_buttons[i], i == m_selected_tool, m_tool_button_active[i], true);
 }

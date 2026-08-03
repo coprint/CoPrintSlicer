@@ -5,6 +5,7 @@
 
 #include <functional>
 
+#include <wx/image.h>
 #include <wx/panel.h>
 
 class wxStaticBitmap;
@@ -33,11 +34,18 @@ public:
     void set_timelapse_handler(TimelapseHandler handler);
     void set_stream_started(bool started);
 
-    wxPanel* webview_host() const { return m_viewport; }
+    // Panel that hosts the live WebView stream (not the idle logo layer).
+    wxPanel* webview_host() const;
 
 private:
+    void update_idle_visibility(bool stream_available);
+    void layout_viewport_layers();
+
     DeviceCardFrame* m_frame{nullptr};
     wxPanel* m_viewport{nullptr};
+    wxPanel* m_idle_placeholder{nullptr};
+    wxImage m_idle_source_image;
+    wxPanel* m_stream_host{nullptr};
     wxStaticText* m_empty_state{nullptr};
     wxStaticBitmap* m_refresh_btn{nullptr};
     wxStaticBitmap* m_timelapse_btn{nullptr};
@@ -48,6 +56,7 @@ private:
     FullscreenHandler m_fullscreen_handler;
     TimelapseHandler m_timelapse_handler;
     bool m_stream_started{false};
+    bool m_stream_available{false};
 };
 
 } // namespace DeviceDashboard

@@ -1,7 +1,7 @@
 var LangText = {
   en: {
     t1: "Welcome to CoPrintSlicer",
-    t2: "CoPrintSlicer will be setup in several steps. Let's start!",
+    t2: "CoPrint slicer will be set up in a few steps.",
     t3: "User Agreement",
     t4: "Disagree",
     t5: "Agree",
@@ -1212,7 +1212,7 @@ var LangText = {
   },
   tr_TR: {
     t1: "CoPrintSlicer'a hoş geldiniz",
-    t2: "Orca Dilimleyici birkaç adımda kurulacaktır. Hadi başlayalım!",
+    t2: "CoPrint dilimleyici birkaç adımda kurulacaktır",
     t3: "Kullanıcı Sözleşmesi",
     t4: "Reddet",
     t5: "Onayla",

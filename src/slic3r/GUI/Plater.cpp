@@ -588,10 +588,23 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
 
     extruder_dual_sizer->Show(isDual);
 
-    // NEEDFIX requires AMS check or any type of ???
-    // Single nozzle & non ams
-    panel_nozzle_dia->Show(!isDual && preset_bundle.get_printer_extruder_count() < 2);
-    extruder_single_sizer->Show(false);
+    // Prefer Bambu-style ExtruderGroup ("Nozzle" with Diameter + Flow) for
+    // non-dual printers (including Co Print Quadro toolchangers). The compact
+    // ORCA panel_nozzle_dia is only a fallback when ExtruderGroup is hidden.
+    if (!isDual) {
+        panel_nozzle_dia->Show(false);
+        single_extruder->Show(true);
+        extruder_single_sizer->Show(true);
+    } else {
+        panel_nozzle_dia->Show(false);
+        single_extruder->Show(false);
+        extruder_single_sizer->Show(false);
+    }
+
+    if (m_panel_printer_content) {
+        m_panel_printer_content->Layout();
+        m_panel_printer_content->GetParent()->Layout();
+    }
 }
 
 void Sidebar::priv::flush_printer_sync(bool restart)
@@ -1003,9 +1016,13 @@ public:
 ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title)
     : StaticGroup(parent, wxID_ANY, title)
 {
-    SetFont(Label::Body_10);
-    SetForegroundColour(wxColour("#CECECE"));
-    SetBorderColor(wxColour("#EEEEEE"));
+    // Body_14 (not Head_14) + text_color — SetForegroundColour alone does not paint the label
+    SetFont(Label::Body_14);
+    SetTextColor(StateColor(
+        std::pair<wxColour, int>(wxColour("#909090"), StateColor::Normal),
+        std::pair<wxColour, int>(wxColour("#B0B0B0"), StateColor::Disabled)
+    ));
+    SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour("#EEEEEE"), StateColor::Normal)));
     SetCornerRadius(FromDIP(PRINTER_PANEL_RADIUS)); // ORCA match radius with other boxes
     ShowBadge(true);
     // Nozzle
@@ -1099,21 +1116,19 @@ ExtruderGroup::ExtruderGroup(wxWindow * parent, int index, wxString const &title
     wxBoxSizer * hsizer_nozzle = new wxBoxSizer(wxHORIZONTAL);
     hsizer_nozzle->Add(label_flow, 0, wxALIGN_CENTER);
     hsizer_nozzle->Add(combo_flow, 1, wxEXPAND);
-    label_flow->Hide(); // TODO: Orca hack, hide flow selection
-    combo_flow->Hide();
     if (index < 0) {
         label_ams->Hide();
         ams_not_installed_msg->Hide();
         wxStaticBoxSizer *hsizer     = new wxStaticBoxSizer(this, wxHORIZONTAL);
         hsizer->Add(hsizer_diameter, 1, wxEXPAND | wxTOP| wxBOTTOM, FromDIP(8));
-        //hsizer->Add(hsizer_nozzle, 1, wxEXPAND | wxALL, FromDIP(8));
+        hsizer->Add(hsizer_nozzle, 1, wxEXPAND | wxALL, FromDIP(8));
         hsizer->AddSpacer(FromDIP(2)); // Avoid badge
         this->sizer = hsizer;
     } else {
         wxStaticBoxSizer *vsizer = new wxStaticBoxSizer(this, wxVERTICAL);
         vsizer->Add(hsizer_ams, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(2));
         vsizer->Add(hsizer_diameter, 0, wxEXPAND | wxLEFT | wxTOP | wxRIGHT | wxBOTTOM, FromDIP(2));
-        //vsizer->Add(hsizer_nozzle, 0, wxEXPAND | wxALL, FromDIP(2));
+        vsizer->Add(hsizer_nozzle, 0, wxEXPAND | wxALL, FromDIP(2));
         this->sizer = vsizer;
     }
     AMSCountPopupWindow::UpdateAMSCount(index < 0 ? 0 : index, this);
@@ -2582,6 +2597,60 @@ void Sidebar::update_presets(Preset::Type preset_type)
         p->layout_printer(preset_bundle.use_bbl_network(), isBBL && is_dual_extruder);
         auto diameters = wxGetApp().preset_bundle->printers.diameters_of_selected_printer();
         auto diameter = printer_preset.config.opt_string("printer_variant");
+        auto extruders_def = printer_preset.config.def()->get("extruder_type");
+        auto extruders = printer_preset.config.option<ConfigOptionEnumsGeneric>("extruder_type");
+        auto extruder_variants = printer_preset.config.option<ConfigOptionStrings>("extruder_variant_list");
+        auto nozzle_volumes_def = wxGetApp().preset_bundle->project_config.def()->get("nozzle_volume_type");
+        auto nozzle_volumes = wxGetApp().preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+
+        auto update_extruder_variant = [extruders_def, extruders, nozzle_volumes_def, nozzle_volumes, extruder_variants, diameter](ExtruderGroup &extruder, int index) {
+            extruder.combo_flow->Clear();
+            if (!nozzle_volumes_def || !nozzle_volumes || nozzle_volumes->values.empty())
+                return;
+
+            if (index < 0)
+                index = 0;
+            if (static_cast<size_t>(index) >= nozzle_volumes->values.size())
+                index = 0;
+
+            int select = -1;
+            bool added_any = false;
+            const bool can_filter =
+                extruder_variants && extruders && extruders_def &&
+                static_cast<size_t>(index) < extruder_variants->size() &&
+                static_cast<size_t>(index) < extruders->values.size() &&
+                static_cast<size_t>(extruders->values[index]) < extruders_def->enum_labels.size();
+
+            if (can_filter) {
+                const auto &type = extruders_def->enum_labels[extruders->values[index]];
+                for (size_t i = 0; i < nozzle_volumes_def->enum_labels.size(); ++i) {
+                    if (!boost::algorithm::contains(extruder_variants->values[index], type + " " + nozzle_volumes_def->enum_labels[i]))
+                        continue;
+                    if (nozzle_volumes_def->enum_keys_map &&
+                        nozzle_volumes_def->enum_keys_map->at(nozzle_volumes_def->enum_values[i]) == NozzleVolumeType::nvtHighFlow &&
+                        diameter == "0.2")
+                        continue;
+                    if (nozzle_volumes->values[index] == static_cast<int>(i))
+                        select = extruder.combo_flow->GetCount();
+                    extruder.combo_flow->Append(_L(nozzle_volumes_def->enum_labels[i]), wxNullBitmap, (void *) (intptr_t) i);
+                    added_any = true;
+                }
+            }
+
+            // Fallback for printers without rich extruder_variant_list (e.g. ChromaSet)
+            if (!added_any) {
+                for (size_t i = 0; i < nozzle_volumes_def->enum_labels.size(); ++i) {
+                    if (nozzle_volumes->values[index] == static_cast<int>(i))
+                        select = extruder.combo_flow->GetCount();
+                    extruder.combo_flow->Append(_L(nozzle_volumes_def->enum_labels[i]), wxNullBitmap, (void *) (intptr_t) i);
+                }
+            }
+
+            if (select < 0 && extruder.combo_flow->GetCount() > 0)
+                select = 0;
+            extruder.combo_flow->SetSelection(select);
+        };
+
         auto update_extruder_diameter = [&diameters, &diameter, &nozzle_diameter](int extruder_index,ExtruderGroup & extruder) {
             extruder.combo_diameter->Clear();
             int select = -1;
@@ -2607,6 +2676,8 @@ void Sidebar::update_presets(Preset::Type preset_type)
         if (is_dual_extruder) {
             AMSCountPopupWindow::UpdateAMSCount(0, p->left_extruder);
             AMSCountPopupWindow::UpdateAMSCount(1, p->right_extruder);
+            update_extruder_variant(*p->left_extruder, 0);
+            update_extruder_variant(*p->right_extruder, 1);
             //if (!p->is_switching_diameter) {
                 update_extruder_diameter(0, *p->left_extruder);
                 update_extruder_diameter(1, *p->right_extruder);
@@ -2614,10 +2685,11 @@ void Sidebar::update_presets(Preset::Type preset_type)
             p->image_printer_bed->SetBitmap(create_scaled_bitmap(image_path, this, PRINTER_THUMBNAIL_SIZE.GetHeight()));
         } else {
             AMSCountPopupWindow::UpdateAMSCount(0, p->single_extruder);
+            update_extruder_variant(*p->single_extruder, 0);
             //if (!p->is_switching_diameter)
                 update_extruder_diameter(0, *p->single_extruder);
 
-            // ORCA sync unified nozzle combo box
+            // Keep compact ORCA nozzle combo in sync even when hidden
             p->combo_nozzle_dia->Clear();
             for (size_t i = 0; i < diameters.size(); ++i)
                 p->combo_nozzle_dia->Append(diameters[i], {});
@@ -3971,40 +4043,57 @@ void Sidebar::update_printer_thumbnail()
     auto& preset_bundle = wxGetApp().preset_bundle;
     Preset & selected_preset = preset_bundle->printers.get_edited_preset();
     std::string printer_type    = selected_preset.get_current_printer_type(preset_bundle);
-    if (printer_thumbnails.find(printer_type) != printer_thumbnails.end()) // Use known cache first
-        p->image_printer->SetBitmap(create_scaled_bitmap(printer_thumbnails[printer_type], this, PRINTER_THUMBNAIL_SIZE.GetHeight()));
-    else {
+    const int thumb_px = PRINTER_THUMBNAIL_SIZE.GetHeight();
+
+    // Prefer dedicated preview assets (SVG first via create_scaled_bitmap) over
+    // profile cover PNGs, which look soft when downscaled to the sidebar size.
+    const std::string preview_name = "printer_preview_" + printer_type;
+    const boost::filesystem::path preview_svg =
+        boost::filesystem::path(resources_dir()) / "images" / (preview_name + ".svg");
+    const boost::filesystem::path preview_png =
+        boost::filesystem::path(resources_dir()) / "images" / (preview_name + ".png");
+    const bool has_preview = boost::filesystem::exists(preview_svg) || boost::filesystem::exists(preview_png);
+
+    auto cache_it = printer_thumbnails.find(printer_type);
+    if (cache_it != printer_thumbnails.end()) {
+        // Ignore stale cover-path cache when a crisp preview asset is available.
+        const bool cached_cover = cache_it->second.find("_cover") != std::string::npos
+                               || cache_it->second.find("profiles") != std::string::npos;
+        if (!(has_preview && cached_cover)) {
+            p->image_printer->SetBitmap(create_scaled_bitmap(cache_it->second, this, thumb_px));
+            return;
+        }
+    }
+
+    if (has_preview) {
         try {
-            // No cache, try dedicated printer preview
-            p->image_printer->SetBitmap(create_scaled_bitmap("printer_preview_" + printer_type, this, 48));
-            // Success, cache it
-            printer_thumbnails[printer_type] = "printer_preview_" + printer_type;
+            p->image_printer->SetBitmap(create_scaled_bitmap(preview_name, this, thumb_px));
+            printer_thumbnails[printer_type] = preview_name;
             return;
         } catch (...) {}
+    }
 
-        // Orca: try to use the printer model cover as the thumbnail
-        const auto model_name = selected_preset.config.opt_string("printer_model");
-        std::string cover_file = model_name + "_cover.png";
-        for (auto vendor_profile : preset_bundle->vendors) {
-            for (auto vendor_model : vendor_profile.second.models) {
-                if (vendor_model.name == model_name) {
-                    // Try to find the printer cover
-                    boost::filesystem::path cover_path = boost::filesystem::absolute(boost::filesystem::path(resources_dir()) /
-                                                                                     "/profiles/" / vendor_profile.second.id / cover_file)
-                                                             .make_preferred();
-                    if (boost::filesystem::exists(cover_path)) {
-                        try {
-                            p->image_printer->SetBitmap(create_scaled_bitmap(cover_path.string(), this, PRINTER_THUMBNAIL_SIZE.GetHeight()));
-                            printer_thumbnails[printer_type] = cover_path.string(); // Cache the path so we don't look up again
-                            return;
-                        } catch (...) {}
-                    }
+    // Orca: try to use the printer model cover as the thumbnail
+    const auto model_name = selected_preset.config.opt_string("printer_model");
+    std::string cover_file = model_name + "_cover.png";
+    for (auto vendor_profile : preset_bundle->vendors) {
+        for (auto vendor_model : vendor_profile.second.models) {
+            if (vendor_model.name == model_name) {
+                boost::filesystem::path cover_path = boost::filesystem::absolute(boost::filesystem::path(resources_dir()) /
+                                                                                 "/profiles/" / vendor_profile.second.id / cover_file)
+                                                         .make_preferred();
+                if (boost::filesystem::exists(cover_path)) {
+                    try {
+                        p->image_printer->SetBitmap(create_scaled_bitmap(cover_path.string(), this, thumb_px));
+                        printer_thumbnails[printer_type] = cover_path.string();
+                        return;
+                    } catch (...) {}
                 }
             }
         }
-        p->image_printer->SetBitmap(create_scaled_bitmap("printer_placeholder", this, PRINTER_THUMBNAIL_SIZE.GetHeight()));
-        printer_thumbnails[printer_type] = "printer_placeholder"; // Avoid unnecessary try
     }
+    p->image_printer->SetBitmap(create_scaled_bitmap("printer_placeholder", this, thumb_px));
+    printer_thumbnails[printer_type] = "printer_placeholder";
 }
 
 void Sidebar::auto_calc_flushing_volumes(const int filament_idx, const int extruder_id) {
@@ -6291,6 +6380,10 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             // For exporting from the amf/3mf we shouldn't check printer_presets for the containing information about "Print Host upload"
                             // BBS: add preset combo box re-active logic
                             // currently found only needs re-active here
+                            wxGetApp().load_current_presets(false, false);
+                            // CoPrint: load_current_presets can rebind UI around foreign project presets —
+                            // enforce again so Bambu printer/filaments never stick, then refresh UI.
+                            preset_bundle->enforce_coprint_identity();
                             wxGetApp().load_current_presets(false, false);
                             // Update filament colors for the MM-printer profile in the full config
                             // to avoid black (default) colors for Extruders in the ObjectList,

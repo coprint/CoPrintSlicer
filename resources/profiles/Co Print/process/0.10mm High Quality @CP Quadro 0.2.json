@@ -1,0 +1,14 @@
+{
+	"type": "process",
+	"name": "0.10mm High Quality @CP Quadro 0.2",
+	"inherits": "0.08mm High Quality @CP Quadro 0.2",
+	"from": "system",
+	"setting_id": "CoPrintQuadro02HQ010",
+	"instantiation": "true",
+	"layer_height": "0.1",
+	"support_bottom_z_distance": "0.1",
+	"support_top_z_distance": "0.1",
+	"compatible_printers": [
+		"Co Print Quadro 0.2 nozzle"
+	]
+}

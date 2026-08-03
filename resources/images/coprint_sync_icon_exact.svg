@@ -1,0 +1,32 @@
+<svg width="80" height="80" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Circular container -->
+  <circle cx="40" cy="40" r="35.5" fill="#132127"/>
+  <circle cx="40" cy="40" r="35.5" stroke="#164B42" stroke-width="1"/>
+
+  <!-- Refresh / sync symbol -->
+  <g filter="url(#softGlow)" stroke="#12E39A" stroke-width="3.4"
+     stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Upper arc -->
+    <path d="M27.8 37.2C29.2 31.7 34.1 27.8 39.8 27.8C44.1 27.8 47.9 30 50.1 33.4"/>
+
+    <!-- Upper-right arrow head -->
+    <path d="M50.1 27.7V33.5H44.3"/>
+
+    <!-- Lower arc -->
+    <path d="M52.2 42.8C50.8 48.3 45.9 52.2 40.2 52.2C35.9 52.2 32.1 50 29.9 46.6"/>
+
+    <!-- Lower-left arrow head -->
+    <path d="M29.9 52.3V46.5H35.7"/>
+  </g>
+</svg>

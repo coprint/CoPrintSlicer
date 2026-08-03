@@ -139,6 +139,17 @@ void NetworkAgentFactory::register_all_agents()
                                             // for K-series boards with CFS support.
     register_agent<MoonrakerPrinterAgent>();
 
+    // CoPrint printers use the same local Moonraker/Klipper transport today.
+    // Keep the stable implementation but expose a product-facing UI option.
+    register_printer_agent(COPRINT_PRINTER_AGENT_ID, "CoPrint",
+                           [](std::shared_ptr<ICloudServiceAgent> cloud_agent,
+                              const std::string&                  log_dir) -> std::shared_ptr<IPrinterAgent> {
+                               auto agent = std::make_shared<MoonrakerPrinterAgent>(log_dir);
+                               if (cloud_agent)
+                                   agent->set_cloud_agent(cloud_agent);
+                               return agent;
+                           });
+
     // BBLPrinterAgent takes no constructor args, so register manually
     {
         auto info = BBLPrinterAgent::get_agent_info_static();

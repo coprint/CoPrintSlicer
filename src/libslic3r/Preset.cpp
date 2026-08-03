@@ -1922,6 +1922,25 @@ void PresetCollection::load_project_embedded_presets(std::vector<Preset*>& proje
         if (preset->type != Preset::get_type_from_string(type)) continue;
         if (!preset->is_project_embedded) continue;
         std::string name = preset->name;
+        // CoPrintSlicer: never install foreign (BBL/etc.) project-embedded presets.
+        // Geometry/colours still load; identity is remapped onto Co Print system presets.
+        {
+            const bool is_coprint_name =
+                boost::algorithm::icontains(name, "Co Print") ||
+                boost::algorithm::istarts_with(name, "CoPrint ") ||
+                name.find("@CP ") != std::string::npos ||
+                name.find("@CP") != std::string::npos;
+            const std::string model  = preset->config.opt_string("printer_model");
+            const std::string vendor = preset->config.opt_string("filament_vendor", 0u);
+            const bool is_coprint_meta =
+                boost::algorithm::istarts_with(model, "Co Print") ||
+                boost::algorithm::iequals(vendor, "Co Print") ||
+                boost::algorithm::iequals(vendor, "CoPrint");
+            if (!is_coprint_name && !is_coprint_meta) {
+                BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": skipping non-CoPrint project preset '" << name << "'";
+                continue;
+            }
+        }
         if (this->find_preset(name, false)) {
             BOOST_LOG_TRIVIAL(warning) << "Preset already present, not loading: " << name;
             continue;

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <boost/algorithm/string.hpp>
 
 using namespace nlohmann;
 
@@ -56,8 +57,32 @@ namespace Slic3r
         {
             if (config == nullptr)
                 return false;
-            const std::string host = normalize_lan_host(!dev_ip.empty() ? dev_ip : dev_id);
-            return !host.empty() && config->has("forgotten_lan_machines", host);
+            const std::string host_from_ip = normalize_lan_host(dev_ip);
+            const std::string host_from_id = normalize_lan_host(dev_id);
+            if (!host_from_ip.empty() && config->has("forgotten_lan_machines", host_from_ip))
+                return true;
+            if (!host_from_id.empty() && config->has("forgotten_lan_machines", host_from_id))
+                return true;
+            // Also match raw keys in case older builds stored host:port.
+            if (!dev_ip.empty() && config->has("forgotten_lan_machines", dev_ip))
+                return true;
+            if (!dev_id.empty() && config->has("forgotten_lan_machines", dev_id))
+                return true;
+            return false;
+        }
+
+        void mark_forgotten_lan_machine(AppConfig* config, const std::string& dev_id, const std::string& dev_ip)
+        {
+            if (config == nullptr)
+                return;
+            auto mark = [&](const std::string& key) {
+                if (!key.empty())
+                    config->set("forgotten_lan_machines", key, std::string("1"));
+            };
+            mark(dev_id);
+            mark(dev_ip);
+            mark(normalize_lan_host(dev_id));
+            mark(normalize_lan_host(dev_ip));
         }
     }
 
@@ -78,6 +103,16 @@ namespace Slic3r
             const auto local_machines = config->get_local_machines();
             for (auto& it : local_machines) {
                 const auto&    m         = it.second;
+                // Corrupt / legacy entries with no identity keep coming back after Forget.
+                if (it.first.empty() || (m.dev_id.empty() && m.dev_ip.empty())) {
+                    config->erase_local_machine(it.first);
+                    if (!m.dev_id.empty())
+                        config->erase_local_machine(m.dev_id);
+                    pruned_forgotten_machines = true;
+                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " pruned invalid local machine entry"
+                        << ", key= '" << it.first << "', name= " << m.dev_name;
+                    continue;
+                }
                 if (is_forgotten_lan_machine(config, m.dev_id, m.dev_ip)) {
                     config->erase_local_machine(it.first);
                     config->erase_local_machine(m.dev_id);
@@ -86,16 +121,26 @@ namespace Slic3r
                         << ", dev_id= " << m.dev_id << ", ip= " << m.dev_ip;
                     continue;
                 }
-                MachineObject* obj       = new MachineObject(this, m_agent, m.dev_name, m.dev_id, m.dev_ip);
+                // Drop corrupt addresses such as "192.168.1..150" that break reconnect.
+                if (m.dev_ip.find("..") != std::string::npos || m.dev_id.find("..") != std::string::npos) {
+                    config->erase_local_machine(it.first);
+                    config->erase_local_machine(m.dev_id);
+                    pruned_forgotten_machines = true;
+                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " pruned invalid LAN address"
+                        << ", dev_id= " << m.dev_id << ", ip= " << m.dev_ip;
+                    continue;
+                }
+                const std::string store_id = !m.dev_id.empty() ? m.dev_id : m.dev_ip;
+                MachineObject* obj       = new MachineObject(this, m_agent, m.dev_name, store_id, m.dev_ip);
                 obj->printer_type        = m.printer_type;
                 obj->dev_connection_type = "lan";
                 obj->bind_state          = "free";
                 obj->bind_sec_link       = "secure";
                 obj->m_is_online         = true;
                 obj->last_alive          = Slic3r::Utils::get_current_time_utc();
-                obj->set_access_code(config->get("access_code", m.dev_id), false);
-                obj->set_user_access_code(config->get("user_access_code", m.dev_id), false);
-                localMachineList.insert(std::make_pair(m.dev_id, obj));
+                obj->set_access_code(config->get("access_code", store_id), false);
+                obj->set_user_access_code(config->get("user_access_code", store_id), false);
+                localMachineList.insert(std::make_pair(store_id, obj));
             }
             if (pruned_forgotten_machines)
                 config->save();
@@ -107,17 +152,26 @@ namespace Slic3r
         AppConfig* config = GUI::wxGetApp().app_config;
         if (config) {
             if (m.is_lan_mode_printer()) {
+                if (m.get_dev_id().empty() && m.get_dev_ip().empty()) {
+                    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << " refused to save local machine with empty identity";
+                    return;
+                }
                 if (is_forgotten_lan_machine(config, m.get_dev_id(), m.get_dev_ip())) {
                     config->erase_local_machine(m.get_dev_id());
+                    if (!m.get_dev_ip().empty())
+                        config->erase_local_machine(m.get_dev_ip());
+                    config->erase_local_machine("");
                     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << " skipped forgotten LAN machine"
                         << ", dev_id= " << m.get_dev_id() << ", ip= " << m.get_dev_ip();
                     return;
                 }
                 BBLocalMachine local_machine;
-                local_machine.dev_id       = m.get_dev_id();
+                local_machine.dev_id       = !m.get_dev_id().empty() ? m.get_dev_id() : m.get_dev_ip();
                 local_machine.dev_name     = m.get_dev_name();
                 local_machine.dev_ip       = m.get_dev_ip();
                 local_machine.printer_type = m.printer_type;
+                // Drop legacy empty-key entries if we are writing a real identity.
+                config->erase_local_machine("");
                 config->update_local_machine(local_machine);
             } else {
                 config->erase_local_machine(m.get_dev_id());
@@ -303,6 +357,29 @@ namespace Slic3r
 
             /* update localMachineList */
             it = localMachineList.find(dev_id);
+            // Same LAN host under a different key creates a duplicate "Unknown" card
+            // (IP insert then SSDP announce with another id / empty fields).
+            if (it == localMachineList.end()) {
+                const std::string incoming_host = normalize_lan_host(!dev_ip.empty() ? dev_ip : dev_id);
+                if (!incoming_host.empty()) {
+                    for (auto existing = localMachineList.begin(); existing != localMachineList.end(); ++existing) {
+                        if (existing->second == nullptr)
+                            continue;
+                        const std::string existing_host = normalize_lan_host(
+                            !existing->second->get_dev_ip().empty() ? existing->second->get_dev_ip()
+                                                                     : existing->second->get_dev_id());
+                        if (existing_host == incoming_host ||
+                            normalize_lan_host(existing->first) == incoming_host) {
+                            it = existing;
+                            BOOST_LOG_TRIVIAL(info) << __FUNCTION__
+                                << " Reusing existing LAN machine for host=" << incoming_host
+                                << " existing_id=" << existing->first
+                                << " incoming_id=" << dev_id;
+                            break;
+                        }
+                    }
+                }
+            }
             if (it != localMachineList.end()) {
                 // update properties
                 /* ip changed */
@@ -369,13 +446,31 @@ namespace Slic3r
 
                 obj->last_alive = Slic3r::Utils::get_current_time_utc();
                 obj->m_is_online = true;
-                obj->set_dev_name(dev_name);
-                /* if (!obj->dev_ip.empty()) {
-                Slic3r::GUI::wxGetApp().app_config->set_str("ip_address", obj->dev_id, obj->dev_ip);
-                Slic3r::GUI::wxGetApp().app_config->save();
-                }*/
+                if (!dev_ip.empty() && obj->get_dev_ip().empty())
+                    obj->set_dev_ip(dev_ip);
+                if (!dev_name.empty()) {
+                    const std::string current = obj->get_dev_name();
+                    const bool current_placeholder =
+                        current.empty() ||
+                        boost::iequals(current, "Unknown Printer") ||
+                        boost::iequals(current, "Moonraker Printer") ||
+                        boost::iequals(current, "Moonraker") ||
+                        boost::iequals(current, "CO-PRINT");
+                    const bool incoming_placeholder =
+                        boost::iequals(dev_name, "Unknown Printer") ||
+                        boost::iequals(dev_name, "Moonraker Printer") ||
+                        boost::iequals(dev_name, "Moonraker") ||
+                        boost::iequals(dev_name, "CO-PRINT");
+                    if (current_placeholder || !incoming_placeholder)
+                        obj->set_dev_name(dev_name);
+                }
             }
             else {
+                if (dev_ip.empty() && normalize_lan_host(dev_id).empty()) {
+                    BOOST_LOG_TRIVIAL(warning) << __FUNCTION__
+                        << " refused New Machine with empty identity, name=" << dev_name;
+                    return;
+                }
                 /* insert a new machine */
                 obj = new MachineObject(this, m_agent, dev_name, dev_id, dev_ip);
                 obj->printer_type = _parse_printer_type(printer_type_str);
@@ -411,29 +506,68 @@ namespace Slic3r
 
     MachineObject* DeviceManager::insert_local_device(const BBLocalMachine& machine,
         std::string connection_type, std::string bind_state,
-        std::string version, std::string access_code)
+        std::string version, std::string access_code, bool allow_forgotten)
     {
+        if (machine.dev_id.empty() && machine.dev_ip.empty()) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << " refused empty machine identity";
+            return nullptr;
+        }
+
+        BBLocalMachine machine_to_add = machine;
+        if (machine_to_add.dev_id.empty())
+            machine_to_add.dev_id = machine_to_add.dev_ip;
+
         if (AppConfig* config = GUI::wxGetApp().app_config) {
-            const std::string host = normalize_lan_host(!machine.dev_ip.empty() ? machine.dev_ip : machine.dev_id);
-            if (!host.empty() && config->has("forgotten_lan_machines", host)) {
+            const std::string host = normalize_lan_host(!machine_to_add.dev_ip.empty() ? machine_to_add.dev_ip : machine_to_add.dev_id);
+            if (!host.empty() && is_forgotten_lan_machine(config, machine_to_add.dev_id, machine_to_add.dev_ip)) {
+                if (!allow_forgotten) {
+                    BOOST_LOG_TRIVIAL(info) << __FUNCTION__
+                        << " refused to re-insert forgotten machine: " << host;
+                    return nullptr;
+                }
+                // Explicit user re-add (IP Connect): clear forgotten markers for this host.
+                config->erase("forgotten_lan_machines", host);
+                config->erase("forgotten_lan_machines", machine_to_add.dev_id);
+                config->erase("forgotten_lan_machines", machine_to_add.dev_ip);
+                config->erase("forgotten_lan_machines", host + ":7125");
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__
-                    << " refused to re-insert forgotten machine: " << host;
-                return nullptr;
+                    << " cleared forgotten marker for explicit re-add: " << host;
             }
         }
 
         MachineObject* obj;
-        auto           it = localMachineList.find(machine.dev_id);
+        auto           it = localMachineList.find(machine_to_add.dev_id);
+        if (it == localMachineList.end()) {
+            const std::string incoming_host =
+                normalize_lan_host(!machine_to_add.dev_ip.empty() ? machine_to_add.dev_ip : machine_to_add.dev_id);
+            if (!incoming_host.empty()) {
+                for (auto existing = localMachineList.begin(); existing != localMachineList.end(); ++existing) {
+                    if (existing->second == nullptr)
+                        continue;
+                    const std::string existing_host = normalize_lan_host(
+                        !existing->second->get_dev_ip().empty() ? existing->second->get_dev_ip()
+                                                                 : existing->second->get_dev_id());
+                    if (existing_host == incoming_host || normalize_lan_host(existing->first) == incoming_host) {
+                        it = existing;
+                        BOOST_LOG_TRIVIAL(info) << __FUNCTION__
+                            << " reusing existing LAN machine for host=" << incoming_host
+                            << " existing_id=" << existing->first
+                            << " incoming_id=" << machine_to_add.dev_id;
+                        break;
+                    }
+                }
+            }
+        }
         if (it != localMachineList.end()) {
             obj = it->second;
         } else {
-            obj = new MachineObject(this, m_agent, machine.dev_name, machine.dev_id, machine.dev_ip);
-            localMachineList.insert(std::make_pair(machine.dev_id, obj));
+            obj = new MachineObject(this, m_agent, machine_to_add.dev_name, machine_to_add.dev_id, machine_to_add.dev_ip);
+            localMachineList.insert(std::make_pair(machine_to_add.dev_id, obj));
         }
-        if (machine.printer_type.empty())
+        if (machine_to_add.printer_type.empty())
             obj->printer_type = _parse_printer_type("C11");
         else
-            obj->printer_type = _parse_printer_type(machine.printer_type);
+            obj->printer_type = _parse_printer_type(machine_to_add.printer_type);
         obj->dev_connection_type = connection_type == "farm" ? "lan":connection_type;
         obj->bind_state          = connection_type == "farm" ? "free":bind_state;
         obj->bind_sec_link = "secure";
@@ -628,13 +762,22 @@ namespace Slic3r
 
                     return true;
                 }
-                // same dev_id, lan => disconnect and reconnect
+                // same dev_id, lan => reconnect only when the link is actually down.
+                // Re-selecting an already-online LAN printer used to disconnect+reconnect
+                // every time (and MonitorPanel queues a second set_selected_machine), which
+                // stuck the sidebar on "Connecting..." and froze the UI.
                 else
                 {
-                    BOOST_LOG_TRIVIAL(info) << "set_selected_machine: same lan machine, dev_id =" << dev_id
-                        << ", disconnect and reconnect";
+                    if (it->second->is_online() && it->second->is_connected()) {
+                        BOOST_LOG_TRIVIAL(info) << "set_selected_machine: same lan machine already connected, dev_id ="
+                                                << dev_id << ", skip reconnect";
+                        it->second->reset_update_time();
+                        return true;
+                    }
 
-                    // lan mode printer reconnect printer
+                    BOOST_LOG_TRIVIAL(info) << "set_selected_machine: same lan machine offline, dev_id =" << dev_id
+                                            << ", disconnect and reconnect";
+
                     if (m_agent)
                     {
                         m_agent->disconnect_printer();

@@ -60,13 +60,6 @@ namespace GUI {
 
 #define BORDER_W 10
 
-static bool is_coprint_printer_preset(const Preset& preset)
-{
-    const std::string printer_model = preset.config.opt_string("printer_model");
-    return boost::starts_with(preset.name, "Co Print") ||
-           boost::starts_with(printer_model, "Co Print");
-}
-
 // ---------------------------------
 // ***  PresetComboBox  ***
 // ---------------------------------
@@ -1193,9 +1186,6 @@ void PlaterPresetComboBox::update()
             selected_preset.is_visible = true;
         }
 
-        if (m_type == Preset::TYPE_PRINTER && !is_coprint_printer_preset(preset))
-            continue;
-
         bool single_bar = false;
         wxString name = from_u8(preset.name);
         preset_aliases[name] = get_preset_name(preset).utf8_string(); // ORCA
@@ -1320,9 +1310,8 @@ void PlaterPresetComboBox::update()
         selected_in_ams = add_ams_filaments(into_u8(selected_user_preset.empty() ? selected_system_preset : selected_user_preset), true);
     }
 
-    std::vector<std::string> filament_orders = {"Bambu PLA Basic", "Bambu PLA Matte", "Bambu PETG HF",    "Bambu ABS",      "Bambu PLA Silk", "Bambu PLA-CF",
-                                                "Bambu PLA Galaxy", "Bambu PLA Metal", "Bambu PLA Marble", "Bambu PETG-CF", "Bambu PETG Translucent", "Bambu ABS-GF"};
-    std::vector<std::string> first_vendors     = {"", "Bambu", "Generic"}; // Empty vendor for non-system presets
+    std::vector<std::string> filament_orders = {"CoPrint Generic PLA", "CoPrint Generic PETG", "CoPrint Generic ABS", "CoPrint Generic TPU"};
+    std::vector<std::string> first_vendors     = {"", "Co Print", "CoPrint", "Generic"}; // Empty vendor for non-system presets
     std::vector<std::string> first_types     = {"PLA", "PETG", "ABS", "TPU"};
     auto  add_presets       = [this, &preset_descriptions, &filament_orders, &preset_filament_vendors, &first_vendors, &preset_filament_types, &preset_aliases, &preset_bundle_ids, &preset_bundle_names, &first_types, &selected_in_ams]
             (std::map<wxString, wxBitmap *> const &presets, wxString const &selected, std::string const &group, wxString const &groupName) {
@@ -1471,8 +1460,10 @@ void PlaterPresetComboBox::update()
             set_label_marker(Append(separator(L("Add/Remove filaments")), *bmp), LABEL_ITEM_WIZARD_FILAMENTS);
         else if (m_type == Preset::TYPE_SLA_MATERIAL)
             set_label_marker(Append(separator(L("Add/Remove materials")), *bmp), LABEL_ITEM_WIZARD_MATERIALS);
-        // CoPrint printer presets are product-locked. Keep Orca's printer wizard entries out
-        // of the main printer dropdown so users only see CoPrint machines.
+        else {
+            set_label_marker(Append(separator(L("Select/Remove printers (system presets)")), *bmp), LABEL_ITEM_WIZARD_PRINTERS);
+            set_label_marker(Append(separator(L("Create printer")), *bmp), LABEL_ITEM_WIZARD_ADD_PRINTERS);
+        }
     }
 
     update_selection();
@@ -1698,9 +1689,6 @@ void TabPresetComboBox::update()
     {
         const Preset& preset = presets[i];
         if (!preset.is_visible || (!show_incompatible && !preset.is_compatible && i != idx_selected))
-            continue;
-
-        if (m_type == Preset::TYPE_PRINTER && !is_coprint_printer_preset(preset))
             continue;
 
         // marker used for disable incompatible printer models for the selected physical printer

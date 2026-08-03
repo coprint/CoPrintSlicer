@@ -1,0 +1,180 @@
+{
+    "type":  "machine",
+    "name":  "Co Print Quadro 0.4 nozzle",
+    "inherits":  "fdm_machine_common",
+    "from":  "system",
+    "setting_id":  "CoPrintQuadro04",
+    "instantiation":  "true",
+    "printer_model":  "Co Print Quadro",
+    "default_print_profile":  "0.2mm Standard @Co Print Quadro 0.4",
+    "printer_agent":  "coprint",
+    "host_type":  "moonraker",
+    "printer_variant":  "0.4",
+    "nozzle_diameter":  [
+                            "0.4"
+                        ],
+    "nozzle_volume":  [
+                          "156"
+                      ],
+    "retract_before_wipe":  [
+                                "0%"
+                            ],
+    "printable_area": [
+		"285.59x293.08",
+		"200.91x292.10",
+		"191.54x300.58",
+		"189.80x301.20",
+		"185.31x300.88",
+		"178.73x295.03",
+		"171.14x301.19",
+		"128.88x301.19",
+		"121.16x295.04",
+		"114.71x300.88",
+		"110.22x301.20",
+		"108.48x300.58",
+		"99.10x292.10",
+		"16.42x292.08",
+		"12.55x290.48",
+		"10.94x285.41",
+		"10.94x18.24",
+		"12.55x14.37",
+		"16.42x12.76",
+		"100.03x12.73",
+		"112.82x0.71",
+		"114.66x0.00",
+		"185.61x0.01",
+		"199.97x12.73",
+		"284.38x12.76",
+		"288.25x14.37",
+		"289.86x18.24",
+		"289.86x285.41",
+		"289.45x290.28"
+	],
+    "printable_height":  "250",
+    "gcode_flavor":  "klipper",
+    "retraction_length":  [
+                              "0.5"
+                          ],
+    "machine_max_speed_e":  [
+                                "100"
+                            ],
+    "machine_max_speed_x":  [
+                                "500"
+                            ],
+    "machine_max_speed_y":  [
+                                "500"
+                            ],
+    "machine_max_speed_z":  [
+                                "10"
+                            ],
+    "machine_max_acceleration_e":  [
+                                       "2500"
+                                   ],
+    "machine_max_acceleration_extruding":  [
+                                               "5000"
+                                           ],
+    "machine_max_acceleration_retracting":  [
+                                                "2500"
+                                            ],
+    "machine_max_acceleration_travel":  [
+                                            "40000"
+                                        ],
+    "machine_max_acceleration_x":  [
+                                       "5000"
+                                   ],
+    "machine_max_acceleration_y":  [
+                                       "5000"
+                                   ],
+    "machine_max_acceleration_z":  [
+                                       "100"
+                                   ],
+    "machine_max_jerk_e":  [
+                               "2.5"
+                           ],
+    "machine_max_jerk_x":  [
+                               "8"
+                           ],
+    "machine_max_jerk_y":  [
+                               "8"
+                           ],
+    "machine_max_jerk_z":  [
+                               "0.2"
+                           ],
+    "z_hop":  [
+                  "0.2"
+              ],
+    "retraction_speed":  [
+                             "60"
+                         ],
+    "deretraction_speed":  [
+                               "30"
+                           ],
+    "retraction_minimum_travel":  [
+                                      "1"
+                                  ],
+    "retract_length_toolchange":  [
+                                      "2"
+                                  ],
+    "wipe":  [
+                 "1"
+             ],
+    "wipe_distance":  [
+                          "2"
+                      ],
+    "thumbnails":  [
+                       "300x300",
+                       "400x300",
+                       "96x96",
+                       "32x32"
+                   ],
+    "retract_lift_below":  [
+                               "343"
+                           ],
+    "thumbnails_format":  "PNG",
+    "machine_start_gcode":  "start_print  EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single]",
+    "machine_end_gcode":  "end_print",
+    "change_filament_gcode":  "FILAMENT_CHANGE LAYER_NUM=[layer_num] NEXT_EXTRUDER=[next_extruder]",
+    "default_filament_profile":  [
+                                     "CoPrint Generic PLA"
+                                 ],
+    "extruder_clearance_radius":  [
+                                      "65"
+                                  ],
+    "extruder_clearance_height_to_rod":  [
+                                             "36"
+                                         ],
+    "extruder_clearance_height_to_lid":  [
+                                             "140"
+                                         ],
+    "min_layer_height":  [
+                             "0.08"
+                         ],
+    "max_layer_height":  [
+                             "0.32"
+                         ],
+    "retract_restart_extra":  [
+                                  "0"
+                              ],
+    "cooling_tube_retraction":  [
+                                    "0"
+                                ],
+    "cooling_tube_length":  [
+                                "0"
+                            ],
+    "parking_pos_retraction":  [
+                                   "0"
+                               ],
+    "retract_when_changing_layer":  [
+                                        "0"
+                                    ],
+    "extra_loading_move":  [
+                               "0"
+                           ],
+    "high_current_on_filament_swap":  [
+                                          "0"
+                                      ],
+    "enable_filament_ramming":  [
+                                    "0"
+                                ],
+    "z_hop_types":  "Spiral Lift"
+}

@@ -1,0 +1,47 @@
+{
+	"type": "process",
+	"name": "0.20mm Strength @CP Quadro",
+	"inherits": "fdm_process_coprint_common",
+	"from": "system",
+	"setting_id": "CoPrintQuadroStrength02004",
+	"instantiation": "true",
+	"bridge_flow": "1",
+	"elefant_foot_compensation": "0.075",
+	"gap_infill_speed": [
+		"250"
+	],
+	"initial_layer_infill_speed": [
+		"105"
+	],
+	"initial_layer_speed": [
+		"50"
+	],
+	"inner_wall_speed": [
+		"300"
+	],
+	"internal_solid_infill_speed": [
+		"250"
+	],
+	"default_acceleration": [
+		"6000"
+	],
+	"outer_wall_speed": [
+		"60"
+	],
+	"sparse_infill_density": "25%",
+	"skeleton_infill_density": "25%",
+	"skin_infill_density": "25%",
+	"sparse_infill_speed": [
+		"270"
+	],
+	"top_shell_layers": "5",
+	"top_color_penetration_layers": "5",
+	"top_shell_thickness": "1.0",
+	"travel_speed": [
+		"700"
+	],
+	"wall_loops": "6",
+	"compatible_printers": [
+		"Co Print Quadro 0.4 nozzle"
+	]
+}

@@ -166,6 +166,10 @@ static wxIcon main_frame_icon(GUI_App::EAppMode app_mode)
 #define BORDERLESS_FRAME_STYLE (wxMINIMIZE_BOX | wxMAXIMIZE_BOX | wxCLOSE_BOX)
 #endif
 
+#if defined(_WIN32) || defined(__WXMSW__)
+static void ForceRemoveNativeCaption(HWND hWnd);
+#endif
+
 wxDEFINE_EVENT(EVT_SYNC_CLOUD_PRESET,     SimpleEvent);
 
 #ifdef __APPLE__
@@ -593,6 +597,10 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
         if (manger) {
             evt.IsShown() ? manger->start_refresher() : manger->stop_refresher();
         }
+#if defined(_WIN32) || defined(__WXMSW__)
+        if (evt.IsShown())
+            ForceRemoveNativeCaption(GetHandle());
+#endif
     });
 
 #ifdef _MSW_DARK_MODE
@@ -606,6 +614,11 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     // bind events from DiffDlg
 
     bind_diff_dialog();
+
+#if defined(_WIN32) || defined(__WXMSW__)
+    // Drop the native Windows caption immediately — we use BBLTopbar for chrome.
+    ForceRemoveNativeCaption(GetHandle());
+#endif
 }
 
 void MainFrame::bind_diff_dialog()
@@ -638,7 +651,20 @@ void MainFrame::bind_diff_dialog()
 }
 
 
-#ifdef __WIN32__
+#if defined(_WIN32) || defined(__WXMSW__)
+
+static void ForceRemoveNativeCaption(HWND hWnd)
+{
+    if (hWnd == nullptr)
+        return;
+    // Microsoft docs: WM_NCCALCSIZE results are not applied until the frame is
+    // refreshed. Without SWP_FRAMECHANGED the standard white caption stays visible
+    // above our custom BBLTopbar.
+    RECT rc;
+    ::GetWindowRect(hWnd, &rc);
+    ::SetWindowPos(hWnd, nullptr, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+                   SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+}
 
 static void ApplyWorkingAreaMaxInfo(const HWND hWnd, MINMAXINFO* mmi)
 {
@@ -737,26 +763,33 @@ WXLRESULT MainFrame::MSWWindowProc(WXUINT nMsg, WXWPARAM wParam, WXLPARAM lParam
     its wParam value is TRUE and the return value is 0 */
     case WM_NCCALCSIZE:
         if (wParam) {
-            /* Detect whether window is maximized or not. We don't need to change the resize border when win is
-             *  maximized because all resize borders are gone automatically */
+            /* Detect whether window is maximized or not. We don't need the native
+             * caption in either state — BBLTopbar owns min/max/close. */
             WINDOWPLACEMENT wPos;
             // GetWindowPlacement fail if this member is not set correctly.
             wPos.length = sizeof(wPos);
             GetWindowPlacement(hWnd, &wPos);
-            if (wPos.showCmd != SW_SHOWMAXIMIZED) {
-                RECT borderThickness;
-                SetRectEmpty(&borderThickness);
-                AdjustWindowRectEx(&borderThickness, GetWindowLongPtr(hWnd, GWL_STYLE) & ~WS_CAPTION, FALSE, NULL);
-                borderThickness.left *= -1;
-                borderThickness.top *= -1;
-                NCCALCSIZE_PARAMS *sz = reinterpret_cast<NCCALCSIZE_PARAMS *>(lParam);
-                // Add 1 pixel to the top border to make the window resizable from the top border
-                sz->rgrc[0].top += 1; // borderThickness.top;
-                sz->rgrc[0].left += borderThickness.left;
-                sz->rgrc[0].right -= borderThickness.right;
-                sz->rgrc[0].bottom -= borderThickness.bottom;
+            NCCALCSIZE_PARAMS *sz = reinterpret_cast<NCCALCSIZE_PARAMS *>(lParam);
+            if (wPos.showCmd == SW_SHOWMAXIMIZED) {
+                // Fill the monitor work area; keep no native title bar.
+                HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi;
+                mi.cbSize = sizeof(mi);
+                if (GetMonitorInfo(monitor, &mi))
+                    sz->rgrc[0] = mi.rcWork;
                 return 0;
             }
+            RECT borderThickness;
+            SetRectEmpty(&borderThickness);
+            AdjustWindowRectEx(&borderThickness, GetWindowLongPtr(hWnd, GWL_STYLE) & ~WS_CAPTION, FALSE, NULL);
+            borderThickness.left *= -1;
+            borderThickness.top *= -1;
+            // Add 1 pixel to the top border to make the window resizable from the top border
+            sz->rgrc[0].top += 1; // borderThickness.top;
+            sz->rgrc[0].left += borderThickness.left;
+            sz->rgrc[0].right -= borderThickness.right;
+            sz->rgrc[0].bottom -= borderThickness.bottom;
+            return 0;
         }
         break;
 
@@ -1728,10 +1761,7 @@ wxBoxSizer* MainFrame::create_side_tools()
                 // check valid of print
                 m_print_enable = get_enable_print_status();
                 m_print_btn->Enable(m_print_enable);
-                const bool open_start_print_dialog = m_print_select == ePrintPlate
-                    && wxGetApp().preset_bundle->use_device_print_flow()
-                    && !m_plater->get_preview_canvas3D()->is_all_plates_selected();
-                if (m_print_enable || open_start_print_dialog) {
+                if (m_print_enable) {
                     if (m_print_select == ePrintAll)
                         wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_ALL));
                     if (m_print_select == ePrintPlate)
@@ -2032,10 +2062,11 @@ bool MainFrame::get_enable_print_status()
     else if (m_print_select == ePrintPlate)
     {
         if (wxGetApp().preset_bundle->use_device_print_flow()) {
-            // Model on plate is enough; slice/printer target are confirmed in Start Print dialog.
-            enable = current_plate && current_plate->has_printable_instances() && !is_all_plates;
+            enable = current_plate && current_plate->has_printable_instances()
+                && current_plate->is_slice_result_ready_for_print()
+                && !is_all_plates;
         } else if (!wxGetApp().preset_bundle->use_bbl_network()) {
-            enable = !is_all_plates;
+            enable = current_plate && current_plate->is_slice_result_ready_for_print() && !is_all_plates;
         } else {
             if (!current_plate->is_slice_result_ready_for_print())
                 enable = false;
@@ -2167,13 +2198,7 @@ void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_sl
             enable_slice = false;
     }
     if (!can_print) {
-        const bool device_print_flow = wxGetApp().preset_bundle->use_device_print_flow();
-        PartPlate *plate = m_plater->get_partplate_list().get_curr_plate();
-        const bool is_all_plates = m_plater->get_preview_canvas3D()->is_all_plates_selected();
-        if (device_print_flow && m_print_select == ePrintPlate && plate && plate->has_printable_instances() && !is_all_plates)
-            enable_print = true;
-        else
-            enable_print = false;
+        enable_print = false;
     }
 
 

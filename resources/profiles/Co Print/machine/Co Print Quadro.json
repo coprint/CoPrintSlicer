@@ -1,0 +1,12 @@
+﻿{
+    "type":  "machine_model",
+    "name":  "Co Print Quadro",
+    "model_id":  "Co_Print_Quadro",
+    "nozzle_diameter":  "0.4;0.2;0.6",
+    "machine_tech":  "FFF",
+    "family":  "Co Print",
+    "bed_model":  "coprint_pei_sheet_buildplate_model.stl",
+    "bed_texture":  "coprint_pei_sheet_buildplate_texture.png",
+    "hotend_model":  "",
+    "default_materials":  "CoPrint Generic PLA"
+}

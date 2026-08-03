@@ -1337,7 +1337,6 @@ int GuideFrame::LoadProfileFamily(std::string strVendor, std::string strFilePath
         int  nsize   = pmodels.size();
 
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(",  got %1% machine models") % nsize;
-
         for (int n = 0; n < nsize; n++) {
             json OneModel = pmodels.at(n);
 
@@ -1346,7 +1345,6 @@ int GuideFrame::LoadProfileFamily(std::string strVendor, std::string strFilePath
 
             std::string s1 = OneModel["model"];
             std::string s2 = OneModel["sub_path"];
-
             boost::filesystem::path sub_path = boost::filesystem::absolute(vendor_dir / s2).make_preferred();
             if (!boost::filesystem::exists(sub_path)) continue;
 

@@ -1,0 +1,430 @@
+﻿{
+    "adaptive_bed_mesh_margin":  "0",
+    "auxiliary_fan":  "0",
+    "bbl_use_printhost":  "0",
+    "bed_custom_model":  "C:/Users/yusuf/AppData/Local/Temp/CoPrintSlicer-build-test/build/CoPrintSlicer/resources/profiles/Co Print/coprint_pei_sheet_buildplate_model.stl",
+    "bed_custom_texture":  "C:/Users/yusuf/AppData/Local/Temp/CoPrintSlicer-build-test/build/CoPrintSlicer/resources/profiles/Co Print/coprint_pei_sheet_buildplate_texture.png",
+    "bed_exclude_area":  [
+                             "0x0"
+                         ],
+    "bed_mesh_max":  "99999,99999",
+    "bed_mesh_min":  "-99999,-99999",
+    "bed_mesh_probe_distance":  "50,50",
+    "bed_temperature_formula":  "by_highest_temp",
+    "before_layer_change_gcode":  "",
+    "best_object_pos":  "0.5,0.5",
+    "change_extrusion_role_gcode":  "",
+    "change_filament_gcode":  "FILAMENT_CHANGE LAYER_NUM=[layer_num] NEXT_EXTRUDER=[next_extruder]",
+    "cooling_tube_length":  "0",
+    "cooling_tube_retraction":  "0",
+    "default_bed_type":  "",
+    "default_filament_profile":  [
+                                     "CoPrint Generic PLA"
+                                 ],
+    "default_nozzle_volume_type":  [
+                                       "Standard",
+                                       "Standard",
+                                       "Standard",
+                                       "Standard"
+                                   ],
+    "default_print_profile":  "0.2mm Standard @Co Print Quadro 0.4",
+    "deretraction_speed":  [
+                               "30",
+                               "30",
+                               "30",
+                               "30"
+                           ],
+    "disable_m73":  "1",
+    "emit_machine_limits_to_gcode":  "1",
+    "enable_filament_ramming":  "0",
+    "enable_long_retraction_when_cut":  "0",
+    "enable_power_loss_recovery":  "printer_configuration",
+    "extra_loading_move":  "0",
+    "extruder_clearance_height_to_lid":  "140",
+    "extruder_clearance_height_to_rod":  "36",
+    "extruder_clearance_radius":  "65",
+    "extruder_colour":  [
+                            "#FCE94F",
+                            "#FCE94F",
+                            "#FCE94F",
+                            "#FCE94F"
+                        ],
+    "extruder_offset":  [
+                            "0x0",
+                            "0x0",
+                            "0x0",
+                            "0x0"
+                        ],
+    "extruder_printable_area":  [
+
+                                ],
+    "extruder_printable_height":  [
+                                      "0",
+                                      "0",
+                                      "0",
+                                      "0"
+                                  ],
+    "extruder_type":  [
+                          "Direct Drive",
+                          "Direct Drive",
+                          "Direct Drive",
+                          "Direct Drive"
+                      ],
+    "extruder_variant_list":  [
+                                  "Direct Drive Standard",
+                                  "Direct Drive Standard",
+                                  "Direct Drive Standard",
+                                  "Direct Drive Standard"
+                              ],
+    "fan_kickstart":  "0",
+    "fan_speedup_overhangs":  "1",
+    "fan_speedup_time":  "0.5",
+    "file_start_gcode":  "",
+    "flashforge_serial_number":  "",
+    "from":  "User",
+    "gcode_flavor":  "klipper",
+    "grab_length":  [
+                        "0"
+                    ],
+    "head_wrap_detect_zone":  [
+
+                              ],
+    "high_current_on_filament_swap":  "0",
+    "host_type":  "moonraker",
+    "inherits":  "",
+    "input_shaping_damp_x":  "0.1",
+    "input_shaping_damp_y":  "0.1",
+    "input_shaping_emit":  "0",
+    "input_shaping_freq_x":  "0",
+    "input_shaping_freq_y":  "0",
+    "input_shaping_type":  "Default",
+    "layer_change_gcode":  "",
+    "long_retractions_when_cut":  [
+                                      "0",
+                                      "0",
+                                      "0",
+                                      "0"
+                                  ],
+    "machine_end_gcode":  "end_print",
+    "machine_load_filament_time":  "1",
+    "machine_max_acceleration_e":  [
+                                       "5000",
+                                       "2500"
+                                   ],
+    "machine_max_acceleration_extruding":  [
+                                               "10000",
+                                               "5000"
+                                           ],
+    "machine_max_acceleration_retracting":  [
+                                                "5000",
+                                                "2500"
+                                            ],
+    "machine_max_acceleration_travel":  [
+                                            "40000",
+                                            "40000"
+                                        ],
+    "machine_max_acceleration_x":  [
+                                       "10000",
+                                       "5000"
+                                   ],
+    "machine_max_acceleration_y":  [
+                                       "10000",
+                                       "5000"
+                                   ],
+    "machine_max_acceleration_z":  [
+                                       "300",
+                                       "100"
+                                   ],
+    "machine_max_jerk_e":  [
+                               "3",
+                               "2.5"
+                           ],
+    "machine_max_jerk_x":  [
+                               "9",
+                               "8"
+                           ],
+    "machine_max_jerk_y":  [
+                               "9",
+                               "8"
+                           ],
+    "machine_max_jerk_z":  [
+                               "3",
+                               "0.2"
+                           ],
+    "machine_max_junction_deviation":  [
+                                           "0.01"
+                                       ],
+    "machine_max_speed_e":  [
+                                "100",
+                                "100"
+                            ],
+    "machine_max_speed_x":  [
+                                "500",
+                                "500"
+                            ],
+    "machine_max_speed_y":  [
+                                "500",
+                                "500"
+                            ],
+    "machine_max_speed_z":  [
+                                "12",
+                                "10"
+                            ],
+    "machine_min_extruding_rate":  [
+                                       "0"
+                                   ],
+    "machine_min_travel_rate":  [
+                                    "0"
+                                ],
+    "machine_pause_gcode":  "",
+    "machine_start_gcode":  "start_print  EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] BED_TEMP=[bed_temperature_initial_layer_single]",
+    "machine_tool_change_time":  "0",
+    "machine_unload_filament_time":  "1",
+    "manual_filament_change":  "0",
+    "master_extruder_id":  "1",
+    "max_layer_height":  [
+                             "0.32",
+                             "0.28",
+                             "0.28",
+                             "0.28"
+                         ],
+    "max_resonance_avoidance_speed":  "120",
+    "min_layer_height":  [
+                             "0.08",
+                             "0.08",
+                             "0.08",
+                             "0.08"
+                         ],
+    "min_resonance_avoidance_speed":  "70",
+    "name":  "Co Print Quadro 0.4 nozzle",
+    "nozzle_diameter":  [
+                            "0.4",
+                            "0.4",
+                            "0.4",
+                            "0.4"
+                        ],
+    "nozzle_flush_dataset":  [
+                                 "0",
+                                 "0",
+                                 "0",
+                                 "0"
+                             ],
+    "nozzle_height":  "2.5",
+    "nozzle_hrc":  "0",
+    "nozzle_type":  [
+                        "hardened_steel",
+                        "undefine",
+                        "undefine",
+                        "undefine"
+                    ],
+    "nozzle_volume":  [
+                          "156",
+                          "156",
+                          "156",
+                          "156"
+                      ],
+    "parallel_printheads_bed_exclude_areas":  [
+
+                                              ],
+    "parallel_printheads_count":  "1",
+    "parking_pos_retraction":  "0",
+    "part_cooling_fan_min_pwm":  "0",
+    "pellet_modded_printer":  "0",
+    "physical_extruder_map":  [
+                                  "0"
+                              ],
+    "preferred_orientation":  "0",
+    "print_host":  "",
+    "print_host_webui":  "",
+    "printable_area":  [
+                           "285.59x293.08",
+                           "200.91x292.10",
+                           "191.54x300.58",
+                           "189.80x301.20",
+                           "185.31x300.88",
+                           "178.73x295.03",
+                           "171.14x301.19",
+                           "128.88x301.19",
+                           "121.16x295.04",
+                           "114.71x300.88",
+                           "110.22x301.20",
+                           "108.48x300.58",
+                           "99.10x292.10",
+                           "16.42x292.08",
+                           "12.55x290.48",
+                           "10.94x285.41",
+                           "10.94x18.24",
+                           "12.55x14.37",
+                           "16.42x12.76",
+                           "100.03x12.73",
+                           "112.82x0.71",
+                           "114.66x0.00",
+                           "185.61x0.01",
+                           "199.97x12.73",
+                           "284.38x12.76",
+                           "288.25x14.37",
+                           "289.86x18.24",
+                           "289.86x285.41",
+                           "289.45x290.28"
+                       ],
+    "printable_height":  "350",
+    "printer_agent":  "coprint",
+    "printer_extruder_id":  [
+                                "1",
+                                "2",
+                                "3",
+                                "4"
+                            ],
+    "printer_extruder_variant":  [
+                                     "Direct Drive Standard",
+                                     "Direct Drive Standard",
+                                     "Direct Drive Standard",
+                                     "Direct Drive Standard"
+                                 ],
+    "printer_model":  "Co Print Quadro",
+    "printer_notes":  "",
+    "printer_settings_id":  "Co Print Quadro 0.4 nozzle",
+    "printer_structure":  "undefine",
+    "printer_technology":  "FFF",
+    "printer_variant":  "0.4",
+    "printhost_apikey":  "",
+    "printhost_authorization_type":  "key",
+    "printhost_cafile":  "",
+    "printhost_password":  "",
+    "printhost_port":  "",
+    "printhost_ssl_ignore_revoke":  "0",
+    "printhost_user":  "",
+    "printing_by_object_gcode":  "",
+    "purge_in_prime_tower":  "0",
+    "resonance_avoidance":  "0",
+    "retract_before_wipe":  [
+                                "0%",
+                                "0%",
+                                "0%",
+                                "0%"
+                            ],
+    "retract_length_toolchange":  [
+                                      "4",
+                                      "4",
+                                      "4",
+                                      "4"
+                                  ],
+    "retract_lift_above":  [
+                               "0",
+                               "0",
+                               "0",
+                               "0"
+                           ],
+    "retract_lift_below":  [
+                               "255",
+                               "255",
+                               "255",
+                               "255"
+                           ],
+    "retract_lift_enforce":  [
+                                 "All Surfaces",
+                                 "All Surfaces",
+                                 "All Surfaces",
+                                 "All Surfaces"
+                             ],
+    "retract_restart_extra":  [
+                                  "0",
+                                  "0",
+                                  "0",
+                                  "0"
+                              ],
+    "retract_restart_extra_toolchange":  [
+                                             "0",
+                                             "0",
+                                             "0",
+                                             "0"
+                                         ],
+    "retract_when_changing_layer":  [
+                                        "0",
+                                        "0",
+                                        "0",
+                                        "0"
+                                    ],
+    "retraction_distances_when_cut":  [
+                                          "18",
+                                          "18",
+                                          "18",
+                                          "18"
+                                      ],
+    "retraction_length":  [
+                              "0.5",
+                              "0.5",
+                              "0.5",
+                              "0.5"
+                          ],
+    "retraction_minimum_travel":  [
+                                      "1",
+                                      "1",
+                                      "1",
+                                      "1"
+                                  ],
+    "retraction_speed":  [
+                             "50",
+                             "50",
+                             "50",
+                             "50"
+                         ],
+    "scan_first_layer":  "0",
+    "silent_mode":  "0",
+    "single_extruder_multi_material":  "0",
+    "support_air_filtration":  "1",
+    "support_chamber_temp_control":  "0",
+    "support_multi_bed_types":  "0",
+    "support_object_skip_flush":  "0",
+    "support_parallel_printheads":  "0",
+    "template_custom_gcode":  "",
+    "thumbnails":  "300x300/PNG, 400x300/PNG, 96x96/PNG, 32x32/PNG",
+    "thumbnails_format":  "PNG",
+    "time_cost":  "0",
+    "time_lapse_gcode":  "",
+    "tool_change_on_wipe_tower":  "0",
+    "travel_slope":  [
+                         "3",
+                         "3",
+                         "3",
+                         "3"
+                     ],
+    "upward_compatible_machine":  [
+
+                                  ],
+    "use_3mf":  "0",
+    "use_firmware_retraction":  "0",
+    "use_relative_e_distances":  "1",
+    "version":  "2.4.0.2",
+    "wipe":  [
+                 "0",
+                 "0",
+                 "0",
+                 "0"
+             ],
+    "wipe_distance":  [
+                          "2",
+                          "2",
+                          "2",
+                          "2"
+                      ],
+    "wipe_tower_type":  "type2",
+    "wrapping_detection_gcode":  "",
+    "wrapping_detection_layers":  "20",
+    "wrapping_exclude_area":  [
+
+                              ],
+    "z_hop":  [
+                  "0.4",
+                  "0.4",
+                  "0.4",
+                  "0.4"
+              ],
+    "z_hop_types":  [
+                        "Normal Lift",
+                        "Normal Lift",
+                        "Normal Lift",
+                        "Normal Lift"
+                    ],
+    "z_offset":  "0"
+}

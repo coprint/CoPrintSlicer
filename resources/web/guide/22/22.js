@@ -20,11 +20,8 @@ function HandleStudio(pVal)
 
 function InstallNetworkPlugin()
 {
-	if(m_ProfileItem["network_plugin_install"]!='1' || (m_ProfileItem["network_plugin_install"]=='1' && m_ProfileItem["network_plugin_compability"]=='0') )
-	{
-		$("#AcceptBtn").hide();
-		$("#GotoNetPluginBtn").show();
-	}
+	$("#GotoNetPluginBtn").hide();
+	$("#AcceptBtn").show();
 }
 
 function ReturnPreviewPage()
@@ -39,10 +36,7 @@ function ReturnPreviewPage()
 
 function GotoNetPluginPage()
 {
-	let bRet=ResponseFilamentResult();
-	
-	if(bRet)
-		window.location.href="../4orca/index.html";
+	FinishGuide();
 }
 
 function FinishGuide()

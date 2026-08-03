@@ -17,10 +17,15 @@ body
 
 #Title
 {
-	height:20mm;
-	line-height: 20mm;
-	font-size: 6mm;
-	color: #009688;
+    height:20mm;
+    line-height: 20mm;
+    font-size: 6mm;
+    color: #009688;
+    background: linear-gradient(90deg, #00a88f 0%, #22c55e 45%, #28a9e0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    font-weight: 500;
 }
 
 #STip

@@ -243,37 +243,20 @@ private:
         const double y = rect.y;
         const double w = rect.width;
         const double h = rect.height;
-        const double arch_lift = FromDIP(8);
-
-        wxGraphicsPath outer = gc->CreatePath();
-        outer.MoveToPoint(x, y + h);
-        outer.AddLineToPoint(x, y + FromDIP(30));
-        outer.AddQuadCurveToPoint(x + w * 0.5, y - arch_lift, x + w, y + FromDIP(30));
-        outer.AddLineToPoint(x + w, y + h);
-        outer.CloseSubpath();
+        const double radius = FromDIP(14);
+        const double top_h = FromDIP(34);
+        const double leg_w = FromDIP(30);
+        const double leg_extra = FromDIP(34);
+        const double inner_top = y + top_h;
 
         gc->SetPen(*wxTRANSPARENT_PEN);
         gc->SetBrush(wxBrush(wxColour(42, 45, 48)));
-        gc->FillPath(outer);
+        gc->DrawRoundedRectangle(x, y, w, top_h + FromDIP(6), radius);
+        gc->DrawRectangle(x, y + top_h * 0.55, leg_w, h - top_h * 0.55 + leg_extra);
+        gc->DrawRectangle(x + w - leg_w, y + top_h * 0.55, leg_w, h - top_h * 0.55 + leg_extra);
 
-        const double inset = FromDIP(24);
-        wxGraphicsPath inner = gc->CreatePath();
-        inner.MoveToPoint(x + inset, y + h - FromDIP(2));
-        inner.AddLineToPoint(x + inset, y + FromDIP(42));
-        inner.AddQuadCurveToPoint(x + w * 0.5, y + FromDIP(24), x + w - inset, y + FromDIP(42));
-        inner.AddLineToPoint(x + w - inset, y + h - FromDIP(2));
-        inner.CloseSubpath();
-        gc->SetBrush(wxBrush(wxColour(30, 33, 36)));
-        gc->FillPath(inner);
-
-        wxGraphicsPath shade = gc->CreatePath();
-        shade.MoveToPoint(x + inset, y + FromDIP(42));
-        shade.AddLineToPoint(x + inset + FromDIP(20), y + FromDIP(42));
-        shade.AddLineToPoint(x + inset + FromDIP(8), y + h - FromDIP(2));
-        shade.AddLineToPoint(x + inset, y + h - FromDIP(2));
-        shade.CloseSubpath();
-        gc->SetBrush(wxBrush(wxColour(34, 37, 40)));
-        gc->FillPath(shade);
+        gc->SetBrush(wxBrush(wxColour(27, 29, 31)));
+        gc->DrawRectangle(x + leg_w, inner_top, w - 2 * leg_w, h - top_h + leg_extra);
     }
 
     wxString tool_short_label(int tool_index) const
@@ -409,7 +392,7 @@ wxBitmap make_white_bitmap_from_png(wxWindow* parent, const char* relative_path,
 
 wxBitmap make_expand_arrow_icon(wxWindow* parent, int px)
 {
-    return make_white_bitmap_from_png(parent, "images/expandarrow.png", "replace_arrow_down", px);
+    return create_scaled_bitmap("replace_arrow_down", parent, px, false, "#FFFFFF");
 }
 
 struct PopupManageToolOption {

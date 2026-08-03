@@ -1,6 +1,7 @@
 #include "CreatePresetsDialog.hpp"
 #include <boost/log/trivial.hpp>
 #include <vector>
+#include <algorithm>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -68,18 +69,17 @@ static const std::vector<std::string> filament_types = {"PLA",    "rPLA",  "PLA+
                                                         "PETGCF", "PTBA",  "PTBA90A",   "PEEK",  "TPU93A", "TPU75D", "TPU",       "TPU92A", "TPU98A", "Misc",
                                                         "TPE",    "GLAZE", "Nylon",     "CPE",   "METAL",  "ABST",   "Carbon Fiber", "SBS"};
 
-static const std::vector<std::string> printer_vendors = 
-    {"Anker",              "Anycubic",           "Artillery",          "Bambulab",           "BIQU",
-     "Blocks",             "Chuanying",          "Co Print",           "Comgrow",            "CONSTRUCT3D",
-     "Creality",           "DeltaMaker",         "Dremel",             "Elegoo",             "Flashforge",
-     "FLSun",              "FlyingBear",         "Folgertech",         "Geeetech",           "Ginger Additive",
-     "InfiMech",           "Kingroon",           "Lulzbot",            "MagicMaker",         "Mellow",
-     "Orca Arena Printer", "Peopoly",            "Positron 3D",        "Prusa",              "Qidi",
-     "Raise3D",            "RatRig",             "re3D",               "RolohaunDesign",     "SecKit",             
-     "Snapmaker",          "Sovol",              "Thinker X400",       "Tronxy",             "TwoTrees",           
-     "UltiMaker",          "Vivedino",           "Volumic",            "Voron",              "Voxelab",            
-     "Vzbot",              "Wanhao",             "Z-Bolt"};
+static const std::vector<std::string> printer_vendors = {"Co Print"};
 
+static bool is_coprint_chromaset_enabled_for_connection()
+{
+    try {
+        AppConfig *app_config = wxGetApp().app_config;
+        return app_config != nullptr && app_config->get_variant("Co Print", "Co Print ChromaSet", "0.4");
+    } catch (...) {
+        return false;
+    }
+}
 static const std::unordered_map<std::string, std::vector<std::string>> printer_model_map =
     {{"Anker",             {"Anker M5",                   "Anker M5 All-Metal Hot End", "Anker M5C"}},
      {"Anycubic",          {"Anycubic i3 Mega S",    "Anycubic Chiron",       "Anycubic Vyper",        "Anycubic Kobra",        "Anycubic Kobra Max",
@@ -92,7 +92,7 @@ static const std::unordered_map<std::string, std::vector<std::string>> printer_m
      {"BIQU",              {"BIQU B1",      "BIQU BX",      "BIQU Hurakan"}},
      {"Blocks",            {"BLOCKS Pro S100", "BLOCKS RD50 V2",  "BLOCKS RF50"}},
      {"Chuanying",         {"Chuanying X1"}},
-     {"Co Print",          {"Co Print ChromaSet"}},
+     {"Co Print",          {"Co Print Quadro", "Co Print ChromaSet"}},
      {"Comgrow",           {"Comgrow T300", "Comgrow T500"}},
      {"CONSTRUCT3D",       {"Construct 1 XL", "Construct 1"}},
      {"Creality",          {"Creality CR-10 V2",           "Creality CR-10 Max",          "Creality CR-10 SE",           "Creality CR-6 SE",            "Creality CR-6 Max",
@@ -1746,6 +1746,9 @@ wxBoxSizer *CreatePrinterPresetDialog::create_printer_item(wxWindow *parent)
         if (iter != printer_model_map.end())
         {
             std::vector<std::string> vendor_model = iter->second;
+            if (curr_selected_vendor == "Co Print" && !is_coprint_chromaset_enabled_for_connection()) {
+                vendor_model.erase(std::remove(vendor_model.begin(), vendor_model.end(), "Co Print ChromaSet"), vendor_model.end());
+            }
             wxArrayString            model_choice;
             for (const std::string &model : vendor_model) {
                 model_choice.Add(model);

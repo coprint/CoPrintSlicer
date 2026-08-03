@@ -45,6 +45,7 @@ private:
     void dispatch_axis(Axis axis, double direction) const;
     void dispatch(DeviceCommand command) const;
     void set_active_tool_button(int tool_index);
+    void set_available_tool_count(int tool_count);
     void set_active_distance_button(double distance_mm);
     void set_active_speed_button(SpeedPreset preset);
 
@@ -68,6 +69,7 @@ private:
     std::array<int8_t, 4> m_speed_button_active{-1, -1, -1, -1};
     double m_selected_distance_mm{1.0};
     int m_selected_tool{0};
+    int m_available_tool_count{MaxDashboardTools};
     bool m_compact_mode{false};
     SpeedPreset m_speed_preset{SpeedPreset::Normal};
     CommandHandler m_command_handler;

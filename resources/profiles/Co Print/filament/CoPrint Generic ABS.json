@@ -67,6 +67,9 @@
 		"100"
 	],
 	"compatible_printers": [
+		"Co Print Quadro 0.2 nozzle",
+		"Co Print Quadro 0.4 nozzle",
+		"Co Print Quadro 0.6 nozzle",
 		"Co Print ChromaSet 0.4 nozzle",
 		"Co Print ChromaSet 0.4 nozzle - Ender-3 V3",
 		"Co Print ChromaSet 0.4 nozzle - Ender-3 V3 Plus",

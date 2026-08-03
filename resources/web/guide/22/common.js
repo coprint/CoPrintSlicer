@@ -1,7 +1,7 @@
 var m_ProfileItem;
 
 var FilamentPriority = new Array( "pla","abs","pet","tpu","pc");
-var VendorPriority   = new Array("generic");
+var VendorPriority   = new Array("co print");
 
 function RequestProfile()
 {
@@ -55,6 +55,8 @@ function SortUI()
 	for( let key in m_ProfileItem['filament'] )
 	{
 		let OneFila=m_ProfileItem['filament'][key];
+		if(OneFila['vendor'].toLowerCase() !== 'co print')
+			continue;
 		if(OneFila['vendor'].toLowerCase() === 'generic')
 			GenericFilamentArray.push({key: key, data: OneFila});
 		else

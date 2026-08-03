@@ -8,7 +8,8 @@ function OnInit()
 	//-----Official-----
     TranslatePage();
 
-	SendMsg_GetLoginInfo();
+	// CoPrint account UI is disabled for now; keep the legacy handlers below for future re-enable.
+	// SendMsg_GetLoginInfo();
 	SendMsg_GetBambuLoginInfo();
 	SendMsg_GetRecentFile();
 	SendMsg_GetStaffPick();
@@ -86,12 +87,12 @@ function HandleStudio( pVal )
 {
 	let strCmd = pVal['command'];
 	
-	if (strCmd == "get_recent_projects") {
+  if (strCmd == "get_recent_projects") {
     ShowRecentFileList(pVal["response"]);
   } else if (strCmd == "orca_userlogin") {
-    SetOrcaLoginInfo(pVal["data"]["avatar"], pVal["data"]["name"]);
+    return;
   } else if (strCmd == "orca_useroffline") {
-    SetOrcaUserOffline();
+    return;
   } else if (strCmd == "studio_bambu_userlogin") {
     SetBambuLoginInfo(pVal["data"]["avatar"], pVal["data"]["name"]);
   } else if (strCmd == "studio_bambu_useroffline") {
@@ -172,6 +173,7 @@ function GotoMenu( strMenu )
 
 function SetOrcaLoginInfo( strAvatar, strName )
 {
+	return;
 	$("#OrcaLogin1").hide();
 	$("#OrcaStatusText").hide();
 
@@ -191,6 +193,7 @@ function SetOrcaLoginInfo( strAvatar, strName )
 
 function SetOrcaUserOffline()
 {
+	return;
 	$("#UserAvatarIcon").prop("src","img/c.jpg");
 	$("#UserName").text('');
 	$("#OrcaLogin2").hide();
