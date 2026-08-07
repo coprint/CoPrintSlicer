@@ -10,6 +10,7 @@
 
 class wxStaticBitmap;
 class wxStaticText;
+class wxFrame;
 
 namespace Slic3r {
 namespace GUI {
@@ -20,6 +21,7 @@ class DeviceCardFrame;
 class CameraPanel : public wxPanel
 {
 public:
+
     using RefreshHandler = std::function<void()>;
     using PlayHandler = std::function<void()>;
     using FullscreenHandler = std::function<void()>;
@@ -44,8 +46,13 @@ private:
     void update_idle_visibility(bool stream_available);
     void layout_viewport_layers();
     void apply_viewport_height_px();
+    // Moves the live stream host into a maximized top-level window (Esc, the
+    // on-screen close button, or the window's own close box all return it to
+    // the Device tab -- no more getting stuck needing Alt+Tab to escape).
+    void toggle_fullscreen();
 
     DeviceCardFrame* m_frame{nullptr};
+    wxFrame* m_fullscreen_frame{nullptr};
     wxPanel* m_viewport{nullptr};
     int m_viewport_height_px{0};
     wxPanel* m_idle_placeholder{nullptr};
