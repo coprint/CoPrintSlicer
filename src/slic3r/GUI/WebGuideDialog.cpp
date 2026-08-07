@@ -823,18 +823,29 @@ bool GuideFrame::apply_config(AppConfig *app_config, PresetBundle *preset_bundle
         if (config == enabled_vendors.end())
             return std::string();
 
-        const VendorProfile & printer_profile = preset_bundle->vendors[bundle_name];
+        // Use find() — vendors[bundle_name] inserts an empty VendorProfile when the
+        // bundle is not loaded yet (first-run install), and merge_presets keeps that
+        // empty stub, breaking set_visible_from_appconfig until restart.
+        const VendorProfile *printer_profile = nullptr;
+        if (auto vp_it = preset_bundle->vendors.find(bundle_name); vp_it != preset_bundle->vendors.end())
+            printer_profile = &vp_it->second;
+
         const std::map<std::string, std::set<std::string>>& model_maps = config->second;
         //for (const auto& vendor_profile : preset_bundle->vendors) {
         for (const auto& model_it: model_maps) {
             if (model_it.second.size() > 0) {
                 variant = *model_it.second.begin();
                 if (model_it.second.size() > 1) {
-                    if (printer_profile.models.size() > 0) {
-                        const VendorProfile::PrinterModel& printer_model = *std::find_if(printer_profile.models.begin(), printer_profile.models.end(),
+                    if (printer_profile && !printer_profile->models.empty()) {
+                        auto model_fit = std::find_if(printer_profile->models.begin(), printer_profile->models.end(),
                             [id = model_it.first](auto& m) { return m.id == id; });
-                        for (auto& vt : printer_model.variants) {
-                            if (std::find(model_it.second.begin(), model_it.second.end(), vt.name) != model_it.second.end()) { variant = vt.name; break; }
+                        if (model_fit != printer_profile->models.end()) {
+                            for (auto& vt : model_fit->variants) {
+                                if (std::find(model_it.second.begin(), model_it.second.end(), vt.name) != model_it.second.end()) {
+                                    variant = vt.name;
+                                    break;
+                                }
+                            }
                         }
                     }
                     else if (variant != PresetBundle::ORCA_DEFAULT_PRINTER_VARIANT){
@@ -873,6 +884,22 @@ bool GuideFrame::apply_config(AppConfig *app_config, PresetBundle *preset_bundle
                     break;
         }
     }
+    // Fresh installs / re-running the guide often select printers that are already present
+    // in AppConfig, so the "newly added" scan above returns empty. Still activate the first
+    // wizard-selected model so Quadro/ChromaSet become the current printer immediately.
+    if (preferred_model.empty()) {
+        for (const auto &bundle : enabled_vendors) {
+            for (const auto &model_it : bundle.second) {
+                if (!model_it.second.empty()) {
+                    preferred_model = model_it.first;
+                    preferred_variant = *model_it.second.begin();
+                    break;
+                }
+            }
+            if (!preferred_model.empty())
+                break;
+        }
+    }
 
     std::string first_added_filament;
     auto get_first_added_material_preset = [this, app_config](const std::string& section_name, std::string& first_added_preset) {
@@ -882,8 +909,11 @@ bool GuideFrame::apply_config(AppConfig *app_config, PresetBundle *preset_bundle
             first_added_preset = get_first_added_preset(old_presets, m_appconfig_new.get_section(section_name));
         }
     };
-    // Not switch filament
-    //get_first_added_material_preset(AppConfig::SECTION_FILAMENTS, first_added_filament);
+    get_first_added_material_preset(AppConfig::SECTION_FILAMENTS, first_added_filament);
+    // Fresh installs often select filaments without a "diff" against previous config.
+    // Fall back to the first wizard-selected filament so Quadro/ChromaSet activate CoPrint Generic *.
+    if (first_added_filament.empty() && !enabled_filaments.empty())
+        first_added_filament = enabled_filaments.begin()->first;
 
     // ORCA: functionality moved to PresetBundle::apply_vendor_config; keeping for future reference
     // // For each @System filament, check if a vendor-specific override exists
@@ -959,7 +989,8 @@ bool GuideFrame::apply_config(AppConfig *app_config, PresetBundle *preset_bundle
             app_config,
             true,
             preferred_model,
-            preferred_variant))
+            preferred_variant,
+            first_added_filament))
         return false;
 
     return true;
@@ -998,6 +1029,8 @@ bool GuideFrame::run()
             app.apply_keeped_preset_modifications();
 
         app.app_config->set_legacy_datadir(false);
+        // Ensure wizard vendor/filament selections are on disk before UI refresh.
+        app.app_config->save();
         app.update_mode();
         // BBS
         //app.obj_manipul()->update_ui_from_settings();
@@ -1144,59 +1177,101 @@ int GuideFrame::LoadProfileData()
         orca_bundle_rsrc = true;
 
         // search if there exists a .json file in vendor_dir folder, if exists, set orca_bundle_rsrc to false
-        for (const auto& entry : boost::filesystem::directory_iterator(vendor_dir)) {
-            if (!boost::filesystem::is_directory(entry) && boost::iequals(entry.path().extension().string(), ".json") && !boost::iequals(entry.path().stem().string(), PresetBundle::ORCA_FILAMENT_LIBRARY)) {
-                orca_bundle_rsrc = false;
-                break;
+        if (boost::filesystem::exists(vendor_dir)) {
+            for (const auto& entry : boost::filesystem::directory_iterator(vendor_dir)) {
+                if (!boost::filesystem::is_directory(entry) && boost::iequals(entry.path().extension().string(), ".json") && !boost::iequals(entry.path().stem().string(), PresetBundle::ORCA_FILAMENT_LIBRARY)) {
+                    orca_bundle_rsrc = false;
+                    break;
+                }
             }
         }
 
-        // load the default filament library first
+        // CoPrintSlicer: shipped vendors must come from the package so every
+        // recipient sees the same wizard filaments/settings. Stale AppData
+        // copies previously won and caused empty lists or old values.
+        auto prefer_packaged_resources = [](const std::string &vendor) {
+            return vendor == "Co Print"
+                || vendor == PresetBundle::ORCA_DEFAULT_BUNDLE
+                || vendor == PresetBundle::ORCA_FILAMENT_LIBRARY;
+        };
+
+        // load the default filament library first — prefer packaged resources
         std::set<std::string> loaded_vendors;
         auto filament_library_name = boost::filesystem::path(PresetBundle::ORCA_FILAMENT_LIBRARY).replace_extension(".json");
-        if (boost::filesystem::exists(vendor_dir / filament_library_name)) {
-            m_OrcaFilaLibPath = (vendor_dir / PresetBundle::ORCA_FILAMENT_LIBRARY).string();
-            LoadProfileFamily(PresetBundle::ORCA_FILAMENT_LIBRARY, (vendor_dir / filament_library_name).string());
-        } else {
+        if (boost::filesystem::exists(rsrc_vendor_dir / filament_library_name)) {
             m_OrcaFilaLibPath = (rsrc_vendor_dir / PresetBundle::ORCA_FILAMENT_LIBRARY).string();
             LoadProfileFamily(PresetBundle::ORCA_FILAMENT_LIBRARY, (rsrc_vendor_dir / filament_library_name).string());
+        } else if (boost::filesystem::exists(vendor_dir / filament_library_name)) {
+            m_OrcaFilaLibPath = (vendor_dir / PresetBundle::ORCA_FILAMENT_LIBRARY).string();
+            LoadProfileFamily(PresetBundle::ORCA_FILAMENT_LIBRARY, (vendor_dir / filament_library_name).string());
         }
         loaded_vendors.insert(PresetBundle::ORCA_FILAMENT_LIBRARY);
 
-        //load custom bundle from user data path
-        boost::filesystem::directory_iterator endIter;
-        for (boost::filesystem::directory_iterator iter(vendor_dir); iter != endIter; iter++) {
-            if (!boost::filesystem::is_directory(*iter)) {
+        // Packaged Co Print / Custom first (single source of truth for the wizard)
+        if (boost::filesystem::exists(rsrc_vendor_dir)) {
+            boost::filesystem::directory_iterator rsrc_end;
+            for (boost::filesystem::directory_iterator iter(rsrc_vendor_dir); iter != rsrc_end; iter++) {
+                if (boost::filesystem::is_directory(*iter))
+                    continue;
                 wxString strVendor = from_u8(iter->path().string()).BeforeLast('.');
                 strVendor          = strVendor.AfterLast('\\');
                 strVendor          = strVendor.AfterLast('/');
-
                 wxString strExtension = from_u8(iter->path().string()).AfterLast('.').Lower();
-                if(strExtension.CmpNoCase("json") != 0 || loaded_vendors.find(w2s(strVendor)) != loaded_vendors.end())
+                const std::string vendor_name = w2s(strVendor);
+                if (strExtension.CmpNoCase("json") != 0
+                    || loaded_vendors.find(vendor_name) != loaded_vendors.end()
+                    || !prefer_packaged_resources(vendor_name))
                     continue;
 
-                LoadProfileFamily(w2s(strVendor), iter->path().string());
-                loaded_vendors.insert(w2s(strVendor));
+                LoadProfileFamily(vendor_name, iter->path().string());
+                loaded_vendors.insert(vendor_name);
+                if (m_destroy)
+                    return 0;
             }
-            if (m_destroy)
-                return 0;
         }
 
-        boost::filesystem::directory_iterator others_endIter;
-        for (boost::filesystem::directory_iterator iter(rsrc_vendor_dir); iter != others_endIter; iter++) {
-            if (!boost::filesystem::is_directory(*iter)) {
-                wxString strVendor = from_u8(iter->path().string()).BeforeLast('.');
-                strVendor          = strVendor.AfterLast('\\');
-                strVendor          = strVendor.AfterLast('/');
-                wxString strExtension = from_u8(iter->path().string()).AfterLast('.').Lower();
-                if (strExtension.CmpNoCase("json") != 0 || loaded_vendors.find(w2s(strVendor)) != loaded_vendors.end())
-                    continue;
+        // Remaining AppData vendors (skip packaged ones already loaded above)
+        if (boost::filesystem::exists(vendor_dir)) {
+            boost::filesystem::directory_iterator endIter;
+            for (boost::filesystem::directory_iterator iter(vendor_dir); iter != endIter; iter++) {
+                if (!boost::filesystem::is_directory(*iter)) {
+                    wxString strVendor = from_u8(iter->path().string()).BeforeLast('.');
+                    strVendor          = strVendor.AfterLast('\\');
+                    strVendor          = strVendor.AfterLast('/');
 
-                LoadProfileFamily(w2s(strVendor), iter->path().string());
-                loaded_vendors.insert(w2s(strVendor));
+                    wxString strExtension = from_u8(iter->path().string()).AfterLast('.').Lower();
+                    const std::string vendor_name = w2s(strVendor);
+                    if (strExtension.CmpNoCase("json") != 0
+                        || loaded_vendors.find(vendor_name) != loaded_vendors.end()
+                        || prefer_packaged_resources(vendor_name))
+                        continue;
+
+                    LoadProfileFamily(vendor_name, iter->path().string());
+                    loaded_vendors.insert(vendor_name);
+                }
+                if (m_destroy)
+                    return 0;
             }
-            if (m_destroy)
-                return 0;
+        }
+
+        // Any other packaged vendors not already loaded
+        if (boost::filesystem::exists(rsrc_vendor_dir)) {
+            boost::filesystem::directory_iterator others_endIter;
+            for (boost::filesystem::directory_iterator iter(rsrc_vendor_dir); iter != others_endIter; iter++) {
+                if (!boost::filesystem::is_directory(*iter)) {
+                    wxString strVendor = from_u8(iter->path().string()).BeforeLast('.');
+                    strVendor          = strVendor.AfterLast('\\');
+                    strVendor          = strVendor.AfterLast('/');
+                    wxString strExtension = from_u8(iter->path().string()).AfterLast('.').Lower();
+                    if (strExtension.CmpNoCase("json") != 0 || loaded_vendors.find(w2s(strVendor)) != loaded_vendors.end())
+                        continue;
+
+                    LoadProfileFamily(w2s(strVendor), iter->path().string());
+                    loaded_vendors.insert(w2s(strVendor));
+                }
+                if (m_destroy)
+                    return 0;
+            }
         }
 
         wxGetApp().CallAfter([this] {
@@ -1337,6 +1412,7 @@ int GuideFrame::LoadProfileFamily(std::string strVendor, std::string strFilePath
         int  nsize   = pmodels.size();
 
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(",  got %1% machine models") % nsize;
+
         for (int n = 0; n < nsize; n++) {
             json OneModel = pmodels.at(n);
 
@@ -1345,6 +1421,7 @@ int GuideFrame::LoadProfileFamily(std::string strVendor, std::string strFilePath
 
             std::string s1 = OneModel["model"];
             std::string s2 = OneModel["sub_path"];
+
             boost::filesystem::path sub_path = boost::filesystem::absolute(vendor_dir / s2).make_preferred();
             if (!boost::filesystem::exists(sub_path)) continue;
 

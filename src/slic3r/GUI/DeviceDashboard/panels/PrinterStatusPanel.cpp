@@ -5,6 +5,8 @@
 #include "../../Widgets/StaticBox.hpp"
 #include "../../wxExtensions.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include <array>
@@ -145,6 +147,7 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
     {
         grid->AddSpacer(FromDIP(10));
         auto* card = new StaticBox(content, wxID_ANY);
+        m_bed_card = card;
         card->SetMinSize(wxSize(-1, FromDIP(90)));
         card->SetCornerRadius(FromDIP(10));
         card->SetBorderWidth(1);
@@ -267,6 +270,32 @@ void PrinterStatusPanel::set_tool_select_handler(ToolSelectHandler handler)  { m
 void PrinterStatusPanel::set_nozzle_temp_handler(NozzleTempHandler handler)  { m_nozzle_temp_handler = std::move(handler); }
 void PrinterStatusPanel::set_fan_speed_handler(FanSpeedHandler handler)      { m_fan_speed_handler   = std::move(handler); }
 void PrinterStatusPanel::set_bed_temp_handler(BedTempHandler handler)        { m_bed_temp_handler    = std::move(handler); }
+
+void PrinterStatusPanel::fit_to_height(int content_height_px)
+{
+    if (content_height_px <= 0)
+        return;
+
+    const int design_h = FromDIP(150);
+    const double scale = std::clamp(static_cast<double>(content_height_px) / static_cast<double>(design_h), 0.42, 1.0);
+    const int tool_h = std::max(FromDIP(56), static_cast<int>(std::lround(FromDIP(110) * scale)));
+    const int bed_h = std::max(FromDIP(48), static_cast<int>(std::lround(FromDIP(90) * scale)));
+
+    for (ToolView& tool : m_tools) {
+        if (tool.card == nullptr)
+            continue;
+        tool.card->SetMinSize(wxSize(-1, 1));
+        tool.card->SetMaxSize(wxSize(-1, tool_h));
+    }
+    if (m_bed_card != nullptr) {
+        m_bed_card->SetMinSize(wxSize(-1, 1));
+        m_bed_card->SetMaxSize(wxSize(-1, bed_h));
+    }
+
+    SetMinSize(wxSize(FromDIP(240), 1));
+    SetMaxSize(wxSize(-1, content_height_px));
+    Layout();
+}
 
 wxString PrinterStatusPanel::temperature_text(const TemperatureReading& reading)
 {

@@ -29,10 +29,6 @@ constexpr int kToolColumnWidth = 92;
 constexpr int kXYColumnWidth = 300;
 constexpr int kZColumnWidth = 90;
 constexpr int kOptionColumnWidth = 93;
-constexpr int kCompactToolColumnWidth = 74;
-constexpr int kCompactXYColumnWidth = 230;
-constexpr int kCompactZColumnWidth = 74;
-constexpr int kCompactOptionColumnWidth = 78;
 
 enum class JoystickAction {
     None,
@@ -52,7 +48,7 @@ public:
         , m_bitmap_name(bitmap_name)
         , m_label(label)
     {
-        set_visual_size(FromDIP(90), FromDIP(75), 75);
+        apply_size(FromDIP(90), FromDIP(75));
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetBackgroundColour(DeviceUiStyle::page_background());
         SetCursor(wxCursor(wxCURSOR_HAND));
@@ -63,13 +59,14 @@ public:
     }
 
     void set_click_handler(ClickHandler handler) { m_click_handler = std::move(handler); }
-    void set_visual_size(int width, int height, int bitmap_dip_size)
+
+    void apply_size(int width, int height)
     {
-        SetMinSize(wxSize(width, height));
-        SetMaxSize(wxSize(width, height));
-        SetSize(wxSize(width, height));
-        m_bitmap_dip_size = bitmap_dip_size;
-        Refresh();
+        const wxSize size(std::max(1, width), std::max(1, height));
+        SetMinSize(size);
+        SetMaxSize(size);
+        SetSize(size);
+        Refresh(false);
     }
 
 private:
@@ -80,7 +77,7 @@ private:
         dc.Clear();
 
         const int press_offset = m_pressed ? FromDIP(1) : 0;
-        const wxBitmap bmp = create_scaled_bitmap(m_bitmap_name.ToStdString(), this, m_bitmap_dip_size);
+        const wxBitmap bmp = create_scaled_bitmap(m_bitmap_name.ToStdString(), this, 75);
         if (bmp.IsOk()) {
             const wxSize hs = GetClientSize();
             const wxSize bs = bmp.GetSize();
@@ -136,7 +133,6 @@ private:
     wxString m_label;
     ClickHandler m_click_handler;
     bool m_pressed{false};
-    int m_bitmap_dip_size{75};
 };
 
 class AxisJoystickPanel : public wxPanel
@@ -152,8 +148,7 @@ public:
         , m_center_gap(center_gap)
         , m_button_gap(button_gap)
     {
-        SetMinSize(wxSize(square, square));
-        SetMaxSize(wxSize(square, square));
+        apply_square(square, center_size);
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetBackgroundColour(DeviceUiStyle::page_background());
         Bind(wxEVT_PAINT, &AxisJoystickPanel::on_paint, this);
@@ -166,17 +161,16 @@ public:
     int center_pos() const { return m_center_pos; }
     int center_size() const { return m_center_size; }
     void set_action_handler(ActionHandler handler) { m_action_handler = std::move(handler); }
-    void set_geometry(int square, int center_size, int center_gap, int button_gap)
+
+    void apply_square(int square, int center_size)
     {
-        m_square = square;
-        m_center_size = center_size;
-        m_center_pos = (square - center_size) / 2;
-        m_center_gap = center_gap;
-        m_button_gap = button_gap;
-        SetMinSize(wxSize(square, square));
-        SetMaxSize(wxSize(square, square));
-        SetSize(wxSize(square, square));
-        Refresh();
+        m_square = std::max(1, square);
+        m_center_size = std::clamp(center_size, 1, m_square);
+        m_center_pos = (m_square - m_center_size) / 2;
+        SetMinSize(wxSize(m_square, m_square));
+        SetMaxSize(wxSize(m_square, m_square));
+        SetSize(wxSize(m_square, m_square));
+        Refresh(false);
     }
 
 private:
@@ -372,44 +366,17 @@ void set_button_active(Button* button, bool active, int8_t& cached_active, bool 
     const wxColour text = active ? DeviceUiStyle::accent() : DeviceUiStyle::text_primary();
 
     button->SetBorderColor(StateColor(
-        std::pair(wxColour(55, 58, 64), (int) StateColor::Disabled),
         std::pair(normal_border, (int) StateColor::Normal),
         std::pair(hover_border, (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
     button->SetTextColor(StateColor(
-        std::pair(wxColour(126, 132, 142), (int) StateColor::Disabled),
         std::pair(text, (int) StateColor::Normal),
         std::pair(active ? DeviceUiStyle::accent() : DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
     button->SetBackgroundColor(StateColor(
-        std::pair(wxColour(38, 41, 46), (int) StateColor::Disabled),
         std::pair(normal_bg, (int) StateColor::Normal),
         std::pair(hover_bg, (int) StateColor::Hovered),
         std::pair(pressed_bg, (int) StateColor::Pressed)));
-}
-
-void set_button_enabled(Button* button, bool enabled)
-{
-    if (button == nullptr)
-        return;
-
-    button->Enable(enabled);
-    button->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
-    button->SetBorderColor(StateColor(
-        std::pair(wxColour(55, 58, 64), (int) StateColor::Disabled),
-        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Normal),
-        std::pair(wxColour(82, 88, 98), (int) StateColor::Hovered),
-        std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
-    button->SetTextColor(StateColor(
-        std::pair(wxColour(126, 132, 142), (int) StateColor::Disabled),
-        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal),
-        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
-        std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed)));
-    button->SetBackgroundColor(StateColor(
-        std::pair(wxColour(38, 41, 46), (int) StateColor::Disabled),
-        std::pair(DeviceUiStyle::control_background(), (int) StateColor::Normal),
-        std::pair(wxColour(53, 57, 64), (int) StateColor::Hovered),
-        std::pair(wxColour(35, 38, 44), (int) StateColor::Pressed)));
 }
 
 } // namespace
@@ -421,11 +388,6 @@ MovementPanel::MovementPanel(wxWindow* parent)
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Movement"));
-    m_frame->SetBorderColor(StateColor(
-        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Disabled),
-        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Normal),
-        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Hovered),
-        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Pressed)));
     m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
     wxWindow* content = m_frame->content_parent();
 
@@ -436,12 +398,6 @@ MovementPanel::MovementPanel(wxWindow* parent)
     auto* z_header_slot = new wxBoxSizer(wxHORIZONTAL);
     auto* distance_header_slot = new wxBoxSizer(wxHORIZONTAL);
     auto* speed_header_slot = new wxBoxSizer(wxHORIZONTAL);
-    m_headers_sizer = headers;
-    m_tool_header_slot = tool_header_slot;
-    m_xy_header_slot = xy_header_slot;
-    m_z_header_slot = z_header_slot;
-    m_distance_header_slot = distance_header_slot;
-    m_speed_header_slot = speed_header_slot;
     tool_header_slot->AddSpacer(FromDIP(18));
     tool_header_slot->Add(make_header_label(content, wxString::FromUTF8("Tool\nSelection")), 0, wxALIGN_CENTER);
     xy_header_slot->AddSpacer(FromDIP(120));
@@ -467,14 +423,11 @@ MovementPanel::MovementPanel(wxWindow* parent)
     body->Add(headers, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(6));
 
     auto* controls = new wxBoxSizer(wxHORIZONTAL);
-    m_controls_sizer = controls;
     auto* tool_col = new wxBoxSizer(wxVERTICAL);
     for (int i = 0; i < MaxDashboardTools; ++i) {
         m_tool_buttons[i] = make_tool_button(content, wxString::Format("T%d", i + 1));
         set_button_active(m_tool_buttons[i], i == 0, m_tool_button_active[i], true);
         m_tool_buttons[i]->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent&) {
-            if (i >= m_available_tool_count)
-                return;
             DeviceCommand command;
             command.kind = DeviceCommandKind::SelectTool;
             command.tool_index = i;
@@ -488,7 +441,6 @@ MovementPanel::MovementPanel(wxWindow* parent)
     const int xy_square = FromDIP(300);
     const int center_size = FromDIP(85);
     auto* xy_area = new AxisJoystickPanel(content, xy_square, center_size, FromDIP(4), FromDIP(3));
-    m_xy_area = xy_area;
     xy_area->SetCursor(wxCursor(wxCURSOR_HAND));
     xy_area->set_action_handler([this](JoystickAction action) {
         switch (action) {
@@ -501,7 +453,6 @@ MovementPanel::MovementPanel(wxWindow* parent)
     });
 
     auto* center_btn = new Button(xy_area, wxString(), "home", 0, 34);
-    m_center_button = center_btn;
     center_btn->SetSize(wxRect(wxPoint(xy_area->center_pos(), xy_area->center_pos()), wxSize(xy_area->center_size(), xy_area->center_size())));
     center_btn->SetMinSize(wxSize(xy_area->center_size(), xy_area->center_size()));
     center_btn->SetMaxSize(wxSize(xy_area->center_size(), xy_area->center_size()));
@@ -510,13 +461,10 @@ MovementPanel::MovementPanel(wxWindow* parent)
     center_btn->SetBackgroundColorNormal(*wxWHITE);
     center_btn->SetBackgroundColour(DeviceUiStyle::page_background());
     center_btn->SetCursor(wxCursor(wxCURSOR_HAND));
-    center_btn->SetCanFocus(false);
     center_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
         DeviceCommand command;
         command.kind = DeviceCommandKind::Home;
         dispatch(command);
-        if (m_center_button != nullptr)
-            m_center_button->Refresh();
     });
 
     controls->AddSpacer(FromDIP(20));
@@ -526,11 +474,9 @@ MovementPanel::MovementPanel(wxWindow* parent)
 
     // Z+ butonu — rectangle_10 SVG şekli üzerine +Z etiketi
     auto* z_plus_host = new ZAxisShapeButton(content, wxString::FromUTF8("rectangle_10"), wxString::FromUTF8("+Z"));
-    m_z_plus_host = z_plus_host;
     z_plus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, -1.0); });
 
     auto* z_minus_host = new ZAxisShapeButton(content, wxString::FromUTF8("rectangle_12"), wxString::FromUTF8("-Z"));
-    m_z_minus_host = z_minus_host;
     z_minus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, 1.0); });
 
     z_col->AddSpacer(FromDIP(48));
@@ -604,11 +550,59 @@ MovementPanel::MovementPanel(wxWindow* parent)
     m_frame->set_content(body);
     root->Add(m_frame, 1, wxEXPAND);
     SetSizer(root);
+
+    m_joystick_square = xy_square;
+    m_apply_layout_scale = [xy_area, center_btn, z_plus_host, z_minus_host, this](double scale) {
+        const double s = std::clamp(scale, 0.40, 1.0);
+        m_layout_scale = s;
+
+        const int square = std::max(FromDIP(96), static_cast<int>(std::lround(FromDIP(300) * s)));
+        const int center = std::max(FromDIP(36), square * 85 / 300);
+        xy_area->apply_square(square, center);
+        center_btn->SetSize(wxRect(wxPoint(xy_area->center_pos(), xy_area->center_pos()),
+                                   wxSize(xy_area->center_size(), xy_area->center_size())));
+        center_btn->SetMinSize(wxSize(xy_area->center_size(), xy_area->center_size()));
+        center_btn->SetMaxSize(wxSize(xy_area->center_size(), xy_area->center_size()));
+        m_joystick_square = square;
+
+        const int tool_w = std::max(FromDIP(48), static_cast<int>(std::lround(FromDIP(92) * s)));
+        const int tool_h = std::max(FromDIP(32), static_cast<int>(std::lround(FromDIP(58) * s)));
+        for (Button* button : m_tool_buttons) {
+            if (button == nullptr)
+                continue;
+            button->SetMinSize(wxSize(tool_w, tool_h));
+            button->SetMaxSize(wxSize(tool_w, tool_h));
+            button->SetSize(wxSize(tool_w, tool_h));
+        }
+
+        const int z_w = std::max(FromDIP(48), static_cast<int>(std::lround(FromDIP(90) * s)));
+        const int z_h = std::max(FromDIP(40), static_cast<int>(std::lround(FromDIP(75) * s)));
+        z_plus_host->apply_size(z_w, z_h);
+        z_minus_host->apply_size(z_w, z_h);
+
+        const int opt_w = std::max(FromDIP(44), static_cast<int>(std::lround(FromDIP(73) * s)));
+        const int opt_h = std::max(FromDIP(28), static_cast<int>(std::lround(FromDIP(45) * s)));
+        for (Button* button : m_distance_buttons) {
+            if (button == nullptr)
+                continue;
+            button->SetMinSize(wxSize(opt_w, opt_h));
+            button->SetMaxSize(wxSize(opt_w, opt_h));
+            button->SetSize(wxSize(opt_w, opt_h));
+        }
+        for (Button* button : m_speed_buttons) {
+            if (button == nullptr)
+                continue;
+            button->SetMinSize(wxSize(opt_w, opt_h));
+            button->SetMaxSize(wxSize(opt_w, opt_h));
+            button->SetSize(wxSize(opt_w, opt_h));
+        }
+
+        Layout();
+    };
 }
 
 void MovementPanel::apply_state(const MovementState& state)
 {
-    set_available_tool_count(state.available_tool_count);
     set_active_tool_button(state.selected_tool);
     set_active_distance_button(state.selected_distance_mm);
 
@@ -627,79 +621,6 @@ void MovementPanel::apply_state(const MovementState& state)
 void MovementPanel::set_command_handler(CommandHandler handler)
 {
     m_command_handler = std::move(handler);
-}
-
-void MovementPanel::set_compact_mode(bool compact)
-{
-    if (m_compact_mode == compact)
-        return;
-    m_compact_mode = compact;
-
-    const int tool_col_w = FromDIP(compact ? kCompactToolColumnWidth : kToolColumnWidth);
-    const int xy_col_w = FromDIP(compact ? kCompactXYColumnWidth : kXYColumnWidth);
-    const int z_col_w = FromDIP(compact ? kCompactZColumnWidth : kZColumnWidth);
-    const int option_col_w = FromDIP(compact ? kCompactOptionColumnWidth : kOptionColumnWidth);
-    const wxSize tool_size(FromDIP(compact ? 74 : 92), FromDIP(compact ? 48 : 58));
-    const wxSize option_size(FromDIP(compact ? 62 : 73), FromDIP(compact ? 40 : 45));
-    const int xy_square = FromDIP(compact ? 230 : 300);
-    const int center_size = FromDIP(compact ? 66 : 85);
-
-    if (m_headers_sizer != nullptr) {
-        if (m_tool_header_slot != nullptr)
-            m_headers_sizer->SetItemMinSize(m_tool_header_slot, tool_col_w, -1);
-        if (m_xy_header_slot != nullptr)
-            m_headers_sizer->SetItemMinSize(m_xy_header_slot, xy_col_w, -1);
-        if (m_z_header_slot != nullptr)
-            m_headers_sizer->SetItemMinSize(m_z_header_slot, z_col_w, -1);
-        if (m_distance_header_slot != nullptr)
-            m_headers_sizer->SetItemMinSize(m_distance_header_slot, option_col_w, -1);
-        if (m_speed_header_slot != nullptr)
-            m_headers_sizer->SetItemMinSize(m_speed_header_slot, option_col_w, -1);
-    }
-
-    for (Button* button : m_tool_buttons) {
-        if (button == nullptr)
-            continue;
-        button->SetMinSize(tool_size);
-        button->SetMaxSize(tool_size);
-        button->SetSize(tool_size);
-    }
-
-    for (Button* button : m_distance_buttons) {
-        if (button == nullptr)
-            continue;
-        button->SetMinSize(option_size);
-        button->SetSize(option_size);
-    }
-    for (Button* button : m_speed_buttons) {
-        if (button == nullptr)
-            continue;
-        button->SetMinSize(option_size);
-        button->SetSize(option_size);
-    }
-
-    if (auto* xy_area = static_cast<AxisJoystickPanel*>(m_xy_area))
-        xy_area->set_geometry(xy_square, center_size, FromDIP(4), FromDIP(3));
-
-    if (m_center_button != nullptr && m_xy_area != nullptr) {
-        auto* xy_area = static_cast<AxisJoystickPanel*>(m_xy_area);
-        m_center_button->SetSize(wxRect(wxPoint(xy_area->center_pos(), xy_area->center_pos()), wxSize(center_size, center_size)));
-        m_center_button->SetMinSize(wxSize(center_size, center_size));
-        m_center_button->SetMaxSize(wxSize(center_size, center_size));
-        m_center_button->SetCornerRadius(FromDIP(compact ? 14 : 18));
-    }
-
-    const int z_w = FromDIP(compact ? 72 : 90);
-    const int z_h = FromDIP(compact ? 62 : 75);
-    const int z_bmp = compact ? 62 : 75;
-    if (m_z_plus_host != nullptr)
-        static_cast<ZAxisShapeButton*>(m_z_plus_host)->set_visual_size(z_w, z_h, z_bmp);
-    if (m_z_minus_host != nullptr)
-        static_cast<ZAxisShapeButton*>(m_z_minus_host)->set_visual_size(z_w, z_h, z_bmp);
-
-    Layout();
-    if (GetParent() != nullptr)
-        GetParent()->Layout();
 }
 
 Button* MovementPanel::make_tool_button(wxWindow* parent, const wxString& label)
@@ -751,34 +672,11 @@ void MovementPanel::dispatch(DeviceCommand command) const
 
 void MovementPanel::set_active_tool_button(int tool_index)
 {
-    if (m_available_tool_count <= 0)
-        m_available_tool_count = 1;
     if (tool_index < 0 || tool_index >= MaxDashboardTools)
-        tool_index = 0;
-    if (tool_index >= m_available_tool_count)
         tool_index = 0;
     if (m_selected_tool == tool_index)
         return;
     m_selected_tool = tool_index;
-    for (int i = 0; i < MaxDashboardTools; ++i)
-        set_button_active(m_tool_buttons[i], i == m_selected_tool, m_tool_button_active[i], true);
-}
-
-void MovementPanel::set_available_tool_count(int tool_count)
-{
-    const int clamped_count = std::clamp(tool_count, 1, MaxDashboardTools);
-    if (m_available_tool_count == clamped_count)
-        return;
-
-    m_available_tool_count = clamped_count;
-    for (int i = 0; i < MaxDashboardTools; ++i) {
-        const bool enabled = i < m_available_tool_count;
-        set_button_enabled(m_tool_buttons[i], enabled);
-        m_tool_button_active[i] = -1;
-    }
-
-    if (m_selected_tool >= m_available_tool_count)
-        m_selected_tool = 0;
     for (int i = 0; i < MaxDashboardTools; ++i)
         set_button_active(m_tool_buttons[i], i == m_selected_tool, m_tool_button_active[i], true);
 }
@@ -803,6 +701,21 @@ void MovementPanel::set_active_speed_button(SpeedPreset preset)
     m_speed_preset = preset;
     for (int i = 0; i < 4; ++i)
         set_button_active(m_speed_buttons[i], static_cast<int>(m_speed_preset) == i, m_speed_button_active[i]);
+}
+
+void MovementPanel::fit_to_height(int content_height_px)
+{
+    if (content_height_px <= 0 || !m_apply_layout_scale)
+        return;
+    // Full-size Movement is designed around a ~300 DIP joystick + chrome.
+    const int design_h = FromDIP(396);
+    const double scale = std::clamp(static_cast<double>(content_height_px) / static_cast<double>(design_h), 0.40, 1.0);
+    if (std::abs(scale - m_layout_scale) > 0.01 || m_joystick_square <= 0)
+        m_apply_layout_scale(scale);
+    // Never force a min taller than the allocated Device slot (prevents clipping).
+    SetMinSize(wxSize(FromDIP(280), 1));
+    SetMaxSize(wxSize(-1, content_height_px));
+    Layout();
 }
 
 } // namespace DeviceDashboard

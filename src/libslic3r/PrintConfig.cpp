@@ -4329,7 +4329,7 @@ void PrintConfigDef::init_fff_params()
     def->min = 0;
     def->max = 1;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(0.1));
+    def->set_default_value(new ConfigOptionFloat(0.15));
 
     def           = this->add("ironing_inset", coFloat);
     def->label    = L("Ironing inset");
@@ -4348,7 +4348,7 @@ void PrintConfigDef::init_fff_params()
     def->sidetext = L("mm/s");	// millimeters per second, CIS languages need translation
     def->min = 1;
     def->mode = comAdvanced;
-    def->set_default_value(new ConfigOptionFloat(20));
+    def->set_default_value(new ConfigOptionFloat(30));
 
     def           = this->add("ironing_angle", coFloat);
     def->label    = L("Ironing angle offset");

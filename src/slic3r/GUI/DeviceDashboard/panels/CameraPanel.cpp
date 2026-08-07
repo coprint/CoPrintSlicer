@@ -242,7 +242,8 @@ CameraPanel::CameraPanel(wxWindow* parent)
     : wxPanel(parent, wxID_ANY)
 {
     SetBackgroundColour(DeviceUiStyle::page_background());
-    SetMinSize(wxSize(FromDIP(460), FromDIP(555)));
+    // Modest floor; Device tab fit-to-viewport raises/lowers via set_viewport_height_px().
+    SetMinSize(wxSize(FromDIP(240), FromDIP(160)));
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Live Camera"));
@@ -286,7 +287,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
 
     m_viewport = new wxPanel(m_frame->content_parent(), wxID_ANY);
     m_viewport->SetBackgroundColour(camera_idle_background());
-    m_viewport->SetMinSize(wxSize(FromDIP(420), FromDIP(390)));
+    m_viewport->SetMinSize(wxSize(FromDIP(280), FromDIP(220)));
     // Absolute stacking: idle placeholder and stream host share the same rect.
     m_viewport->SetSizer(nullptr);
 
@@ -308,8 +309,10 @@ CameraPanel::CameraPanel(wxWindow* parent)
 
     m_stream_host = new wxPanel(m_viewport, wxID_ANY);
     m_stream_host->SetBackgroundColour(*wxBLACK);
-    m_stream_host->SetMinSize(wxSize(FromDIP(420), FromDIP(360)));
+    m_stream_host->SetMinSize(wxSize(FromDIP(280), FromDIP(200)));
     m_stream_host->Hide();
+    m_viewport_height_px = FromDIP(280);
+    apply_viewport_height_px();
 
     m_viewport->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
         evt.Skip();
@@ -406,6 +409,36 @@ void CameraPanel::set_stream_started(bool started)
         return;
     m_stream_started = started;
     update_idle_visibility(m_stream_available);
+}
+
+void CameraPanel::set_viewport_height_px(int height_px)
+{
+    const int clamped = std::clamp(height_px, FromDIP(72), FromDIP(420));
+    if (clamped == m_viewport_height_px)
+        return;
+    m_viewport_height_px = clamped;
+    apply_viewport_height_px();
+}
+
+void CameraPanel::apply_viewport_height_px()
+{
+    if (m_viewport == nullptr)
+        return;
+
+    const int viewport_h = m_viewport_height_px > 0 ? m_viewport_height_px : FromDIP(200);
+    const int viewport_w = std::max(FromDIP(160), m_viewport->GetMinWidth());
+    m_viewport->SetMinSize(wxSize(viewport_w, viewport_h));
+    m_viewport->SetMaxSize(wxSize(-1, viewport_h));
+    if (m_stream_host != nullptr) {
+        m_stream_host->SetMinSize(wxSize(viewport_w, std::max(FromDIP(64), viewport_h - FromDIP(8))));
+        m_stream_host->SetMaxSize(wxSize(-1, viewport_h));
+    }
+
+    // Card chrome (title + play bar) sits around the viewport.
+    const int panel_h = viewport_h + FromDIP(72);
+    SetMinSize(wxSize(FromDIP(180), 1));
+    SetMaxSize(wxSize(-1, panel_h));
+    Layout();
 }
 
 } // namespace DeviceDashboard

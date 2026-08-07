@@ -1,186 +1,198 @@
-﻿{
-    "name":  "Co Print",
-    "version":  "02.04.00.03",
-    "force_update":  "0",
-    "description":  "CoPrint configurations",
-    "machine_model_list":  [
-                               {
-                                   "name":  "Co Print Quadro",
-                                   "sub_path":  "machine/Co Print Quadro.json"
-                               },
-                               {
-                                   "name":  "Co Print ChromaSet",
-                                   "sub_path":  "machine/Co Print ChromaSet.json"
-                               }
-                           ],
-    "process_list":  [
-                         {
-                             "name":  "fdm_process_common",
-                             "sub_path":  "process/fdm_process_common.json"
-                         },
-                         {
-                             "name":  "fdm_process_coprint_common",
-                             "sub_path":  "process/fdm_process_coprint_common.json"
-                         },
-                         {
-                             "name":  "0.2mm Fast @Co Print ChromaSet 0.4",
-                             "sub_path":  "process/0.2mm Fast @Co Print ChromaSet 0.4.json"
-                         },
-                         {
-                             "name":  "0.2mm Standard @Co Print ChromaSet 0.4",
-                             "sub_path":  "process/0.2mm Standard @Co Print ChromaSet 0.4.json"
-                         },
-                         {
-                             "name":  "0.06mm Fine @CP Quadro 0.2",
-                             "sub_path":  "process/0.06mm Fine @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.06mm High Quality @CP Quadro 0.2",
-                             "sub_path":  "process/0.06mm High Quality @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.08mm High Quality @CP Quadro 0.2",
-                             "sub_path":  "process/0.08mm High Quality @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.08mm Optimal @CP Quadro 0.2",
-                             "sub_path":  "process/0.08mm Optimal @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.10mm High Quality @CP Quadro 0.2",
-                             "sub_path":  "process/0.10mm High Quality @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.10mm Standard @CP Quadro 0.2",
-                             "sub_path":  "process/0.10mm Standard @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.12mm Draft @CP Quadro 0.2",
-                             "sub_path":  "process/0.12mm Draft @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.14mm Extra Draft @CP Quadro 0.2",
-                             "sub_path":  "process/0.14mm Extra Draft @CP Quadro 0.2.json"
-                         },
-                         {
-                             "name":  "0.08mm Extra Fine @CP Quadro",
-                             "sub_path":  "process/0.08mm Extra Fine @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.08mm High Quality @CP Quadro",
-                             "sub_path":  "process/0.08mm High Quality @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.12mm Fine @CP Quadro",
-                             "sub_path":  "process/0.12mm Fine @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.12mm High Quality @CP Quadro",
-                             "sub_path":  "process/0.12mm High Quality @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.16mm High Quality @CP Quadro",
-                             "sub_path":  "process/0.16mm High Quality @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.16mm Optimal @CP Quadro",
-                             "sub_path":  "process/0.16mm Optimal @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.2mm Standard @CP Quadro",
-                             "sub_path":  "process/0.2mm Standard @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.20mm Strength @CP Quadro",
-                             "sub_path":  "process/0.20mm Strength @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.24mm Draft @CP Quadro",
-                             "sub_path":  "process/0.24mm Draft @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.28mm Extra Draft @CP Quadro",
-                             "sub_path":  "process/0.28mm Extra Draft @CP Quadro.json"
-                         },
-                         {
-                             "name":  "0.18mm Fine @CP Quadro 0.6",
-                             "sub_path":  "process/0.18mm Fine @CP Quadro 0.6.json"
-                         },
-                         {
-                             "name":  "0.24mm Standard @CP Quadro 0.6",
-                             "sub_path":  "process/0.24mm Standard @CP Quadro 0.6.json"
-                         },
-                         {
-                             "name":  "0.30mm Strength @CP Quadro 0.6",
-                             "sub_path":  "process/0.30mm Strength @CP Quadro 0.6.json"
-                         },
-                         {
-                             "name":  "0.42mm Draft @CP Quadro 0.6",
-                             "sub_path":  "process/0.42mm Draft @CP Quadro 0.6.json"
-                         }
-                     ],
-    "filament_list":  [
-                          {
-                              "name":  "fdm_filament_common",
-                              "sub_path":  "filament/fdm_filament_common.json"
-                          },
-                          {
-                              "name":  "fdm_filament_pla",
-                              "sub_path":  "filament/fdm_filament_pla.json"
-                          },
-                          {
-                              "name":  "CoPrint Generic PLA",
-                              "sub_path":  "filament/CoPrint Generic PLA.json"
-                          },
-                          {
-                              "name":  "CoPrint Generic ABS",
-                              "sub_path":  "filament/CoPrint Generic ABS.json"
-                          },
-                          {
-                              "name":  "CoPrint Generic PETG",
-                              "sub_path":  "filament/CoPrint Generic PETG.json"
-                          },
-                          {
-                              "name":  "CoPrint Generic TPU",
-                              "sub_path":  "filament/CoPrint Generic TPU.json"
-                          }
-                      ],
-    "machine_list":  [
-                         {
-                             "name":  "fdm_machine_common",
-                             "sub_path":  "machine/fdm_machine_common.json"
-                         },
-                         {
-                             "name":  "Co Print Quadro 0.4 nozzle",
-                             "sub_path":  "machine/Co Print Quadro 0.4 nozzle.json"
-                         },
-                         {
-                             "name":  "Co Print Quadro 0.2 nozzle",
-                             "sub_path":  "machine/Co Print Quadro 0.2 nozzle.json"
-                         },
-                         {
-                             "name":  "Co Print Quadro 0.6 nozzle",
-                             "sub_path":  "machine/Co Print Quadro 0.6 nozzle.json"
-                         },
-                         {
-                             "name":  "Co Print ChromaSet 0.4 nozzle",
-                             "sub_path":  "machine/Co Print ChromaSet 0.4 nozzle.json"
-                         },
-                         {
-                             "name":  "Co Print ChromaSet 0.4 nozzle - Ender-3 V3",
-                             "sub_path":  "machine/Co Print ChromaSet 0.4 nozzle - Ender-3 V3.json"
-                         },
-                         {
-                             "name":  "Co Print ChromaSet 0.4 nozzle - Ender-3 V3 Plus",
-                             "sub_path":  "machine/Co Print ChromaSet 0.4 nozzle - Ender-3 V3 Plus.json"
-                         },
-                         {
-                             "name":  "Co Print ChromaSet 0.4 nozzle fast",
-                             "sub_path":  "machine/Co Print ChromaSet 0.4 nozzle fast.json"
-                         },
-                         {
-                             "name":  "fdm_coprint_common",
-                             "sub_path":  "machine/fdm_coprint_common.json"
-                         }
-                     ]
+{
+    "name": "Co Print",
+    "version": "02.04.00.05",
+    "force_update": "0",
+    "description": "CoPrint configurations",
+    "machine_model_list": [
+        {
+            "name": "Co Print Quadro",
+            "sub_path": "machine/Co Print Quadro.json"
+        },
+        {
+            "name": "Co Print ChromaSet",
+            "sub_path": "machine/Co Print ChromaSet.json"
+        }
+    ],
+    "process_list": [
+        {
+            "name": "fdm_process_common",
+            "sub_path": "process/fdm_process_common.json"
+        },
+        {
+            "name": "fdm_process_coprint_common",
+            "sub_path": "process/fdm_process_coprint_common.json"
+        },
+        {
+            "name": "0.2mm Fast @Co Print ChromaSet 0.4",
+            "sub_path": "process/0.2mm Fast @Co Print ChromaSet 0.4.json"
+        },
+        {
+            "name": "0.2mm Standard @Co Print ChromaSet 0.4",
+            "sub_path": "process/0.2mm Standard @Co Print ChromaSet 0.4.json"
+        },
+        {
+            "name": "0.06mm Fine @CP Quadro 0.2",
+            "sub_path": "process/0.06mm Fine @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.06mm High Quality @CP Quadro 0.2",
+            "sub_path": "process/0.06mm High Quality @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.08mm High Quality @CP Quadro 0.2",
+            "sub_path": "process/0.08mm High Quality @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.08mm Optimal @CP Quadro 0.2",
+            "sub_path": "process/0.08mm Optimal @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.10mm High Quality @CP Quadro 0.2",
+            "sub_path": "process/0.10mm High Quality @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.10mm Standard @CP Quadro 0.2",
+            "sub_path": "process/0.10mm Standard @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.12mm Draft @CP Quadro 0.2",
+            "sub_path": "process/0.12mm Draft @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.14mm Extra Draft @CP Quadro 0.2",
+            "sub_path": "process/0.14mm Extra Draft @CP Quadro 0.2.json"
+        },
+        {
+            "name": "0.08mm Extra Fine @CP Quadro",
+            "sub_path": "process/0.08mm Extra Fine @CP Quadro.json"
+        },
+        {
+            "name": "0.08mm High Quality @CP Quadro",
+            "sub_path": "process/0.08mm High Quality @CP Quadro.json"
+        },
+        {
+            "name": "0.12mm Fine @CP Quadro",
+            "sub_path": "process/0.12mm Fine @CP Quadro.json"
+        },
+        {
+            "name": "0.12mm High Quality @CP Quadro",
+            "sub_path": "process/0.12mm High Quality @CP Quadro.json"
+        },
+        {
+            "name": "0.16mm High Quality @CP Quadro",
+            "sub_path": "process/0.16mm High Quality @CP Quadro.json"
+        },
+        {
+            "name": "0.16mm Optimal @CP Quadro",
+            "sub_path": "process/0.16mm Optimal @CP Quadro.json"
+        },
+        {
+            "name": "0.2mm Standard @CP Quadro",
+            "sub_path": "process/0.2mm Standard @CP Quadro.json"
+        },
+        {
+            "name": "0.20mm Strength @CP Quadro",
+            "sub_path": "process/0.20mm Strength @CP Quadro.json"
+        },
+        {
+            "name": "0.24mm Draft @CP Quadro",
+            "sub_path": "process/0.24mm Draft @CP Quadro.json"
+        },
+        {
+            "name": "0.28mm Extra Draft @CP Quadro",
+            "sub_path": "process/0.28mm Extra Draft @CP Quadro.json"
+        },
+        {
+            "name": "0.18mm Fine @CP Quadro 0.6",
+            "sub_path": "process/0.18mm Fine @CP Quadro 0.6.json"
+        },
+        {
+            "name": "0.24mm Standard @CP Quadro 0.6",
+            "sub_path": "process/0.24mm Standard @CP Quadro 0.6.json"
+        },
+        {
+            "name": "0.30mm Strength @CP Quadro 0.6",
+            "sub_path": "process/0.30mm Strength @CP Quadro 0.6.json"
+        },
+        {
+            "name": "0.42mm Draft @CP Quadro 0.6",
+            "sub_path": "process/0.42mm Draft @CP Quadro 0.6.json"
+        }
+    ],
+    "filament_list": [
+        {
+            "name": "fdm_filament_common",
+            "sub_path": "filament/fdm_filament_common.json"
+        },
+        {
+            "name": "fdm_filament_pla",
+            "sub_path": "filament/fdm_filament_pla.json"
+        },
+        {
+            "name": "CoPrint Generic PLA",
+            "sub_path": "filament/CoPrint Generic PLA.json"
+        },
+        {
+            "name": "CoPrint Quadro PLA",
+            "sub_path": "filament/CoPrint Quadro PLA.json"
+        },
+        {
+            "name": "CoPrint Generic ABS",
+            "sub_path": "filament/CoPrint Generic ABS.json"
+        },
+        {
+            "name": "CoPrint Generic PETG",
+            "sub_path": "filament/CoPrint Generic PETG.json"
+        },
+        {
+            "name": "CoPrint Generic TPU",
+            "sub_path": "filament/CoPrint Generic TPU.json"
+        },
+        {
+            "name": "CoPrint Generic ASA",
+            "sub_path": "filament/CoPrint Generic ASA.json"
+        },
+        {
+            "name": "CoPrint Generic PA",
+            "sub_path": "filament/CoPrint Generic PA.json"
+        }
+    ],
+    "machine_list": [
+        {
+            "name": "fdm_machine_common",
+            "sub_path": "machine/fdm_machine_common.json"
+        },
+        {
+            "name": "Co Print Quadro 0.4 nozzle",
+            "sub_path": "machine/Co Print Quadro 0.4 nozzle.json"
+        },
+        {
+            "name": "Co Print Quadro 0.2 nozzle",
+            "sub_path": "machine/Co Print Quadro 0.2 nozzle.json"
+        },
+        {
+            "name": "Co Print Quadro 0.6 nozzle",
+            "sub_path": "machine/Co Print Quadro 0.6 nozzle.json"
+        },
+        {
+            "name": "Co Print ChromaSet 0.4 nozzle",
+            "sub_path": "machine/Co Print ChromaSet 0.4 nozzle.json"
+        },
+        {
+            "name": "Co Print ChromaSet 0.4 nozzle - Ender-3 V3",
+            "sub_path": "machine/Co Print ChromaSet 0.4 nozzle - Ender-3 V3.json"
+        },
+        {
+            "name": "Co Print ChromaSet 0.4 nozzle - Ender-3 V3 Plus",
+            "sub_path": "machine/Co Print ChromaSet 0.4 nozzle - Ender-3 V3 Plus.json"
+        },
+        {
+            "name": "Co Print ChromaSet 0.4 nozzle fast",
+            "sub_path": "machine/Co Print ChromaSet 0.4 nozzle fast.json"
+        },
+        {
+            "name": "fdm_coprint_common",
+            "sub_path": "machine/fdm_coprint_common.json"
+        }
+    ]
 }

@@ -1,4 +1,6 @@
-{
+﻿{
+	"ironing_spacing": "0.15",
+	"ironing_speed": "30",
 	"type": "process",
 	"name": "0.10mm Standard @CP Quadro 0.2",
 	"inherits": "0.06mm Fine @CP Quadro 0.2",

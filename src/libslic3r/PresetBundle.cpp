@@ -1419,22 +1419,30 @@ bool PresetBundle::apply_vendor_config(
         ? app_config->get_section(AppConfig::SECTION_FILAMENTS)
         : std::map<std::string, std::string>();
 
-    // Find vendors that need installation
+    // Always (re)install selected vendors from the packaged resources.
+    // Previously we only copied when AppData was missing, so recipients who already
+    // had an older/partial %APPDATA%\...\system\Co Print kept stale or empty
+    // filaments while a clean machine got the zip's profiles — non-deterministic.
     const auto vendor_dir = (fs::path(Slic3r::data_dir()) / PRESET_SYSTEM_DIR).make_preferred();
 
     std::vector<std::string> install_bundles;
     for (const auto &it : new_vendors) {
-        if (it.second.size() > 0) {
-            auto vendor_file = vendor_dir / (it.first + ".json");
-            if (!fs::exists(vendor_file)) {
-                install_bundles.emplace_back(it.first);
-            }
-        }
+        if (it.second.size() > 0)
+            install_bundles.emplace_back(it.first);
+    }
+    // Keep the filament library in sync with the package too (wizard + inherits).
+    if (std::find(install_bundles.begin(), install_bundles.end(),
+                   PresetBundle::ORCA_FILAMENT_LIBRARY) == install_bundles.end()) {
+        auto ofl_rsrc = (fs::path(Slic3r::resources_dir()) / "profiles" /
+                         PresetBundle::ORCA_FILAMENT_LIBRARY).replace_extension(".json");
+        if (fs::exists(ofl_rsrc))
+            install_bundles.emplace_back(PresetBundle::ORCA_FILAMENT_LIBRARY);
     }
 
     // Install bundles from resources
     if (!install_bundles.empty()) {
-        BOOST_LOG_TRIVIAL(info) << "Installing " << install_bundles.size() << " vendor bundles from resources";
+        BOOST_LOG_TRIVIAL(info) << "Installing/refreshing " << install_bundles.size()
+                                << " vendor bundles from resources";
         if (!Slic3r::install_vendor_bundles_from_resources(install_bundles)) {
             BOOST_LOG_TRIVIAL(error) << "Failed to install vendor bundles";
             return false;
@@ -1529,24 +1537,77 @@ bool PresetBundle::apply_vendor_config(
         app_config->set_vendors(merged_vendors);
     }
 
+    // CoPrint installs only "Co Print"/"Custom" into AppData; OrcaFilamentLibrary is often
+    // missing. Without it, load_system_presets_from_json never reset()s the bundle, so a
+    // second load_presets() after the wizard treats every printer as a duplicate and leaves
+    // stale is_visible=false until the app is restarted. Reset first so this path matches a
+    // clean startup reload.
+    this->reset(false);
+
     // Load presets with new configuration
     this->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::Enable,
         {preferred_printer_model, preferred_printer_variant, preferred_filament, std::string()});
+
+    // Re-assert visibility from the wizard vendor map. Some first-run paths leave
+    // system presets loaded but still marked invisible, so they never appear in the
+    // printer dropdown until the user re-adds them from Home.
+    this->load_installed_printers(*app_config);
+    this->load_installed_filaments(*app_config);
+
+    // Force every wizard-selected printer visible by matching AppConfig vendors directly.
+    // Do not rely only on Preset::vendor->id: empty vendor stubs (from vendors[name]) or
+    // mismatched ids leave Quadro/ChromaSet invisible until restart.
+    const auto &installed_vendors = app_config->vendors();
+    for (Preset &preset : this->printers) {
+        if (!preset.is_system)
+            continue;
+        const std::string &model = preset.config.opt_string("printer_model");
+        const std::string &variant = preset.config.opt_string("printer_variant");
+        if (model.empty() || variant.empty())
+            continue;
+        for (const auto &[vendor_name, models] : installed_vendors) {
+            auto mit = models.find(model);
+            if (mit != models.end() && mit->second.find(variant) != mit->second.end()) {
+                preset.is_visible = true;
+                break;
+            }
+        }
+    }
+    for (const auto &[filament_name, _] : supplemented_filaments) {
+        if (Preset *preset = this->filaments.find_preset(filament_name, false))
+            preset->is_visible = true;
+    }
 
     // Ensure active filament compatibility
     // If the active filament is not in the wizard-selected filaments, switch to the first
     // compatible wizard-selected filament. This handles the first-run case where load_presets
     // falls back to "Generic PLA" even though the user selected a different filament.
     if (!supplemented_filaments.empty()) {
-        bool active_filament_selected = supplemented_filaments.count(this->filament_presets.front()) > 0;
+        bool active_filament_selected = !this->filament_presets.empty()
+            && supplemented_filaments.count(this->filament_presets.front()) > 0;
         if (!active_filament_selected) {
             for (const auto& [filament_name, _] : supplemented_filaments) {
-                const Preset* preset = this->filaments.find_preset(filament_name);
-                if (preset && preset->is_visible && preset->is_compatible) {
-                    this->filaments.select_preset_by_name(filament_name, true);
-                    this->filament_presets.front() = this->filaments.get_selected_preset_name();
-                    break;
+                if (Preset *preset = this->filaments.find_preset(filament_name, false)) {
+                    preset->is_visible = true;
+                    if (preset->is_compatible) {
+                        this->filaments.select_preset_by_name(filament_name, true);
+                        if (!this->filament_presets.empty())
+                            this->filament_presets.front() = this->filaments.get_selected_preset_name();
+                        break;
+                    }
                 }
+            }
+        }
+    }
+
+    // If the preferred printer is still not selected/visible, force it now.
+    if (!preferred_printer_model.empty()) {
+        if (const Preset *preferred = this->printers.find_system_preset_by_model_and_variant(
+                preferred_printer_model, preferred_printer_variant)) {
+            if (Preset *mutable_preferred = this->printers.find_preset(preferred->name, false)) {
+                mutable_preferred->is_visible = true;
+                this->printers.select_preset_by_name(mutable_preferred->name, true);
+                this->update_compatible(PresetSelectCompatibleType::Always);
             }
         }
     }
@@ -3012,29 +3073,33 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     const Preset *initial_printer = printers.find_preset(initial_printer_profile_name);
     // If executed due to a Config Wizard update, preferred_printer contains the first newly installed printer, otherwise nullptr.
     const Preset *preferred_printer = printers.find_system_preset_by_model_and_variant(preferred_selection.printer_model_id, preferred_selection.printer_variant);
-    printers.select_preset_by_name(preferred_printer ? preferred_printer->name : initial_printer_profile_name, true);
+    const std::string active_printer_profile_name = preferred_printer ? preferred_printer->name : initial_printer_profile_name;
+    printers.select_preset_by_name(active_printer_profile_name, true);
     CNumericLocalesSetter locales_setter;
 
-    // Orca: load from orca_presets
-    // const auto os_presets = config.get_machine_settings(initial_printer_profile_name);
-    std::string initial_print_profile_name        = config.get_printer_setting(initial_printer_profile_name, PRESET_PRINT_NAME);
-    std::string initial_filament_profile_name     = config.get_printer_setting(initial_printer_profile_name, PRESET_FILAMENT_NAME);
+    // Orca: load from orca_presets for the printer that was actually activated.
+    // Using the old initial name here left wizard-selected Quadro/ChromaSet without its
+    // default process/filament because first-run configs often have empty placeholders.
+    std::string initial_print_profile_name        = config.get_printer_setting(active_printer_profile_name, PRESET_PRINT_NAME);
+    std::string initial_filament_profile_name     = config.get_printer_setting(active_printer_profile_name, PRESET_FILAMENT_NAME);
 
-    //BBS: set default print/filament profiles to BBL's default setting
+    // When the wizard installs/activates a printer, prefer that printer's bundled defaults
+    // if no usable process/filament selection exists yet (empty or placeholder names).
     if (preferred_printer)
     {
         const std::string& prefered_print_profile = preferred_printer->config.opt_string("default_print_profile");
-        if ((!initial_print_profile_name.compare("Default Setting")) && (prefered_print_profile.size() > 0))
+        if ((initial_print_profile_name.empty() || initial_print_profile_name == "Default Setting") && !prefered_print_profile.empty())
             initial_print_profile_name = prefered_print_profile;
 
-        const std::vector<std::string>& prefered_filament_profiles = preferred_printer->config.option<ConfigOptionStrings>("default_filament_profile")->values;
-        if ((!initial_filament_profile_name.compare(ORCA_DEFAULT_FILAMENT_PLACEHOLDER)) && (prefered_filament_profiles.size() > 0)) {
-            // Check if preferred filament is visible
-            const Preset* preferred_preset = this->filaments.find_preset(prefered_filament_profiles[0], false);
-            if (preferred_preset && preferred_preset->is_visible) {
-                initial_filament_profile_name = prefered_filament_profiles[0];
+        const auto *prefered_filament_opt = preferred_printer->config.option<ConfigOptionStrings>("default_filament_profile");
+        if (prefered_filament_opt && !prefered_filament_opt->values.empty() &&
+            (initial_filament_profile_name.empty() || initial_filament_profile_name == ORCA_DEFAULT_FILAMENT_PLACEHOLDER)) {
+            // Prefer the printer's default filament and force it visible so wizard selection
+            // lands on CoPrint Generic * instead of a missing/foreign filament.
+            if (Preset *preferred_preset = this->filaments.find_preset(prefered_filament_opt->values[0], false)) {
+                preferred_preset->is_visible = true;
+                initial_filament_profile_name = preferred_preset->name;
             }
-            // If not visible, keep the default ORCA_DEFAULT_FILAMENT_PLACEHOLDER which will be resolved later
         }
     }
 
@@ -3052,7 +3117,7 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     for (unsigned int i = 1; i < 1000; ++ i) {
         char name[64];
         sprintf(name, "filament_%02u", i);
-        auto f_name = config.get_printer_setting(initial_printer_profile_name, name);
+        auto f_name = config.get_printer_setting(active_printer_profile_name, name);
         if (f_name.empty())
             break;
         this->filament_presets.emplace_back(remove_ini_suffix(f_name));
@@ -3062,7 +3127,7 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
 
     // Load data from AppConfig to ProjectConfig when Studio is initialized.
     std::vector<std::string> filament_colors;
-    auto f_colors = config.get_printer_setting(initial_printer_profile_name, "filament_colors");
+    auto f_colors = config.get_printer_setting(active_printer_profile_name, "filament_colors");
     if (!f_colors.empty()) {
         boost::algorithm::split(filament_colors, f_colors, boost::algorithm::is_any_of(","));
     }
@@ -3070,15 +3135,15 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
     std::vector<std::string> multi_filament_colors;
-    if (config.has_printer_setting(initial_printer_profile_name, "filament_multi_colors")) {
-        boost::algorithm::split(multi_filament_colors, config.get_printer_setting(initial_printer_profile_name, "filament_multi_colors"), boost::algorithm::is_any_of(","));
+    if (config.has_printer_setting(active_printer_profile_name, "filament_multi_colors")) {
+        boost::algorithm::split(multi_filament_colors, config.get_printer_setting(active_printer_profile_name, "filament_multi_colors"), boost::algorithm::is_any_of(","));
     }
     if (multi_filament_colors.size() == 0) project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = filament_colors;
     else project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = multi_filament_colors;
 
     std::vector<std::string> filament_color_types;
-    if (config.has_printer_setting(initial_printer_profile_name, "filament_color_types")) {
-        boost::algorithm::split(filament_color_types, config.get_printer_setting(initial_printer_profile_name, "filament_color_types"), boost::algorithm::is_any_of(","));
+    if (config.has_printer_setting(active_printer_profile_name, "filament_color_types")) {
+        boost::algorithm::split(filament_color_types, config.get_printer_setting(active_printer_profile_name, "filament_color_types"), boost::algorithm::is_any_of(","));
     }
     filament_color_types.resize(filament_presets.size(), "1");
     project_config.option<ConfigOptionStrings>("filament_colour_type")->values = filament_color_types;
@@ -3087,24 +3152,24 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     project_config.option<ConfigOptionInts>("filament_map")->values = filament_maps;
 
     std::vector<std::string> extruder_ams_count_str;
-    if (config.has_printer_setting(initial_printer_profile_name, "extruder_ams_count")) {
-        boost::algorithm::split(extruder_ams_count_str, config.get_printer_setting(initial_printer_profile_name, "extruder_ams_count"), boost::algorithm::is_any_of(","));
+    if (config.has_printer_setting(active_printer_profile_name, "extruder_ams_count")) {
+        boost::algorithm::split(extruder_ams_count_str, config.get_printer_setting(active_printer_profile_name, "extruder_ams_count"), boost::algorithm::is_any_of(","));
     }
     this->extruder_ams_counts = get_extruder_ams_count(extruder_ams_count_str);
 
     std::vector<std::string> matrix;
-    if (config.has_printer_setting(initial_printer_profile_name, "flush_volumes_matrix")) {
-        boost::algorithm::split(matrix, config.get_printer_setting(initial_printer_profile_name, "flush_volumes_matrix"), boost::algorithm::is_any_of("|"));
+    if (config.has_printer_setting(active_printer_profile_name, "flush_volumes_matrix")) {
+        boost::algorithm::split(matrix, config.get_printer_setting(active_printer_profile_name, "flush_volumes_matrix"), boost::algorithm::is_any_of("|"));
         auto flush_volumes_matrix = matrix | boost::adaptors::transformed(boost::lexical_cast<double, std::string>);
         project_config.option<ConfigOptionFloats>("flush_volumes_matrix")->values = std::vector<double>(flush_volumes_matrix.begin(), flush_volumes_matrix.end());
     }
-    if (config.has_printer_setting(initial_printer_profile_name, "flush_volumes_vector")) {
-        boost::algorithm::split(matrix, config.get_printer_setting(initial_printer_profile_name, "flush_volumes_vector"), boost::algorithm::is_any_of("|"));
+    if (config.has_printer_setting(active_printer_profile_name, "flush_volumes_vector")) {
+        boost::algorithm::split(matrix, config.get_printer_setting(active_printer_profile_name, "flush_volumes_vector"), boost::algorithm::is_any_of("|"));
         auto flush_volumes_vector = matrix | boost::adaptors::transformed(boost::lexical_cast<double, std::string>);
         project_config.option<ConfigOptionFloats>("flush_volumes_vector")->values = std::vector<double>(flush_volumes_vector.begin(), flush_volumes_vector.end());
     }
-    if (config.has_printer_setting(initial_printer_profile_name, "flush_multiplier")) {
-        boost::algorithm::split(matrix, config.get_printer_setting(initial_printer_profile_name, "flush_multiplier"), boost::algorithm::is_any_of("|"));
+    if (config.has_printer_setting(active_printer_profile_name, "flush_multiplier")) {
+        boost::algorithm::split(matrix, config.get_printer_setting(active_printer_profile_name, "flush_multiplier"), boost::algorithm::is_any_of("|"));
         auto flush_multipliers = matrix | boost::adaptors::transformed(boost::lexical_cast<double, std::string>);
         project_config.option<ConfigOptionFloats>("flush_multiplier")->values = std::vector<double>(flush_multipliers.begin(), flush_multipliers.end());
     }
@@ -3116,16 +3181,19 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     this->update_compatible(PresetSelectCompatibleType::Always);
     this->update_multi_material_filament_presets();
 
-    if (initial_printer != nullptr && (preferred_printer == nullptr || initial_printer == preferred_printer)) {
-        // Don't run the following code, as we want to activate default filament / SLA material profiles when installing and selecting a new printer.
-        // Only run this code if just a filament / SLA material was installed by Config Wizard for an active Printer.
+    // Prefer wizard-selected filament whenever it is compatible with the active printer.
+    // Previously this ran only when the printer did not change, so first-time Quadro installs
+    // ignored the filament page after the printer switch.
+    {
         auto printer_technology = printers.get_selected_preset().printer_technology();
         if (printer_technology == ptFFF && ! preferred_selection.filament.empty()) {
             std::string preferred_preset_name = get_preset_name_by_alias(Preset::Type::TYPE_FILAMENT, preferred_selection.filament);
-            if (auto it = filaments.find_preset_internal(preferred_preset_name);
-                it != filaments.end() && (it->name == preferred_preset_name ) && it->is_visible && it->is_compatible) {
-                filaments.select_preset_by_name_strict(preferred_preset_name);
-                this->filament_presets.front() = filaments.get_selected_preset_name();
+            if (Preset *preferred_filament = filaments.find_preset(preferred_preset_name, false)) {
+                preferred_filament->is_visible = true;
+                if (preferred_filament->is_compatible) {
+                    filaments.select_preset_by_name_strict(preferred_filament->name);
+                    this->filament_presets.front() = filaments.get_selected_preset_name();
+                }
             }
         } else if (printer_technology == ptSLA && ! preferred_selection.sla_material.empty()) {
             std::string preferred_preset_name = get_preset_name_by_alias(Preset::Type::TYPE_SLA_MATERIAL, preferred_selection.sla_material);

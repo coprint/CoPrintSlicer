@@ -30,6 +30,8 @@ public:
 
     void apply_state(const FilamentState& state);
     void set_command_handler(CommandHandler handler);
+    // Shrink/grow the filament map so the Device tab can fill short screens without scroll.
+    void fit_to_height(int content_height_px);
 
 private:
     struct ManageToolOption {

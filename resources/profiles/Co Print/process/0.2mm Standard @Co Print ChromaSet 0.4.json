@@ -1,4 +1,6 @@
-{
+﻿{
+	"ironing_spacing": "0.15",
+	"ironing_speed": "30",
 	"type": "process",
 	"name": "0.2mm Standard @Co Print ChromaSet 0.4",
 	"inherits": "fdm_process_coprint_common",

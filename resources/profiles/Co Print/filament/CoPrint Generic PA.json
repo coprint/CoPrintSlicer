@@ -1,0 +1,69 @@
+{
+	"type": "filament",
+	"name": "CoPrint Generic PA",
+	"inherits": "CoPrint Generic PLA",
+	"from": "system",
+	"setting_id": "Zx8Km2Qw5TnHb4Vc",
+	"filament_id": "OGFN99",
+	"instantiation": "true",
+	"close_fan_the_first_x_layers": [
+		"3"
+	],
+	"fan_cooling_layer_time": [
+		"4"
+	],
+	"fan_max_speed": [
+		"60"
+	],
+	"fan_min_speed": [
+		"0"
+	],
+	"filament_density": [
+		"1.04"
+	],
+	"filament_max_volumetric_speed": [
+		"8"
+	],
+	"filament_type": [
+		"PA"
+	],
+	"hot_plate_temp": [
+		"100"
+	],
+	"hot_plate_temp_initial_layer": [
+		"100"
+	],
+	"nozzle_temperature": [
+		"280"
+	],
+	"nozzle_temperature_initial_layer": [
+		"280"
+	],
+	"nozzle_temperature_range_high": [
+		"300"
+	],
+	"nozzle_temperature_range_low": [
+		"260"
+	],
+	"required_nozzle_HRC": [
+		"40"
+	],
+	"slow_down_layer_time": [
+		"2"
+	],
+	"slow_down_min_speed": [
+		"10"
+	],
+	"temperature_vitrification": [
+		"108"
+	],
+	"compatible_printers": [
+		"Co Print Quadro 0.2 nozzle",
+		"Co Print Quadro 0.4 nozzle",
+		"Co Print Quadro 0.6 nozzle",
+		"Co Print ChromaSet 0.4 nozzle",
+		"Co Print ChromaSet 0.4 nozzle - Ender-3 V3",
+		"Co Print ChromaSet 0.4 nozzle - Ender-3 V3 Plus",
+		"Co Print ChromaSet 0.4 nozzle fast"
+	]
+}

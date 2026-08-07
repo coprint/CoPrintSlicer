@@ -1,4 +1,6 @@
-{
+﻿{
+	"ironing_spacing": "0.15",
+	"ironing_speed": "30",
 	"type": "process",
 	"name": "0.08mm Extra Fine @CP Quadro",
 	"inherits": "fdm_process_coprint_common",

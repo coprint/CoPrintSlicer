@@ -33,6 +33,9 @@ public:
     void set_fullscreen_handler(FullscreenHandler handler);
     void set_timelapse_handler(TimelapseHandler handler);
     void set_stream_started(bool started);
+    // Shrink/grow the camera viewport for short laptop screens so the Device tab fits.
+    // height_px is already DPI-scaled (use FromDIP / client sizes).
+    void set_viewport_height_px(int height_px);
 
     // Panel that hosts the live WebView stream (not the idle logo layer).
     wxPanel* webview_host() const;
@@ -40,9 +43,11 @@ public:
 private:
     void update_idle_visibility(bool stream_available);
     void layout_viewport_layers();
+    void apply_viewport_height_px();
 
     DeviceCardFrame* m_frame{nullptr};
     wxPanel* m_viewport{nullptr};
+    int m_viewport_height_px{0};
     wxPanel* m_idle_placeholder{nullptr};
     wxImage m_idle_source_image;
     wxPanel* m_stream_host{nullptr};

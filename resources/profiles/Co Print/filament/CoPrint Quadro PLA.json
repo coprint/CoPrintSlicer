@@ -1,22 +1,19 @@
 {
     "type": "filament",
-    "name": "CoPrint Generic PLA",
+    "name": "CoPrint Quadro PLA",
     "inherits": "fdm_filament_pla",
     "from": "system",
-    "setting_id": "Hv40GsmNozxOJ38T",
+    "setting_id": "CPQPLA0001",
     "filament_id": "GFL99",
     "instantiation": "true",
+    "filament_vendor": [
+        "Co Print"
+    ],
     "filament_load_time": [
         "9.75"
     ],
     "filament_unload_time": [
         "9.75"
-    ],
-    "compatible_printers": [
-        "Co Print ChromaSet 0.4 nozzle",
-        "Co Print ChromaSet 0.4 nozzle - Ender-3 V3",
-        "Co Print ChromaSet 0.4 nozzle - Ender-3 V3 Plus",
-        "Co Print ChromaSet 0.4 nozzle fast"
     ],
     "filament_flow_ratio": [
         "0.96"
@@ -24,22 +21,27 @@
     "filament_max_volumetric_speed": [
         "15"
     ],
+    "full_fan_speed_layer": [
+        "2"
+    ],
     "nozzle_temperature": [
-        "210"
+        "220"
     ],
     "nozzle_temperature_initial_layer": [
-        "210"
-    ],
-    "enable_pressure_advance": [
-        "1"
+        "220"
     ],
     "pressure_advance": [
         "0.06"
     ],
-    "full_fan_speed_layer": [
-        "2"
-    ],
     "slow_down_min_speed": [
         "20"
+    ],
+    "compatible_printers": [
+        "Co Print Quadro 0.2 nozzle",
+        "Co Print Quadro 0.4 nozzle",
+        "Co Print Quadro 0.6 nozzle"
+    ],
+    "enable_pressure_advance": [
+        "1"
     ]
 }
