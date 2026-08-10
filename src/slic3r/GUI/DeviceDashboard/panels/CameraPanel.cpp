@@ -12,11 +12,9 @@
 #include <cmath>
 #include <utility>
 
-#include <wx/button.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
 #include <wx/filename.h>
-#include <wx/frame.h>
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
 #include <wx/stattext.h>
@@ -244,8 +242,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
     : wxPanel(parent, wxID_ANY)
 {
     SetBackgroundColour(DeviceUiStyle::page_background());
-    // Modest floor; Device tab fit-to-viewport raises/lowers via set_viewport_height_px().
-    SetMinSize(wxSize(FromDIP(240), FromDIP(160)));
+    SetMinSize(wxSize(FromDIP(460), FromDIP(555)));
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Live Camera"));
@@ -271,7 +268,6 @@ CameraPanel::CameraPanel(wxWindow* parent)
     m_fullscreen_btn->SetCursor(wxCursor(wxCURSOR_HAND));
     m_fullscreen_btn->SetToolTip(wxString::FromUTF8("Fullscreen"));
     m_fullscreen_btn->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &) {
-        toggle_fullscreen();
         if (m_fullscreen_handler) m_fullscreen_handler();
     });
     header_actions_sizer->Add(m_fullscreen_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
@@ -290,7 +286,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
 
     m_viewport = new wxPanel(m_frame->content_parent(), wxID_ANY);
     m_viewport->SetBackgroundColour(camera_idle_background());
-    m_viewport->SetMinSize(wxSize(FromDIP(280), FromDIP(220)));
+    m_viewport->SetMinSize(wxSize(FromDIP(420), FromDIP(390)));
     // Absolute stacking: idle placeholder and stream host share the same rect.
     m_viewport->SetSizer(nullptr);
 
@@ -312,10 +308,8 @@ CameraPanel::CameraPanel(wxWindow* parent)
 
     m_stream_host = new wxPanel(m_viewport, wxID_ANY);
     m_stream_host->SetBackgroundColour(*wxBLACK);
-    m_stream_host->SetMinSize(wxSize(FromDIP(280), FromDIP(200)));
+    m_stream_host->SetMinSize(wxSize(FromDIP(420), FromDIP(360)));
     m_stream_host->Hide();
-    m_viewport_height_px = FromDIP(280);
-    apply_viewport_height_px();
 
     m_viewport->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
         evt.Skip();
@@ -401,88 +395,6 @@ void CameraPanel::set_fullscreen_handler(FullscreenHandler handler)
     m_fullscreen_handler = std::move(handler);
 }
 
-void CameraPanel::toggle_fullscreen()
-{
-    if (m_fullscreen_frame != nullptr) {
-        // Already fullscreen -- treat a second click the same as Esc/close box.
-        m_fullscreen_frame->Close();
-        return;
-    }
-    if (m_stream_host == nullptr || m_viewport == nullptr)
-        return;
-
-    auto* frame = new wxFrame(nullptr, wxID_ANY, wxString::FromUTF8("Live Camera"));
-    frame->SetBackgroundColour(*wxBLACK);
-    m_fullscreen_frame = frame;
-
-    m_stream_host->Reparent(frame);
-    m_stream_host->Show(true);
-    m_stream_host->Lower();
-
-    // Plain wxButton, not a bare styled label: guaranteed visible against any
-    // background regardless of font glyph support, no custom paint needed.
-    auto* close_btn = new wxButton(frame, wxID_ANY, wxString::FromUTF8("X"),
-        wxDefaultPosition, wxSize(FromDIP(36), FromDIP(36)));
-    close_btn->SetBackgroundColour(wxColour(60, 60, 60));
-    close_btn->SetForegroundColour(*wxWHITE);
-    close_btn->SetCursor(wxCursor(wxCURSOR_HAND));
-    close_btn->SetToolTip(wxString::FromUTF8("Close (Esc)"));
-    {
-        wxFont f = close_btn->GetFont();
-        f.SetPointSize(f.GetPointSize() + 2);
-        f.SetWeight(wxFONTWEIGHT_BOLD);
-        close_btn->SetFont(f);
-    }
-
-    // Returns the stream host to the Device tab and tears down the fullscreen
-    // window. Guarded by the m_fullscreen_frame nullptr check so it's safe to
-    // call more than once (close button click + the frame's own close event).
-    auto close_fullscreen = [this]() {
-        if (m_fullscreen_frame == nullptr)
-            return;
-        wxFrame* frame_to_close = m_fullscreen_frame;
-        m_fullscreen_frame = nullptr;
-        if (m_stream_host != nullptr && m_viewport != nullptr) {
-            m_stream_host->Reparent(m_viewport);
-            layout_viewport_layers();
-            update_idle_visibility(m_stream_available);
-        }
-        frame_to_close->Destroy();
-    };
-
-    close_btn->Bind(wxEVT_BUTTON, [close_fullscreen](wxCommandEvent&) { close_fullscreen(); });
-    frame->Bind(wxEVT_CHAR_HOOK, [close_fullscreen](wxKeyEvent& evt) {
-        if (evt.GetKeyCode() == WXK_ESCAPE)
-            close_fullscreen();
-        else
-            evt.Skip();
-    });
-    frame->Bind(wxEVT_CLOSE_WINDOW, [close_fullscreen](wxCloseEvent&) { close_fullscreen(); });
-
-    auto reposition = [this, frame, close_btn]() {
-        const wxSize client = frame->GetClientSize();
-        if (client.GetWidth() <= 0 || client.GetHeight() <= 0)
-            return;
-        if (m_stream_host != nullptr)
-            m_stream_host->SetSize(0, 0, client.GetWidth(), client.GetHeight());
-        close_btn->SetPosition(wxPoint(client.GetWidth() - close_btn->GetSize().GetWidth() - FromDIP(24), FromDIP(20)));
-        close_btn->Raise();
-    };
-    frame->Bind(wxEVT_SIZE, [reposition](wxSizeEvent& evt) {
-        evt.Skip();
-        reposition();
-    });
-
-    frame->Maximize(true);
-    frame->Show(true);
-    frame->SendSizeEvent();
-    reposition();
-    // Maximize can settle a frame later than the same-turn SendSizeEvent on
-    // some window managers; correct the button position once more next idle.
-    CallAfter([reposition]() { reposition(); });
-    frame->SetFocus();
-}
-
 void CameraPanel::set_timelapse_handler(TimelapseHandler handler)
 {
     m_timelapse_handler = std::move(handler);
@@ -494,36 +406,6 @@ void CameraPanel::set_stream_started(bool started)
         return;
     m_stream_started = started;
     update_idle_visibility(m_stream_available);
-}
-
-void CameraPanel::set_viewport_height_px(int height_px)
-{
-    const int clamped = std::clamp(height_px, FromDIP(72), FromDIP(420));
-    if (clamped == m_viewport_height_px)
-        return;
-    m_viewport_height_px = clamped;
-    apply_viewport_height_px();
-}
-
-void CameraPanel::apply_viewport_height_px()
-{
-    if (m_viewport == nullptr)
-        return;
-
-    const int viewport_h = m_viewport_height_px > 0 ? m_viewport_height_px : FromDIP(200);
-    const int viewport_w = std::max(FromDIP(160), m_viewport->GetMinWidth());
-    m_viewport->SetMinSize(wxSize(viewport_w, viewport_h));
-    m_viewport->SetMaxSize(wxSize(-1, viewport_h));
-    if (m_stream_host != nullptr) {
-        m_stream_host->SetMinSize(wxSize(viewport_w, std::max(FromDIP(64), viewport_h - FromDIP(8))));
-        m_stream_host->SetMaxSize(wxSize(-1, viewport_h));
-    }
-
-    // Card chrome (title + play bar) sits around the viewport.
-    const int panel_h = viewport_h + FromDIP(72);
-    SetMinSize(wxSize(FromDIP(180), 1));
-    SetMaxSize(wxSize(-1, panel_h));
-    Layout();
 }
 
 } // namespace DeviceDashboard

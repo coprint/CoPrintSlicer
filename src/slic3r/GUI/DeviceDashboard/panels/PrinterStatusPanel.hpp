@@ -30,7 +30,6 @@ public:
 
     void apply_state(const std::array<ToolState, MaxDashboardTools>& tools, const BedState& bed);
     void set_active_tool(int tool_index);
-    void fit_to_height(int content_height_px);
 
     void set_tool_select_handler(ToolSelectHandler handler);
     void set_nozzle_temp_handler(NozzleTempHandler handler);
@@ -51,7 +50,6 @@ private:
 
     DeviceCardFrame* m_frame{nullptr};
     std::array<ToolView, MaxDashboardTools> m_tools;
-    StaticBox* m_bed_card{nullptr};
     wxStaticBitmap* m_bed_temperature_icon{nullptr};
     wxStaticText* m_bed_temperature{nullptr};
     int m_active_tool{0};

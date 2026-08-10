@@ -10,7 +10,6 @@
 
 class wxStaticBitmap;
 class wxStaticText;
-class wxFrame;
 
 namespace Slic3r {
 namespace GUI {
@@ -21,7 +20,6 @@ class DeviceCardFrame;
 class CameraPanel : public wxPanel
 {
 public:
-
     using RefreshHandler = std::function<void()>;
     using PlayHandler = std::function<void()>;
     using FullscreenHandler = std::function<void()>;
@@ -35,9 +33,6 @@ public:
     void set_fullscreen_handler(FullscreenHandler handler);
     void set_timelapse_handler(TimelapseHandler handler);
     void set_stream_started(bool started);
-    // Shrink/grow the camera viewport for short laptop screens so the Device tab fits.
-    // height_px is already DPI-scaled (use FromDIP / client sizes).
-    void set_viewport_height_px(int height_px);
 
     // Panel that hosts the live WebView stream (not the idle logo layer).
     wxPanel* webview_host() const;
@@ -45,16 +40,9 @@ public:
 private:
     void update_idle_visibility(bool stream_available);
     void layout_viewport_layers();
-    void apply_viewport_height_px();
-    // Moves the live stream host into a maximized top-level window (Esc, the
-    // on-screen close button, or the window's own close box all return it to
-    // the Device tab -- no more getting stuck needing Alt+Tab to escape).
-    void toggle_fullscreen();
 
     DeviceCardFrame* m_frame{nullptr};
-    wxFrame* m_fullscreen_frame{nullptr};
     wxPanel* m_viewport{nullptr};
-    int m_viewport_height_px{0};
     wxPanel* m_idle_placeholder{nullptr};
     wxImage m_idle_source_image;
     wxPanel* m_stream_host{nullptr};

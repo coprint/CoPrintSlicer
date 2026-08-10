@@ -4,6 +4,8 @@
 #include <array>
 #include <vector>
 #include <string>
+#include <memory>
+#include <atomic>
 
 #include <wx/panel.h>
 #include <wx/gdicmn.h>
@@ -22,6 +24,7 @@ class wxPopupTransientWindow;
 class wxGauge;
 class StaticBox;
 class Button;
+class ProgressBar;
 namespace Slic3r {
 struct BBLocalMachine;
 class MachineObject;
@@ -40,6 +43,7 @@ class CloudTaskManagerPage;
 enum class PrinterWebViewTab {
     Status,
     Storage,
+    PrintModels,
     Update,
     Assistant
 };
@@ -71,9 +75,9 @@ public:
     wxPanel *create_update_page(wxWindow *parent);
     void set_sidebar_user_avatar(const wxBitmap &avatar_bitmap);
     void begin_moonraker_lan_scan();
-    void set_fallback_preview_thumbnail();
+    void clear_preview_thumbnail();
     void on_thumbnail_webrequest_state(wxWebRequestEvent &evt);
-    void update_preview_thumbnail(const MachineObject *obj);
+    void update_preview_thumbnail(const MachineObject *obj, bool has_active_job);
     void refresh_layer_info_from_selected_machine();
     void refresh_update_page_from_selected_machine();
     void UpdateState();
@@ -82,12 +86,13 @@ public:
     void OnError(wxWebViewEvent &evt);
     void OnLoaded(wxWebViewEvent &evt);
 
-    /** Used by Add Printer flow (dialog + LAN discovery). Returns false on failure. */
-    bool finish_add_moonraker_printer(const BBLocalMachine &machine, bool use_ssl);
+    /** Used by Add Printer flow (dialog + LAN discovery). Returns false on failure.
+     *  When run_probe is false, the caller already resolved identity off the UI thread. */
+    bool finish_add_moonraker_printer(const BBLocalMachine &machine, bool use_ssl, bool run_probe = true);
 
     void sync_model_colors_from_plater();
 
-    /** Synchronous Moonraker filament_selections fetch; updates tool colour cache. */
+    /** Starts a background Moonraker filament_selections fetch; updates tool colour cache on the UI thread. */
     void sync_loaded_tool_filaments(MachineObject *obj);
 
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
@@ -121,6 +126,8 @@ private:
     void refresh_connected_printer_header(MachineObject *obj);
     void refresh_printer_info_labels(MachineObject *obj);
     void refresh_camera_stream(MachineObject *obj);
+    void show_camera_fullscreen();
+    void toggle_camera_timelapse();
     void apply_printer_status_tool_selection(int tool_index);
     void prompt_ps_target_temperature(bool is_bed, int extruder_index);
     void show_toolhead_temperature_dialog(int active_extruder_index);
@@ -128,13 +135,18 @@ private:
     void show_toolhead_fan_dialog(int active_extruder_index);
     bool send_toolhead_fan_speed_command(int tool_index, int fan_percent);
     void show_filament_load_wizard();
+    void show_filament_busy_dialog(bool is_load);
     void show_add_printer_dialog();
     void show_printer_card_actions_menu(wxWindow *anchor, MachineObject *machine);
+    bool edit_sidebar_printer_name(MachineObject *machine);
     bool confirm_forget_printer();
     void forget_local_printer(MachineObject *machine);
     void ensure_camera_webview_created();
     void ensure_storage_page_created();
     void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
+    void update_sidebar_connect_attempt_state();
+    void begin_sidebar_connect_attempt(const std::string &dev_id);
+    void clear_sidebar_connect_attempt();
     struct SidebarItem {
         PrinterWebViewTab tab;
         wxPanel *panel{ nullptr };
@@ -160,12 +172,14 @@ private:
     wxPanel *m_sidebar_user_avatar_panel{ nullptr };
     wxBitmap m_sidebar_user_avatar_bitmap;
     wxPanel *m_auto_connect_scroll_track{ nullptr };
-    wxPanel *m_auto_connect_scroll_thumb{ nullptr };
     wxScrolledWindow *m_auto_connect_list_window{ nullptr };
     std::vector<BBLocalMachine> m_discovered_moonraker_printers;
     bool m_lan_scan_in_progress{ false };
     bool m_lan_rescan_requested{ false };
+    std::shared_ptr<std::atomic_bool> m_lan_scan_cancel_token;
     wxPanel *m_sidebar_printer_list_panel{ nullptr };
+    wxPanel *m_sidebar_printer_list_container{ nullptr };
+    wxPanel *m_sidebar_printer_scroll_track{ nullptr };
     wxBoxSizer *m_sidebar_printer_list_sizer{ nullptr };
     wxString m_sidebar_printer_list_signature;
     wxPanel *m_sidebar_add_printer_panel{ nullptr };
@@ -176,6 +190,7 @@ private:
     wxWebView *m_camera_webview{ nullptr };
     wxPanel *m_camera_webview_host{ nullptr };
     bool m_camera_webview_initialized{ false };
+    bool m_camera_stream_requested{ false };
     wxStaticText *m_printer_name_value{ nullptr };
     wxStaticText *m_printer_model_value{ nullptr };
     wxStaticText *m_printer_serial_value{ nullptr };
@@ -206,6 +221,7 @@ private:
     std::array<bool, 4> m_moonraker_fan_available{ false, false, false, false };
     double m_moonraker_bed_current{ 0.0 };
     double m_moonraker_bed_target{ 0.0 };
+    int m_moonraker_available_tool_count{ 0 };
     bool m_has_moonraker_status{ false };
     bool m_has_moonraker_print_status{ false };
     DeviceDashboard::PrintJobState m_moonraker_print_job;
@@ -217,12 +233,17 @@ private:
     CloudTaskManagerPage *m_storage_page{ nullptr };
     wxImage m_thumbnail_image;
     wxWebRequest m_thumbnail_web_request;
+    wxStaticText *m_update_connection_badge{ nullptr };
+    Button *m_update_firmware_button{ nullptr };
     wxStaticText *m_update_header_title{ nullptr };
     wxStaticText *m_update_model_value{ nullptr };
     wxPanel *m_update_page{ nullptr };
     wxStaticText *m_update_percent_value{ nullptr };
     wxStaticBitmap *m_update_printer_bitmap{ nullptr };
-    wxGauge *m_update_progress_gauge{ nullptr };
+    ProgressBar *m_update_progress_gauge{ nullptr };
+    wxTimer *m_update_progress_timer{ nullptr };
+    bool m_update_sim_active{ false };
+    int m_update_sim_percent{ 0 };
     wxStaticText *m_update_release_note_link{ nullptr };
     wxStaticText *m_update_serial_value{ nullptr };
     wxStaticText *m_update_status_value{ nullptr };
@@ -235,6 +256,16 @@ private:
     DeviceDashboard::FilamentPanel*           m_dashboard_filament_panel{nullptr};
     double m_axis_move_step{ 1.0 };
     int m_zoomFactor{ 100 };
+    std::shared_ptr<int> m_lifetime_token{ std::make_shared<int>(1) };
+    bool m_destroying{ false };
+    std::string m_last_refresh_machine_id;
+    int m_refresh_tick_counter{ 0 };
+
+    // Sidebar printer-card connection attempt: Connecting (yellow) → Connected / Not connected (red after 15s).
+    enum class SidebarConnectPhase { None, Connecting, Failed };
+    std::string m_sidebar_connect_dev_id;
+    wxLongLong m_sidebar_connect_started_ms{ 0 };
+    SidebarConnectPhase m_sidebar_connect_phase{ SidebarConnectPhase::None };
 };
 
 } // namespace GUI

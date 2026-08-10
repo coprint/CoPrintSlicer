@@ -423,9 +423,9 @@ public:
         // Dynamic Text
         m_action_line_y_position = int(height * 0.83);
 
-		// Based on Text
+		// CoPrint splash keeps product branding clean; detailed upstream attribution lives in About.
         memDc.SetFont(m_constant_text.based_on_font);
-        auto bs_version = wxString::Format(_L("Based on OrcaSlicer")).ToStdString();
+        auto bs_version = wxString::Format(_L("")).ToStdString();
         wxSize based_on_ext = memDc.GetTextExtent(bs_version);
         wxRect based_on_rect(
 			wxPoint(0, height - based_on_ext.GetHeight() * 2),
@@ -3153,6 +3153,18 @@ bool GUI_App::on_init_inner()
     mainframe->topbar()->SaveNormalRect();
 #endif
     mainframe->Show(true);
+#if defined(_WIN32) || defined(__WXMSW__)
+    // Ensure native caption is gone after the first show (WM_NCCALCSIZE applies then).
+    {
+        HWND hwnd = mainframe->GetHandle();
+        if (hwnd) {
+            RECT rc;
+            ::GetWindowRect(hwnd, &rc);
+            ::SetWindowPos(hwnd, nullptr, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+                           SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+        }
+    }
+#endif
     BOOST_LOG_TRIVIAL(info) << "main frame firstly shown";
 
 //#if BBL_HAS_FIRST_PAGE
@@ -3499,6 +3511,9 @@ void GUI_App::switch_printer_agent()
             if (!value.empty())
                 effective_agent_id = value;
         }
+        const std::string printer_model = config.opt_string("printer_model");
+        if (boost::icontains(printer_model, "Co Print") || boost::icontains(printer_model, "CoPrint"))
+            effective_agent_id = COPRINT_PRINTER_AGENT_ID;
     }
 
     // Check if agent is registered
@@ -3513,7 +3528,10 @@ void GUI_App::switch_printer_agent()
     if (m_agent->get_printer_agent())
         current_agent_id = m_agent->get_printer_agent()->get_agent_info().id;
 
-    if (current_agent_id != effective_agent_id) {
+    const bool same_transport =
+        effective_agent_id == COPRINT_PRINTER_AGENT_ID && current_agent_id == "moonraker";
+
+    if (current_agent_id != effective_agent_id && !same_transport) {
         std::string log_dir = data_dir();
         std::shared_ptr<ICloudServiceAgent> cloud_agent = m_agent->get_cloud_agent();
 
@@ -4281,7 +4299,9 @@ void GUI_App::force_colors_update()
 #ifdef _MSW_DARK_MODE
 #ifdef __WINDOWS__
     NppDarkMode::SetDarkMode(dark_mode());
-    NppDarkMode::SetDarkTitleBar(mainframe->GetHWND());
+    // MainFrame uses a custom BBLTopbar — do not theme/repaint the native caption,
+    // that can leave a redundant white Windows title bar above our dark chrome.
+    // NppDarkMode::SetDarkTitleBar(mainframe->GetHWND());
 
 
     //NppDarkMode::SetDarkExplorerTheme((HWND)mainframe->m_settings_dialog.GetHWND());
@@ -6507,6 +6527,7 @@ ConfigOptionMode GUI_App::get_mode()
     const auto mode = app_config->get("user_mode");
     return mode == "advanced" ? comAdvanced :
            mode == "simple" ? comSimple :
+           mode == "expert" ? comExpert :
            mode == "develop" ? comDevelop : comSimple;
 }
 
@@ -6522,6 +6543,7 @@ void GUI_App::save_mode(const /*ConfigOptionMode*/int mode)
     //BBS
     const std::string mode_str = mode == comAdvanced ? "advanced" :
                                  mode == comSimple ? "simple" :
+                                 mode == comExpert ? "expert" :
                                  mode == comDevelop ? "develop" : "simple";
     app_config->set("user_mode", mode_str);
     update_mode();

@@ -11,11 +11,11 @@
 #include "slic3r/GUI/wxExtensions.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <memory>
 #include <utility>
 
 #include <wx/dcbuffer.h>
+#include <wx/font.h>
 #include <wx/graphics.h>
 #include <wx/image.h>
 #include <wx/popupwin.h>
@@ -52,8 +52,7 @@ public:
     explicit FilamentToolMapView(wxWindow* parent)
         : wxPanel(parent, wxID_ANY)
     {
-        // Floor is modest; fit_to_height / paint scale keep the map on short screens.
-        SetMinSize(wxSize(FromDIP(280), FromDIP(140)));
+        SetMinSize(wxSize(FromDIP(620), FromDIP(260)));
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetBackgroundColour(DeviceUiStyle::page_background());
         Bind(wxEVT_PAINT, &FilamentToolMapView::on_paint, this);
@@ -62,10 +61,6 @@ public:
         Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent& event) {
             SetCursor(wxCursor(wxCURSOR_ARROW));
             event.Skip();
-        });
-        Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
-            event.Skip();
-            Refresh(false);
         });
 
         m_tool_colors = {
@@ -86,14 +81,6 @@ public:
     void set_tool_handler(ToolHandler handler) { m_tool_handler = std::move(handler); }
     void set_configure_handler(ToolHandler handler) { m_configure_handler = std::move(handler); }
     wxPoint last_configure_anchor_screen() const { return m_last_configure_anchor; }
-
-    void set_preferred_height(int height_px)
-    {
-        const int h = std::max(FromDIP(80), height_px);
-        SetMinSize(wxSize(FromDIP(200), 1));
-        SetMaxSize(wxSize(-1, h));
-        Refresh(false);
-    }
 
     void apply_state(const FilamentState& state)
     {
@@ -189,21 +176,6 @@ private:
         event.Skip();
     }
 
-    double map_scale() const
-    {
-        const wxSize size = GetClientSize();
-        if (size.x <= 0 || size.y <= 0)
-            return 1.0;
-        const double sx = static_cast<double>(size.x) / static_cast<double>(FromDIP(610));
-        const double sy = static_cast<double>(size.y) / static_cast<double>(FromDIP(250));
-        return std::clamp(std::min(sx, sy), 0.45, 1.0);
-    }
-
-    int sd(int design_dip) const
-    {
-        return std::max(1, static_cast<int>(std::lround(FromDIP(design_dip) * map_scale())));
-    }
-
     void on_paint(wxPaintEvent&)
     {
         wxAutoBufferedPaintDC dc(this);
@@ -217,18 +189,18 @@ private:
         gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
 
         const wxSize size = GetClientSize();
-        const int canvas_w = sd(610);
-        const int canvas_h = sd(250);
+        const int canvas_w = FromDIP(610);
+        const int canvas_h = FromDIP(250);
         const int ox = std::max(0, (size.x - canvas_w) / 2);
         const int oy = std::max(0, (size.y - canvas_h) / 2);
 
-        const int card_w = sd(66);
-        const int card_h = sd(86);
-        const int track_w = sd(64);
-        const int track_h = sd(88);
-        const int card_track_gap = sd(30);
+        const int card_w = FromDIP(66);
+        const int card_h = FromDIP(86);
+        const int track_w = FromDIP(64);
+        const int track_h = FromDIP(88);
+        const int card_track_gap = FromDIP(30);
         const int track_body_gap = 0;
-        const int body_w = sd(238);
+        const int body_w = FromDIP(238);
         const int assembly_w = 2 * (card_w + card_track_gap + track_w) + body_w;
         const int layout_start = std::max(0, (canvas_w - assembly_w) / 2);
 
@@ -238,18 +210,18 @@ private:
         const int track_right_x = body_x + body_w + track_body_gap;
         const int card_right_x = track_right_x + track_w + card_track_gap;
 
-        const wxRect body(body_x, oy + sd(20), body_w, sd(200));
+        const wxRect body(body_x, oy + FromDIP(20), body_w, FromDIP(200));
         draw_body(gc.get(), body);
 
-        const wxRect card0(card_left_x, oy + sd(38), card_w, card_h);
-        const wxRect track0(track_left_x, oy + sd(37), track_w, track_h);
-        const wxRect card1(card_left_x, oy + sd(150), card_w, card_h);
-        const wxRect track1(track_left_x, oy + sd(149), track_w, track_h);
+        const wxRect card0(card_left_x, oy + FromDIP(38), card_w, card_h);
+        const wxRect track0(track_left_x, oy + FromDIP(37), track_w, track_h);
+        const wxRect card1(card_left_x, oy + FromDIP(150), card_w, card_h);
+        const wxRect track1(track_left_x, oy + FromDIP(149), track_w, track_h);
 
-        const wxRect track2(track_right_x, oy + sd(37), track_w, track_h);
-        const wxRect card2(card_right_x, oy + sd(38), card_w, card_h);
-        const wxRect track3(track_right_x, oy + sd(149), track_w, track_h);
-        const wxRect card3(card_right_x, oy + sd(150), card_w, card_h);
+        const wxRect track2(track_right_x, oy + FromDIP(37), track_w, track_h);
+        const wxRect card2(card_right_x, oy + FromDIP(38), card_w, card_h);
+        const wxRect track3(track_right_x, oy + FromDIP(149), track_w, track_h);
+        const wxRect card3(card_right_x, oy + FromDIP(150), card_w, card_h);
 
         const std::array<wxRect, MaxDashboardTools> cards{{card0, card1, card2, card3}};
         const std::array<wxRect, MaxDashboardTools> tracks{{track0, track1, track2, track3}};
@@ -271,37 +243,20 @@ private:
         const double y = rect.y;
         const double w = rect.width;
         const double h = rect.height;
-        const double arch_lift = sd(8);
-
-        wxGraphicsPath outer = gc->CreatePath();
-        outer.MoveToPoint(x, y + h);
-        outer.AddLineToPoint(x, y + sd(30));
-        outer.AddQuadCurveToPoint(x + w * 0.5, y - arch_lift, x + w, y + sd(30));
-        outer.AddLineToPoint(x + w, y + h);
-        outer.CloseSubpath();
+        const double radius = FromDIP(14);
+        const double top_h = FromDIP(34);
+        const double leg_w = FromDIP(30);
+        const double leg_extra = FromDIP(34);
+        const double inner_top = y + top_h;
 
         gc->SetPen(*wxTRANSPARENT_PEN);
         gc->SetBrush(wxBrush(wxColour(42, 45, 48)));
-        gc->FillPath(outer);
+        gc->DrawRoundedRectangle(x, y, w, top_h + FromDIP(6), radius);
+        gc->DrawRectangle(x, y + top_h * 0.55, leg_w, h - top_h * 0.55 + leg_extra);
+        gc->DrawRectangle(x + w - leg_w, y + top_h * 0.55, leg_w, h - top_h * 0.55 + leg_extra);
 
-        const double inset = sd(24);
-        wxGraphicsPath inner = gc->CreatePath();
-        inner.MoveToPoint(x + inset, y + h - sd(2));
-        inner.AddLineToPoint(x + inset, y + sd(42));
-        inner.AddQuadCurveToPoint(x + w * 0.5, y + sd(24), x + w - inset, y + sd(42));
-        inner.AddLineToPoint(x + w - inset, y + h - sd(2));
-        inner.CloseSubpath();
-        gc->SetBrush(wxBrush(wxColour(30, 33, 36)));
-        gc->FillPath(inner);
-
-        wxGraphicsPath shade = gc->CreatePath();
-        shade.MoveToPoint(x + inset, y + sd(42));
-        shade.AddLineToPoint(x + inset + sd(20), y + sd(42));
-        shade.AddLineToPoint(x + inset + sd(8), y + h - sd(2));
-        shade.AddLineToPoint(x + inset, y + h - sd(2));
-        shade.CloseSubpath();
-        gc->SetBrush(wxBrush(wxColour(34, 37, 40)));
-        gc->FillPath(shade);
+        gc->SetBrush(wxBrush(wxColour(27, 29, 31)));
+        gc->DrawRectangle(x + leg_w, inner_top, w - 2 * leg_w, h - top_h + leg_extra);
     }
 
     wxString tool_short_label(int tool_index) const
@@ -317,13 +272,11 @@ private:
         const wxColour sub = selected ? wxColour(72, 74, 78) : wxColour(210, 212, 216);
 
         gc->SetBrush(wxBrush(bg));
-        gc->SetPen(wxPen(selected ? wxColour(170, 172, 176) : wxColour(58, 61, 66), sd(1)));
-        gc->DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, sd(10));
+        gc->SetPen(wxPen(selected ? wxColour(170, 172, 176) : wxColour(58, 61, 66), FromDIP(1)));
+        gc->DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, FromDIP(10));
 
-        const int title_pt = std::max(8, static_cast<int>(std::lround(14 * map_scale())));
-        const int sub_pt = std::max(7, static_cast<int>(std::lround(9 * map_scale())));
-        draw_text(gc, tool_short_label(tool), wxRect(rect.x, rect.y + sd(12), rect.width, sd(36)), fg, title_pt, true);
-        draw_text(gc, tool_material_label(tool), wxRect(rect.x, rect.y + sd(50), rect.width, sd(22)), sub, sub_pt, false);
+        draw_text(gc, tool_short_label(tool), wxRect(rect.x, rect.y + FromDIP(14), rect.width, FromDIP(32)), fg, 17, wxFONTWEIGHT_BOLD);
+        draw_text(gc, tool_material_label(tool), wxRect(rect.x, rect.y + FromDIP(48), rect.width, FromDIP(22)), sub, 10, wxFONTWEIGHT_SEMIBOLD);
     }
 
     void reload_icons()
@@ -343,11 +296,12 @@ private:
         draw_filament_track(gc, track, 0, wxColour(), false, FilamentTrackCenter::PlusSign, empty, this);
     }
 
-    void draw_text(wxGraphicsContext* gc, const wxString& text, const wxRect& rect, const wxColour& colour, int point_size, bool bold)
+    void draw_text(wxGraphicsContext* gc, const wxString& text, const wxRect& rect, const wxColour& colour, int point_size, wxFontWeight weight)
     {
-        wxFont font = GetFont();
-        font.SetPointSize(std::max(1, point_size));
-        font.SetWeight(bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL);
+        wxFont font(wxFontInfo(std::max(1, point_size))
+            .Family(wxFONTFAMILY_SWISS)
+            .FaceName(wxString::FromUTF8("Bahnschrift"))
+            .Weight(weight));
         gc->SetFont(font, colour);
         double tw = 0.0;
         double th = 0.0;
@@ -438,7 +392,7 @@ wxBitmap make_white_bitmap_from_png(wxWindow* parent, const char* relative_path,
 
 wxBitmap make_expand_arrow_icon(wxWindow* parent, int px)
 {
-    return make_white_bitmap_from_png(parent, "images/expandarrow.png", "replace_arrow_down", px);
+    return create_scaled_bitmap("replace_arrow_down", parent, px, false, "#FFFFFF");
 }
 
 struct PopupManageToolOption {
@@ -669,19 +623,6 @@ void FilamentPanel::apply_state(const FilamentState& state)
 void FilamentPanel::set_command_handler(CommandHandler handler)
 {
     m_command_handler = std::move(handler);
-}
-
-void FilamentPanel::fit_to_height(int content_height_px)
-{
-    if (content_height_px <= 0)
-        return;
-    // Card title + padding around the map / manage column.
-    const int map_h = std::max(FromDIP(80), content_height_px - FromDIP(48));
-    if (m_tool_map_view != nullptr)
-        m_tool_map_view->set_preferred_height(map_h);
-    SetMinSize(wxSize(FromDIP(260), 1));
-    SetMaxSize(wxSize(-1, content_height_px));
-    Layout();
 }
 
 void FilamentPanel::dispatch(DeviceCommand command) const

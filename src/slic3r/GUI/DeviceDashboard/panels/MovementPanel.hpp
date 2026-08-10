@@ -12,6 +12,7 @@
 
 class Button;
 class wxStaticText;
+class wxBoxSizer;
 
 namespace Slic3r {
 namespace GUI {
@@ -28,8 +29,7 @@ public:
 
     void apply_state(const MovementState& state);
     void set_command_handler(CommandHandler handler);
-    // Uniformly scale Movement controls so the Device tab fits without clipping.
-    void fit_to_height(int content_height_px);
+    void set_compact_mode(bool compact);
 
 private:
     enum class SpeedPreset {
@@ -45,13 +45,22 @@ private:
     void dispatch_axis(Axis axis, double direction) const;
     void dispatch(DeviceCommand command) const;
     void set_active_tool_button(int tool_index);
+    void set_available_tool_count(int tool_count);
     void set_active_distance_button(double distance_mm);
     void set_active_speed_button(SpeedPreset preset);
 
     DeviceCardFrame* m_frame{nullptr};
-    std::function<void(double)> m_apply_layout_scale;
-    double m_layout_scale{1.0};
-    int m_joystick_square{0};
+    wxBoxSizer* m_headers_sizer{nullptr};
+    wxBoxSizer* m_tool_header_slot{nullptr};
+    wxBoxSizer* m_xy_header_slot{nullptr};
+    wxBoxSizer* m_z_header_slot{nullptr};
+    wxBoxSizer* m_distance_header_slot{nullptr};
+    wxBoxSizer* m_speed_header_slot{nullptr};
+    wxBoxSizer* m_controls_sizer{nullptr};
+    wxWindow* m_xy_area{nullptr};
+    Button* m_center_button{nullptr};
+    wxWindow* m_z_plus_host{nullptr};
+    wxWindow* m_z_minus_host{nullptr};
     std::array<Button*, MaxDashboardTools> m_tool_buttons{nullptr, nullptr, nullptr, nullptr};
     std::array<Button*, 4> m_distance_buttons{nullptr, nullptr, nullptr, nullptr};
     std::array<Button*, 4> m_speed_buttons{nullptr, nullptr, nullptr, nullptr};
@@ -60,6 +69,8 @@ private:
     std::array<int8_t, 4> m_speed_button_active{-1, -1, -1, -1};
     double m_selected_distance_mm{1.0};
     int m_selected_tool{0};
+    int m_available_tool_count{MaxDashboardTools};
+    bool m_compact_mode{false};
     SpeedPreset m_speed_preset{SpeedPreset::Normal};
     CommandHandler m_command_handler;
 };
