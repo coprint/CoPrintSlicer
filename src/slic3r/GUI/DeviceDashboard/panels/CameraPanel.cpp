@@ -12,9 +12,11 @@
 #include <cmath>
 #include <utility>
 
+#include <wx/button.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
 #include <wx/filename.h>
+#include <wx/frame.h>
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
 #include <wx/stattext.h>
@@ -268,6 +270,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
     m_fullscreen_btn->SetCursor(wxCursor(wxCURSOR_HAND));
     m_fullscreen_btn->SetToolTip(wxString::FromUTF8("Fullscreen"));
     m_fullscreen_btn->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &) {
+        toggle_fullscreen();
         if (m_fullscreen_handler) m_fullscreen_handler();
     });
     header_actions_sizer->Add(m_fullscreen_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
@@ -393,6 +396,88 @@ void CameraPanel::set_play_handler(PlayHandler handler)
 void CameraPanel::set_fullscreen_handler(FullscreenHandler handler)
 {
     m_fullscreen_handler = std::move(handler);
+}
+
+void CameraPanel::toggle_fullscreen()
+{
+    if (m_fullscreen_frame != nullptr) {
+        // Already fullscreen -- treat a second click the same as Esc/close box.
+        m_fullscreen_frame->Close();
+        return;
+    }
+    if (m_stream_host == nullptr || m_viewport == nullptr)
+        return;
+
+    auto* frame = new wxFrame(nullptr, wxID_ANY, wxString::FromUTF8("Live Camera"));
+    frame->SetBackgroundColour(*wxBLACK);
+    m_fullscreen_frame = frame;
+
+    m_stream_host->Reparent(frame);
+    m_stream_host->Show(true);
+    m_stream_host->Lower();
+
+    // Plain wxButton, not a bare styled label: guaranteed visible against any
+    // background regardless of font glyph support, no custom paint needed.
+    auto* close_btn = new wxButton(frame, wxID_ANY, wxString::FromUTF8("X"),
+        wxDefaultPosition, wxSize(FromDIP(36), FromDIP(36)));
+    close_btn->SetBackgroundColour(wxColour(60, 60, 60));
+    close_btn->SetForegroundColour(*wxWHITE);
+    close_btn->SetCursor(wxCursor(wxCURSOR_HAND));
+    close_btn->SetToolTip(wxString::FromUTF8("Close (Esc)"));
+    {
+        wxFont f = close_btn->GetFont();
+        f.SetPointSize(f.GetPointSize() + 2);
+        f.SetWeight(wxFONTWEIGHT_BOLD);
+        close_btn->SetFont(f);
+    }
+
+    // Returns the stream host to the Device tab and tears down the fullscreen
+    // window. Guarded by the m_fullscreen_frame nullptr check so it's safe to
+    // call more than once (close button click + the frame's own close event).
+    auto close_fullscreen = [this]() {
+        if (m_fullscreen_frame == nullptr)
+            return;
+        wxFrame* frame_to_close = m_fullscreen_frame;
+        m_fullscreen_frame = nullptr;
+        if (m_stream_host != nullptr && m_viewport != nullptr) {
+            m_stream_host->Reparent(m_viewport);
+            layout_viewport_layers();
+            update_idle_visibility(m_stream_available);
+        }
+        frame_to_close->Destroy();
+    };
+
+    close_btn->Bind(wxEVT_BUTTON, [close_fullscreen](wxCommandEvent&) { close_fullscreen(); });
+    frame->Bind(wxEVT_CHAR_HOOK, [close_fullscreen](wxKeyEvent& evt) {
+        if (evt.GetKeyCode() == WXK_ESCAPE)
+            close_fullscreen();
+        else
+            evt.Skip();
+    });
+    frame->Bind(wxEVT_CLOSE_WINDOW, [close_fullscreen](wxCloseEvent&) { close_fullscreen(); });
+
+    auto reposition = [this, frame, close_btn]() {
+        const wxSize client = frame->GetClientSize();
+        if (client.GetWidth() <= 0 || client.GetHeight() <= 0)
+            return;
+        if (m_stream_host != nullptr)
+            m_stream_host->SetSize(0, 0, client.GetWidth(), client.GetHeight());
+        close_btn->SetPosition(wxPoint(client.GetWidth() - close_btn->GetSize().GetWidth() - FromDIP(24), FromDIP(20)));
+        close_btn->Raise();
+    };
+    frame->Bind(wxEVT_SIZE, [reposition](wxSizeEvent& evt) {
+        evt.Skip();
+        reposition();
+    });
+
+    frame->Maximize(true);
+    frame->Show(true);
+    frame->SendSizeEvent();
+    reposition();
+    // Maximize can settle a frame later than the same-turn SendSizeEvent on
+    // some window managers; correct the button position once more next idle.
+    CallAfter([reposition]() { reposition(); });
+    frame->SetFocus();
 }
 
 void CameraPanel::set_timelapse_handler(TimelapseHandler handler)
