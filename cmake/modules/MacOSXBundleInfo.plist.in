@@ -11,11 +11,7 @@
 	<key>CFBundleIconFile</key>
 	<string>${MACOSX_BUNDLE_ICON_FILE}</string>
 	<key>CFBundleIdentifier</key>
-<<<<<<< HEAD
 	<string>com.softfever3d.coprintslicer</string>
-=======
-	<string>com.orcaslicer.OrcaSlicer</string>
->>>>>>> orca-v2.4.2
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleLongVersionString</key>
