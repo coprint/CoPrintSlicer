@@ -1,5 +1,3 @@
-cd /Volumes/HIKSEMI/coding/CoPrintSlicer
-
 # 1. Geçici klasör oluştur
 mkdir -p dmg_temp
 
