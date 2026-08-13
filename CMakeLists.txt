@@ -576,7 +576,27 @@ if(POLICY CMP0167)
   cmake_policy(SET CMP0167 OLD)
 endif()
 set(Boost_NO_SYSTEM_PATHS TRUE)
-find_package(Boost 1.83.0 REQUIRED COMPONENTS system filesystem thread log log_setup locale regex chrono atomic date_time iostreams program_options nowide)
+
+# Workaround: CMake's bundled FindBoost.cmake (Module mode) fails to locate these
+# specific Boost 1.84 component libraries against newer MSVC toolset tags (e.g. vc145),
+# even though the compiled .lib files are present under CMAKE_PREFIX_PATH/lib and are
+# trivially found by a plain find_library() call. Pre-resolve them so FindBoost's own
+# (buggy) search is skipped for just these components. boost_system and boost_regex are
+# intentionally NOT requested below: nothing in this codebase links against them, and no
+# compiled library for either exists in the deps build.
+foreach(_boost_comp CHRONO ATOMIC IOSTREAMS PROGRAM_OPTIONS)
+  string(TOLOWER ${_boost_comp} _boost_comp_lower)
+  file(GLOB _boost_probe_lib "${CMAKE_PREFIX_PATH}/lib/libboost_${_boost_comp_lower}-vc*-mt-x64-1_84.lib")
+  if(_boost_probe_lib)
+    list(GET _boost_probe_lib 0 _boost_probe_lib)
+    get_filename_component(_boost_probe_name "${_boost_probe_lib}" NAME_WE)
+    string(REGEX MATCH "vc[0-9]+" _boost_vc_tag "${_boost_probe_name}")
+    find_library(Boost_${_boost_comp}_LIBRARY_RELEASE NAMES libboost_${_boost_comp_lower}-${_boost_vc_tag}-mt-x64-1_84 PATHS "${CMAKE_PREFIX_PATH}/lib" NO_DEFAULT_PATH)
+    set(Boost_${_boost_comp}_FOUND TRUE)
+  endif()
+endforeach()
+
+find_package(Boost 1.83.0 REQUIRED COMPONENTS filesystem thread log log_setup locale chrono atomic date_time iostreams program_options nowide)
 
 add_library(boost_libs INTERFACE)
 add_library(boost_headeronly INTERFACE)
@@ -611,7 +631,33 @@ if(SLIC3R_STATIC)
 endif()
 set(TBB_DEBUG 1)
 set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO RelWithDebInfo Release "")
-find_package(TBB REQUIRED)
+
+# Workaround: the deps build's lib/cmake/TBB package config directory is empty (likely
+# pruned locally, same as the Boost one above), so CONFIG-mode find_package(TBB) fails
+# and falls back to this project's legacy FindTBB.cmake.in module, which expects a
+# pre-oneTBB header (tbb_stddef.h) that no longer exists in the oneTBB headers actually
+# installed under CMAKE_PREFIX_PATH/include/tbb. The compiled static libraries and
+# headers are present and valid, so define the TBB::tbb / TBB::tbbmalloc imported
+# targets directly and skip find_package(TBB) entirely when we can.
+if(NOT TARGET TBB::tbb AND EXISTS "${CMAKE_PREFIX_PATH}/include/tbb/tbb.h")
+  add_library(TBB::tbb STATIC IMPORTED)
+  set_target_properties(TBB::tbb PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_PREFIX_PATH}/lib/tbb12.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_PREFIX_PATH}/include"
+  )
+  if(EXISTS "${CMAKE_PREFIX_PATH}/lib/tbbmalloc.lib")
+    add_library(TBB::tbbmalloc STATIC IMPORTED)
+    set_target_properties(TBB::tbbmalloc PROPERTIES
+      IMPORTED_LOCATION "${CMAKE_PREFIX_PATH}/lib/tbbmalloc.lib"
+      INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_PREFIX_PATH}/include"
+    )
+  endif()
+  set(TBB_FOUND TRUE)
+endif()
+
+if(NOT TARGET TBB::tbb)
+  find_package(TBB REQUIRED)
+endif()
 # include_directories(SYSTEM ${TBB_INCLUDE_DIRS})
 # add_definitions(${TBB_DEFINITIONS})
 # if(MSVC)
@@ -724,12 +770,37 @@ endif()
 
 find_package(GLEW REQUIRED)
 
-find_package(glfw3 REQUIRED)
+# Workaround: same class of issue as Boost/TBB above - the deps build's
+# lib/cmake/glfw3 package config directory is empty even though the compiled
+# library and headers are present, so CONFIG-mode find_package(glfw3) fails.
+# Define the glfw imported target directly in that case.
+if(NOT TARGET glfw AND EXISTS "${CMAKE_PREFIX_PATH}/include/GLFW/glfw3.h" AND EXISTS "${CMAKE_PREFIX_PATH}/lib/glfw3.lib")
+  add_library(glfw STATIC IMPORTED)
+  set_target_properties(glfw PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_PREFIX_PATH}/lib/glfw3.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_PREFIX_PATH}/include"
+  )
+endif()
+
+if(NOT TARGET glfw)
+  find_package(glfw3 REQUIRED)
+endif()
 
 # Find the Cereal serialization library
+# Workaround: Findcereal.cmake's fallback path uses CHECK_INCLUDE_FILE_CXX, which only
+# looks in CMAKE_REQUIRED_INCLUDES, not CMAKE_PREFIX_PATH, so it misses the header even
+# though it is present under CMAKE_PREFIX_PATH/include.
+list(APPEND CMAKE_REQUIRED_INCLUDES "${CMAKE_PREFIX_PATH}/include")
 find_package(cereal REQUIRED)
 if (NOT TARGET cereal::cereal)
-    set_target_properties(cereal PROPERTIES IMPORTED_GLOBAL TRUE)
+    # cereal's Findcereal.cmake fallback path (used when no cereal-config.cmake package
+    # is available) creates a plain, non-imported INTERFACE target, which does not
+    # support the IMPORTED_GLOBAL property - only apply it if the target really is imported.
+    get_target_property(_cereal_is_imported cereal IMPORTED)
+    if (_cereal_is_imported)
+        set_target_properties(cereal PROPERTIES IMPORTED_GLOBAL TRUE)
+    endif ()
+    unset(_cereal_is_imported)
     add_library(cereal::cereal ALIAS cereal)
 else ()
     set_target_properties(cereal::cereal PROPERTIES IMPORTED_GLOBAL TRUE)
@@ -777,7 +848,19 @@ foreach(po_file ${BBL_L10N_PO_FILES})
     )
 endforeach()
 
-find_package(NLopt 1.4 REQUIRED)
+# Workaround: same class of issue as Boost/TBB/glfw3 above - lib/cmake/nlopt is empty
+# even though the compiled library and headers are present.
+if(NOT TARGET NLopt::nlopt AND EXISTS "${CMAKE_PREFIX_PATH}/include/nlopt.hpp" AND EXISTS "${CMAKE_PREFIX_PATH}/lib/nlopt.lib")
+  add_library(NLopt::nlopt STATIC IMPORTED)
+  set_target_properties(NLopt::nlopt PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_PREFIX_PATH}/lib/nlopt.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_PREFIX_PATH}/include"
+  )
+endif()
+
+if(NOT TARGET NLopt::nlopt)
+  find_package(NLopt 1.4 REQUIRED)
+endif()
 
 
 if(SLIC3R_STATIC)
