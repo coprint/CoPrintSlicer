@@ -4991,7 +4991,9 @@ void PrinterWebView::sync_model_colors_from_plater()
             return;
         const DynamicPrintConfig &project_config = preset_bundle->project_config;
         const auto *color_opt = project_config.option<ConfigOptionStrings>("filament_colour");
-        const auto *type_opt  = preset_bundle->full_config().option<ConfigOptionStrings>("filament_type");
+        // Store full_config to prevent dangling pointer (full_config() returns temporary by value)
+        const DynamicPrintConfig full_config = preset_bundle->full_config();
+        const auto *type_opt = full_config.option<ConfigOptionStrings>("filament_type");
         if (color_opt == nullptr || color_opt->values.empty())
             return;
         for (size_t i = 0; i < std::min<size_t>(4, color_opt->values.size()); ++i) {
