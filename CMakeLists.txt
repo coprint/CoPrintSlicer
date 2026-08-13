@@ -482,8 +482,8 @@ if (SLIC3R_ASAN)
 endif ()
 
 if (APPLE)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror=partial-availability -Werror=unguarded-availability -Werror=unguarded-availability-new")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror=partial-availability -Werror=unguarded-availability -Werror=unguarded-availability-new")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error=partial-availability -Wno-error=unguarded-availability -Wno-error=unguarded-availability-new")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=partial-availability -Wno-error=unguarded-availability -Wno-error=unguarded-availability-new")
 endif ()
 
 if(MSVC)

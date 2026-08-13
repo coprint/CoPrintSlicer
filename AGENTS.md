@@ -53,6 +53,14 @@ ctest --test-dir ./tests/fff_print
 - Profile/format changes need version migration handling
 - Dependencies built separately in `deps/build/`, then linked to main app
 
+## Build Policy
+
+**CRITICAL**: The agent must NEVER attempt to build the project. Only the user can run builds.
+- Agent role: Make code changes only
+- User role: Review changes, run builds, and test
+- This applies to all build commands: cmake, xcodebuild, ninja, build scripts, etc.
+- Agent should complete code changes and mark todos as done, then inform user that changes are ready for build
+
 ## Code review focus areas
 
 - Changes must not cause regressions in existing functionality, defaults, profiles, or project compatibility.

@@ -133,7 +133,9 @@ std::vector<FilamentInfo> filament_rows_for_plate(PartPlate *plate)
         return rows;
 
     const auto *color_opt = preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour");
-    const auto *type_opt  = preset_bundle->full_config().option<ConfigOptionStrings>("filament_type");
+    // Store full_config to prevent dangling pointer (full_config() returns temporary by value)
+    const DynamicPrintConfig full_config = preset_bundle->full_config();
+    const auto *type_opt = full_config.option<ConfigOptionStrings>("filament_type");
     if (color_opt == nullptr)
         return rows;
 
@@ -141,10 +143,12 @@ std::vector<FilamentInfo> filament_rows_for_plate(PartPlate *plate)
     rows.reserve(count);
     for (size_t i = 0; i < count; ++i) {
         FilamentInfo info;
-        info.id    = static_cast<int>(i);
+        info.id = static_cast<int>(i);
         info.color = color_opt->values[i];
         if (type_opt && i < type_opt->values.size())
             info.type = type_opt->values[i];
+        else
+            info.type = "PLA";
         rows.push_back(std::move(info));
     }
     return rows;
@@ -284,39 +288,58 @@ PrinterToolInfo query_printer_tool(MachineObject *obj, int tool_0based)
     if (obj == nullptr || tool_0based < 0 || tool_0based > 3)
         return info;
 
-    const std::string tray_id = std::to_string(tool_0based);
-    const std::string type    = obj->get_filament_type("0", tray_id);
-    if (!type.empty()) {
-        info.has_filament = true;
-        wxString display  = from_u8(obj->get_filament_display_type("0", tray_id));
-        info.material     = display.empty() ? from_u8(type) : display;
-    }
-
-    if (DevAmsTray *tray = obj->get_ams_tray("0", tray_id)) {
-        const wxColour tray_color = tray->get_color();
-        if (tray_color.IsOk()) {
-            info.color        = tray_color;
-            info.has_filament = true;
+    try {
+        const std::string tray_id = std::to_string(tool_0based);
+        std::string type;
+        std::string display_type;
+        
+        try {
+            type = obj->get_filament_type("0", tray_id);
+        } catch (...) {
+            type.clear();
         }
-    }
+        
+        if (!type.empty()) {
+            info.has_filament = true;
+            try {
+                display_type = obj->get_filament_display_type("0", tray_id);
+            } catch (...) {
+                display_type.clear();
+            }
+            
+            wxString display = display_type.empty() ? wxString() : from_u8(display_type);
+            info.material = display.empty() ? from_u8(type) : display;
+        }
 
-    if (MainFrame *frame = wxGetApp().mainframe) {
-        if (PrinterWebView *printer_view = frame->m_printer_view) {
-            wxColour cached;
-            wxString material;
-            if (printer_view->get_loaded_tool_filament(tool_0based, &cached, &material) && cached.IsOk()) {
-                info.color        = cached;
+        if (DevAmsTray *tray = obj->get_ams_tray("0", tray_id)) {
+            const wxColour tray_color = tray->get_color();
+            if (tray_color.IsOk()) {
+                info.color        = tray_color;
                 info.has_filament = true;
-                if (!material.empty())
-                    info.material = material;
             }
         }
-    }
 
-    if (!info.has_filament)
+        if (MainFrame *frame = wxGetApp().mainframe) {
+            if (PrinterWebView *printer_view = frame->m_printer_view) {
+                wxColour cached;
+                wxString material;
+                if (printer_view->get_loaded_tool_filament(tool_0based, &cached, &material) && cached.IsOk()) {
+                    info.color        = cached;
+                    info.has_filament = true;
+                    if (!material.empty())
+                        info.material = material;
+                }
+            }
+        }
+
+        if (!info.has_filament)
+            info.material = _L("Empty");
+        else if (info.material.empty())
+            info.material = wxString::FromUTF8("?");
+    } catch (...) {
         info.material = _L("Empty");
-    else if (info.material.empty())
-        info.material = wxString::FromUTF8("?");
+        info.has_filament = false;
+    }
 
     return info;
 }
@@ -631,8 +654,7 @@ void StartPrintFilamentSlot::set_visible(bool visible)
 
 void StartPrintFilamentSlot::set_model_filament(const std::string &type, const wxColour &color)
 {
-    const wxString type_text = from_u8(type.empty() ? "PLA" : type);
-    style_half(m_model_half, nullptr, m_model_type, color, wxEmptyString, type_text);
+    style_half(m_model_half, nullptr, m_model_type, color, wxEmptyString, from_u8(type));
 }
 
 void StartPrintFilamentSlot::set_mapped_tool(int mapped_tool)
@@ -644,10 +666,27 @@ void StartPrintFilamentSlot::set_mapped_tool(int mapped_tool)
 
 void StartPrintFilamentSlot::update_printer_tool(const wxColour &color, const wxString &material, int tool_1based)
 {
-    m_mapped_tool = std::clamp(tool_1based, 1, 4);
-    const wxColour fill = color.IsOk() ? color : Ui::control_background();
-    style_half(m_printer_half, m_printer_tag, m_printer_type, fill,
-        wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool), material);
+    try {
+        m_mapped_tool = std::clamp(tool_1based, 1, 4);
+        const wxColour fill = color.IsOk() ? color : Ui::control_background();
+        
+        // Safely copy the material string
+        wxString safe_material;
+        try {
+            if (!material.IsEmpty()) {
+                safe_material = material;
+            } else {
+                safe_material = _L("Empty");
+            }
+        } catch (...) {
+            safe_material = _L("Empty");
+        }
+        
+        style_half(m_printer_half, m_printer_tag, m_printer_type, fill,
+            wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool), safe_material);
+    } catch (...) {
+        // If anything fails, just don't update
+    }
 }
 
 void StartPrintFilamentSlot::bind_tool_pick_handler(ToolPickHandler handler)
@@ -901,7 +940,13 @@ int StartPrintDialog::ShowModal()
     }
     refresh_from_plate();
     refresh_printer_list();
-    sync_printer_tool_colours(selected_machine());
+    
+    // Yazıcı varsa bilgileri güncelle
+    MachineObject *machine = selected_machine();
+    if (machine != nullptr) {
+        sync_printer_tool_colours(machine);
+    }
+    
     update_printer_status();
     update_start_button_state();
     Layout();
@@ -933,10 +978,36 @@ void StartPrintDialog::refresh_from_plate()
     wxString filename = m_plater->get_export_gcode_filename(wxEmptyString, true);
     if (filename.empty())
         filename = _L("Untitled");
-    m_task_name_label->SetLabel(wxFileName(filename).GetFullName());
+    if (m_task_name_label != nullptr)
+        m_task_name_label->SetLabel(wxFileName(filename).GetFullName());
 
-    const auto &preset_bundle = *wxGetApp().preset_bundle;
-    m_target_printer_label->SetLabel(from_u8(preset_bundle.printers.get_edited_preset().name));
+    if (m_target_printer_label != nullptr) {
+        try {
+            auto *preset_bundle = wxGetApp().preset_bundle;
+            if (preset_bundle != nullptr) {
+                const auto &edited_preset = preset_bundle->printers.get_edited_preset();
+                // Safely access the name field
+                std::string preset_name;
+                try {
+                    if (!edited_preset.name.empty()) {
+                        preset_name = edited_preset.name;
+                    }
+                } catch (...) {
+                    preset_name.clear();
+                }
+                
+                if (!preset_name.empty()) {
+                    m_target_printer_label->SetLabel(from_u8(preset_name));
+                } else {
+                    m_target_printer_label->SetLabel(_L("Unknown"));
+                }
+            } else {
+                m_target_printer_label->SetLabel(_L("Unknown"));
+            }
+        } catch (...) {
+            m_target_printer_label->SetLabel(_L("Unknown"));
+        }
+    }
 
     wxString time_label = _L("—");
     double   total_weight = 0.0;
@@ -968,37 +1039,55 @@ void StartPrintDialog::refresh_from_plate()
     else
         ::sprintf(weight_buf, "%.2f g", total_weight);
 
-    m_time_label->SetLabel(time_label);
-    m_weight_label->SetLabel(wxString::FromUTF8(weight_buf));
+    if (m_time_label != nullptr)
+        m_time_label->SetLabel(time_label);
+    if (m_weight_label != nullptr)
+        m_weight_label->SetLabel(wxString::FromUTF8(weight_buf));
 
-    const std::vector<FilamentInfo> filaments = filament_rows_for_plate(plate);
-    for (int i = 0; i < 4; ++i)
-        m_filament_slots[i]->set_visible(false);
-
-    for (const auto &info : filaments) {
-        const int model_slot = info.id;
-        if (model_slot < 0 || model_slot >= 4)
-            continue;
-        const int mapped_tool = physical_tool_for_filament(model_slot, info);
-        m_filament_slots[model_slot]->set_model_filament(
-            info.get_display_filament_type(), parse_filament_colour(info.color));
-        m_filament_slots[model_slot]->set_mapped_tool(mapped_tool);
-        m_filament_slots[model_slot]->set_visible(true);
+    // Önce tüm slot'ları gizle
+    for (int i = 0; i < 4; ++i) {
+        if (m_filament_slots[i] != nullptr)
+            m_filament_slots[i]->set_visible(false);
     }
+    
+    const std::vector<FilamentInfo> filaments = filament_rows_for_plate(plate);
+    
+    for (const FilamentInfo &info : filaments) {
+            const int model_slot = info.id;
+            if (model_slot < 0 || model_slot >= 4)
+                continue;
+            if (m_filament_slots[model_slot] == nullptr)
+                continue;
+            
+            std::string display_type = info.type;
+            if (info.type == "PLA-S")
+                display_type = "Sup.PLA";
+            else if (info.type == "PA-S")
+                display_type = "Sup.PA";
+            else if (info.type == "ABS-S")
+                display_type = "Sup.ABS";
+            
+            const int mapped_tool = physical_tool_for_filament(model_slot, info);
+            m_filament_slots[model_slot]->set_model_filament(display_type, parse_filament_colour(info.color));
+            m_filament_slots[model_slot]->set_mapped_tool(mapped_tool);
+            m_filament_slots[model_slot]->set_visible(true);
+        }
 
     refresh_filament_printer_sides();
 
-    if (!plate_ready_for_device_print(plate)) {
-        m_filament_hint->SetLabel(plate && plate->is_slice_result_valid()
-            ? _L("G-code file is missing. Please slice again.")
-            : _L("Slice the plate before starting a print."));
-        m_filament_hint->SetForegroundColour(Ui::danger());
-    } else if (plate && !plate->is_slice_result_ready_for_print()) {
-        m_filament_hint->SetLabel(_L("There are slicing warnings. Review them before printing."));
-        m_filament_hint->SetForegroundColour(ui_warning());
-    } else {
-        m_filament_hint->SetLabel(_L("Click the bottom row to change tool mapping."));
-        m_filament_hint->SetForegroundColour(Ui::accent());
+    if (m_filament_hint != nullptr) {
+        if (!plate_ready_for_device_print(plate)) {
+            m_filament_hint->SetLabel(plate && plate->is_slice_result_valid()
+                ? _L("G-code file is missing. Please slice again.")
+                : _L("Slice the plate before starting a print."));
+            m_filament_hint->SetForegroundColour(Ui::danger());
+        } else if (plate && !plate->is_slice_result_ready_for_print()) {
+            m_filament_hint->SetLabel(_L("There are slicing warnings. Review them before printing."));
+            m_filament_hint->SetForegroundColour(ui_warning());
+        } else {
+            m_filament_hint->SetLabel(_L("Click the bottom row to change tool mapping."));
+            m_filament_hint->SetForegroundColour(Ui::accent());
+        }
     }
 }
 
@@ -1089,13 +1178,29 @@ std::string StartPrintDialog::selected_machine_id() const
 
 void StartPrintDialog::refresh_filament_printer_sides()
 {
-    MachineObject *obj = selected_machine();
-    for (int i = 0; i < 4; ++i) {
-        if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
-            continue;
-        const int tool = m_filament_slots[i]->get_mapped_tool();
-        const PrinterToolInfo info = query_printer_tool(obj, tool - 1);
-        m_filament_slots[i]->update_printer_tool(info.color, info.material, tool);
+    try {
+        MachineObject *obj = selected_machine();
+        
+        // Yazıcı bağlı değilse yazıcı tarafını güncelleme
+        if (obj == nullptr)
+            return;
+        
+        for (int i = 0; i < 4; ++i) {
+            if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
+                continue;
+            try {
+                const int tool = m_filament_slots[i]->get_mapped_tool();
+                const PrinterToolInfo info = query_printer_tool(obj, tool - 1);
+                // Safely update with validated material string
+                wxString safe_material = info.material.IsEmpty() ? _L("Empty") : info.material;
+                m_filament_slots[i]->update_printer_tool(info.color, safe_material, tool);
+            } catch (...) {
+                // If anything goes wrong, set empty
+                m_filament_slots[i]->update_printer_tool(wxNullColour, _L("Empty"), i + 1);
+            }
+        }
+    } catch (...) {
+        // Silently fail if the whole function crashes
     }
 }
 
@@ -1125,6 +1230,25 @@ void StartPrintDialog::show_tool_picker_for_slot(int model_slot, wxWindow *ancho
 void StartPrintDialog::update_printer_status()
 {
     MachineObject *obj = selected_machine();
+    
+    // Yazıcı yoksa durum mesajını göster ve çık
+    if (obj == nullptr) {
+        // Yazıcı tool swatches'lerini varsayılan renge ayarla
+        for (int i = 0; i < 4; ++i) {
+            if (m_printer_tool_swatches[i] == nullptr)
+                continue;
+            const wxColour tint = Ui::control_background();
+            m_printer_tool_swatches[i]->SetBackgroundColorNormal(tint);
+            m_printer_tool_swatches[i]->SetBackgroundColour(tint);
+            m_printer_tool_swatches[i]->Refresh();
+        }
+        
+        m_printer_status->SetLabel(_L("No printer selected."));
+        m_printer_status->SetForegroundColour(Ui::danger());
+        return;
+    }
+    
+    // Yazıcı varsa tool bilgilerini güncelle
     for (int i = 0; i < 4; ++i) {
         if (m_printer_tool_swatches[i] == nullptr)
             continue;
@@ -1136,12 +1260,6 @@ void StartPrintDialog::update_printer_status()
     }
 
     refresh_filament_printer_sides();
-
-    if (obj == nullptr) {
-        m_printer_status->SetLabel(_L("No printer selected."));
-        m_printer_status->SetForegroundColour(Ui::danger());
-        return;
-    }
 
     if (!obj->is_online()) {
         m_printer_status->SetLabel(_L("Printer is offline."));
