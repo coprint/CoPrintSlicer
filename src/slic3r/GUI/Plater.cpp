@@ -16682,12 +16682,12 @@ const GLCanvas3D* Plater::canvas3D() const
 
 GLCanvas3D* Plater::get_view3D_canvas3D()
 {
-    return p->view3D->get_canvas3d();
+    return (p && p->view3D) ? p->view3D->get_canvas3d() : nullptr;
 }
 
 GLCanvas3D* Plater::get_preview_canvas3D()
 {
-    return p->preview->get_canvas3d();
+    return (p && p->preview) ? p->preview->get_canvas3d() : nullptr;
 }
 
 GLCanvas3D* Plater::get_assmeble_canvas3D()

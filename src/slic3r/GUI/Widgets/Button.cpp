@@ -373,14 +373,7 @@ void Button::render(wxDC& dc)
         dc.SetPen(wxPen(*wxLIGHT_GREY));
         dc.DrawRectangle(pt, textSize.GetSize());
 #endif
-#ifdef __WXOSX__
-        pt.y -= this->textSize.x / 2;
-#endif
-#ifdef __APPLE__
-        if (Slic3r::is_mac_version_15()) {
-        pt.y -= FromDIP(1);
-    }
-#endif
+        // Removed macOS-specific Y offsets for consistent vertical centering across all platforms
         dc.DrawText(text, pt);
     }
 }
