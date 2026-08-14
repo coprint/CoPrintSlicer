@@ -19,7 +19,7 @@
     "cooling_tube_retraction": "0",
     "default_bed_type": "",
     "default_filament_profile": [
-        "CoPrint Quadro PLA"
+        "Co Print PLA (Quadro)"
     ],
     "default_nozzle_volume_type": [
         "Standard",

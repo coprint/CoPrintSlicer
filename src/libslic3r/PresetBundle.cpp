@@ -676,16 +676,19 @@ bool is_foreign_printer_preset(const Preset &preset)
     return true;
 }
 
-std::string map_filament_type_to_coprint_generic(const std::string &filament_type)
+std::string map_filament_type_to_coprint_generic(const std::string &filament_type, bool is_quadro)
 {
-    const std::string t = boost::algorithm::to_upper_copy(filament_type);
+    const std::string t      = boost::algorithm::to_upper_copy(filament_type);
+    const std::string suffix = is_quadro ? " (Quadro)" : " (ChromaSet)";
     if (t.find("TPU") != std::string::npos)
-        return "CoPrint Generic TPU";
+        return "Co Print TPU" + suffix;
     if (t.find("PETG") != std::string::npos)
-        return "CoPrint Generic PETG";
-    if (t.find("ABS") != std::string::npos || t.find("ASA") != std::string::npos)
-        return "CoPrint Generic ABS";
-    return "CoPrint Generic PLA";
+        return "Co Print PETG" + suffix;
+    if (t.find("ASA") != std::string::npos)
+        return "Co Print ASA" + suffix;
+    if (t.find("ABS") != std::string::npos)
+        return "Co Print ABS" + suffix;
+    return "Co Print PLA" + suffix;
 }
 
 std::string format_nozzle_diameter(double diameter)
@@ -816,18 +819,20 @@ void PresetBundle::enforce_coprint_identity()
         }
     }
 
-    // 2) Filaments MUST be CoPrint Generic *; never keep Bambu/other vendor filaments.
+    // 2) Filaments MUST be Co Print *; never keep Bambu/other vendor filaments.
     //    Slot count and project colours stay as loaded from the 3MF.
+    const bool is_quadro = boost::algorithm::icontains(this->printers.get_edited_preset().name, "Quadro");
     for (size_t i = 0; i < this->filament_presets.size(); ++i) {
         const Preset *current = this->filaments.find_preset(this->filament_presets[i], false);
         if (is_coprint_filament_preset(current))
             continue;
 
         const std::string filament_type = current ? current->config.opt_string("filament_type", 0u) : std::string("PLA");
-        const std::string target_name   = map_filament_type_to_coprint_generic(filament_type);
+        const std::string target_name   = map_filament_type_to_coprint_generic(filament_type, is_quadro);
         Preset *target                  = this->filaments.find_preset(target_name, false);
         if (target == nullptr) {
-            for (const char *fallback : {"CoPrint Generic PLA", "CoPrint Generic PETG", "CoPrint Generic ABS", "CoPrint Generic TPU"}) {
+            const std::string suffix = is_quadro ? " (Quadro)" : " (ChromaSet)";
+            for (const std::string fallback : {"Co Print PLA" + suffix, "Co Print PETG" + suffix, "Co Print ABS" + suffix, "Co Print TPU" + suffix}) {
                 target = this->filaments.find_preset(fallback, false);
                 if (target)
                     break;
@@ -3540,7 +3545,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
                         maps.erase(j);
                     }
                 }
-                ams_filament_presets.push_back("CoPrint Generic PLA");//for unknow matieral
+                ams_filament_presets.push_back("Co Print PLA (ChromaSet)");//for unknow matieral
                 auto default_unknown_color = "#CECECE";
                 ams_filament_colors.push_back(default_unknown_color);
                 ams_filament_color_types.push_back("1");
@@ -4626,28 +4631,30 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
         if (const auto *opt = config.option<ConfigOptionFloats>("nozzle_diameter"); opt && !opt->values.empty())
             nozzle = format_nozzle_diameter(opt->values.front());
 
-        if (const Preset *printer = find_coprint_printer(this->printers, nozzle)) {
+        const Preset *coprint_printer = find_coprint_printer(this->printers, nozzle);
+        if (coprint_printer != nullptr) {
             if (auto *printer_id = config.option<ConfigOptionString>("printer_settings_id", true))
-                printer_id->value = printer->name;
+                printer_id->value = coprint_printer->name;
             if (auto *model = config.option<ConfigOptionString>("printer_model", true))
-                model->value = printer->config.opt_string("printer_model");
+                model->value = coprint_printer->config.opt_string("printer_model");
             if (auto *variant = config.option<ConfigOptionString>("printer_variant", true))
-                variant->value = printer->config.opt_string("printer_variant");
-            if (const auto *defaults = printer->config.option<ConfigOptionStrings>("default_print_profile");
+                variant->value = coprint_printer->config.opt_string("printer_variant");
+            if (const auto *defaults = coprint_printer->config.option<ConfigOptionStrings>("default_print_profile");
                 defaults && !defaults->values.empty()) {
                 if (auto *print_id = config.option<ConfigOptionString>("print_settings_id", true))
                     print_id->value = defaults->values.front();
             }
-            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": sanitized external printer -> '" << printer->name << "'";
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": sanitized external printer -> '" << coprint_printer->name << "'";
         }
 
         if (auto *filament_ids = config.option<ConfigOptionStrings>("filament_settings_id", true)) {
+            const bool is_quadro = coprint_printer != nullptr && boost::algorithm::icontains(coprint_printer->name, "Quadro");
             const auto *filament_types = config.option<ConfigOptionStrings>("filament_type");
             for (size_t i = 0; i < filament_ids->values.size(); ++i) {
                 std::string ftype = "PLA";
                 if (filament_types && i < filament_types->values.size())
                     ftype = filament_types->values[i];
-                filament_ids->values[i] = map_filament_type_to_coprint_generic(ftype);
+                filament_ids->values[i] = map_filament_type_to_coprint_generic(ftype, is_quadro);
             }
         }
         if (auto *inherits = config.option<ConfigOptionStrings>("inherits_group", true)) {

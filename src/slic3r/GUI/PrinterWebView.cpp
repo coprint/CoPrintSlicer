@@ -1469,12 +1469,11 @@ public:
 
         add_label(wxString::FromUTF8("Filament"));
         wxArrayString presets;
-        presets.Add("CoPrint Generic PLA");
-        presets.Add("CoPrint Generic PETG");
-        presets.Add("CoPrint Generic ABS");
-        presets.Add("CoPrint Generic ASA");
-        presets.Add("CoPrint Generic TPU");
-        presets.Add("CoPrint Generic PA");
+        presets.Add("PLA");
+        presets.Add("PETG");
+        presets.Add("ABS");
+        presets.Add("ASA");
+        presets.Add("TPU");
         const wxString initial_type = is_empty_filament_material(initial_material) ? wxString("PLA") : initial_material;
         const int initial_selection = initial_type.CmpNoCase("PLA") == 0 ? 0 : std::max(0, presets.Index(initial_type, false));
         m_filament_combo = new RoundedSelect(body, presets, initial_selection == wxNOT_FOUND ? 0 : initial_selection,

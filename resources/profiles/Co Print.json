@@ -1,6 +1,6 @@
 {
     "name": "Co Print",
-    "version": "02.04.00.05",
+    "version": "02.04.00.07",
     "force_update": "0",
     "description": "CoPrint configurations",
     "machine_model_list": [
@@ -129,32 +129,44 @@
             "sub_path": "filament/fdm_filament_pla.json"
         },
         {
-            "name": "CoPrint Generic PLA",
-            "sub_path": "filament/CoPrint Generic PLA.json"
+            "name": "Co Print PLA (ChromaSet)",
+            "sub_path": "filament/Co Print PLA (ChromaSet).json"
         },
         {
-            "name": "CoPrint Quadro PLA",
-            "sub_path": "filament/CoPrint Quadro PLA.json"
+            "name": "Co Print PLA (Quadro)",
+            "sub_path": "filament/Co Print PLA (Quadro).json"
         },
         {
-            "name": "CoPrint Generic ABS",
-            "sub_path": "filament/CoPrint Generic ABS.json"
+            "name": "Co Print ABS (ChromaSet)",
+            "sub_path": "filament/Co Print ABS (ChromaSet).json"
         },
         {
-            "name": "CoPrint Generic PETG",
-            "sub_path": "filament/CoPrint Generic PETG.json"
+            "name": "Co Print ABS (Quadro)",
+            "sub_path": "filament/Co Print ABS (Quadro).json"
         },
         {
-            "name": "CoPrint Generic TPU",
-            "sub_path": "filament/CoPrint Generic TPU.json"
+            "name": "Co Print PETG (ChromaSet)",
+            "sub_path": "filament/Co Print PETG (ChromaSet).json"
         },
         {
-            "name": "CoPrint Generic ASA",
-            "sub_path": "filament/CoPrint Generic ASA.json"
+            "name": "Co Print PETG (Quadro)",
+            "sub_path": "filament/Co Print PETG (Quadro).json"
         },
         {
-            "name": "CoPrint Generic PA",
-            "sub_path": "filament/CoPrint Generic PA.json"
+            "name": "Co Print TPU (ChromaSet)",
+            "sub_path": "filament/Co Print TPU (ChromaSet).json"
+        },
+        {
+            "name": "Co Print TPU (Quadro)",
+            "sub_path": "filament/Co Print TPU (Quadro).json"
+        },
+        {
+            "name": "Co Print ASA (ChromaSet)",
+            "sub_path": "filament/Co Print ASA (ChromaSet).json"
+        },
+        {
+            "name": "Co Print ASA (Quadro)",
+            "sub_path": "filament/Co Print ASA (Quadro).json"
         }
     ],
     "machine_list": [

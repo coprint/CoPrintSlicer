@@ -8,5 +8,5 @@
 	"bed_model": "coprint_pei_sheet_buildplate_model.stl",
 	"bed_texture": "coprint_pei_sheet_buildplate_texture.png",
 	"hotend_model": "",
-	"default_materials": "CoPrint Generic PLA"
+	"default_materials": "Co Print PLA (ChromaSet)"
 }
