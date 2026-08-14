@@ -1270,7 +1270,36 @@ bool Sidebar::priv::switch_diameter(bool single)
         return false;
     }
     preset->is_visible = true; // force visible
-    return wxGetApp().get_tab(Preset::TYPE_PRINTER)->select_preset(preset->name);
+
+    // ORCA: nozzle-diameter variants of the same printer are expected to keep the
+    // same filament slot colors/order. Snapshot them before switching printer
+    // presets, since PresetBundle::update_selections() would otherwise overwrite
+    // them with whatever (possibly empty/default) colors were last saved under
+    // the target variant's own preset name.
+    PresetBundle* preset_bundle = wxGetApp().preset_bundle;
+    auto snapshot = [](const ConfigOptionStrings* opt) {
+        return opt ? opt->values : std::vector<std::string>();
+    };
+    std::vector<std::string> prev_colors       = snapshot(preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour"));
+    std::vector<std::string> prev_multi_colors = snapshot(preset_bundle->project_config.option<ConfigOptionStrings>("filament_multi_colour"));
+    std::vector<std::string> prev_color_types  = snapshot(preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour_type"));
+
+    bool switched = wxGetApp().get_tab(Preset::TYPE_PRINTER)->select_preset(preset->name);
+    if (switched && !prev_colors.empty()) {
+        size_t n = preset_bundle->filament_presets.size();
+        prev_colors.resize(n, "#26A69A");
+        prev_multi_colors.resize(n, "#26A69A");
+        prev_color_types.resize(n, "1");
+        preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour")->values       = prev_colors;
+        preset_bundle->project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = prev_multi_colors;
+        preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour_type")->values  = prev_color_types;
+
+        plater->update_filament_colors_in_full_config();
+        plater->sidebar().obj_list()->update_filament_colors();
+        plater->sidebar().update_presets(Preset::TYPE_FILAMENT);
+        preset_bundle->export_selections(*wxGetApp().app_config);
+    }
+    return switched;
 }
 
 bool Sidebar::priv::sync_extruder_list(bool &only_external_material)
