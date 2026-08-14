@@ -484,7 +484,6 @@ struct Sidebar::priv
     // BBS printer config
     StaticBox* m_panel_printer_title = nullptr;
     ScalableButton* m_printer_icon = nullptr;
-    ScalableButton* m_printer_connect = nullptr;
     ScalableButton* m_printer_bbl_sync = nullptr;
     ScalableButton* m_printer_setting = nullptr;
     wxStaticText *  m_text_printer_settings = nullptr;
@@ -574,8 +573,6 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
         vsizer_printer->AddSpacer(FromDIP(SidebarProps::ContentMarginV()));
     }
 
-    //btn_connect_printer->Show(!isBBL);
-    m_printer_connect->Show(!isBBL);
     //btn_sync_printer->Show(isBBL);
     m_printer_bbl_sync->Show(isBBL);
 
@@ -1647,14 +1644,6 @@ Sidebar::Sidebar(Plater *parent)
             //wizard_t->run(ConfigWizard::RR_USER, ConfigWizard::SP_CUSTOM);
             });
 
-        // ORCA use connect button on titlebar
-        p->m_printer_connect = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "monitor_signal_strong");
-        p->m_printer_connect->SetToolTip(_L("Connection"));
-        p->m_printer_connect->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
-            PhysicalPrinterDialog dlg(this->GetParent());
-            dlg.ShowModal();
-        });
-
         // ORCA use sync button on titlebar
         p->m_printer_bbl_sync = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "printer_sync_not");
         p->m_printer_bbl_sync->SetToolTip(_L("Synchronize nozzle information and the number of AMS"));
@@ -1675,7 +1664,6 @@ Sidebar::Sidebar(Plater *parent)
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
         h_sizer_title->Add(p->m_text_printer_settings, 0, wxALIGN_CENTER);
         h_sizer_title->AddStretchSpacer();
-        h_sizer_title->Add(p->m_printer_connect , 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing())); // used larger margin to prevent accidental clicks
         h_sizer_title->Add(p->m_printer_bbl_sync, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing())); // used larger margin to prevent accidental clicks
         h_sizer_title->Add(p->m_printer_setting, 0, wxALIGN_CENTER);
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::TitlebarMargin()));
@@ -2403,17 +2391,11 @@ void Sidebar::update_all_preset_comboboxes()
     auto cfg = preset_bundle.printers.get_edited_preset().config;
 
     if (preset_bundle.use_bbl_network()) {
-        //only show connection button for not-BBL printer
-        //p->btn_connect_printer->Hide();
-        p->m_printer_connect->Hide();
         //only show sync-ams button for BBL printer
         p->m_bpButton_ams_filament->Show();
         //update print button default value for bbl or third-party printer
         p_mainframe->set_print_button_to_default(MainFrame::PrintSelectType::ePrintPlate);
     } else {
-        //p->btn_connect_printer->Show();
-        p->m_printer_connect->Show();
-
         // ORCA: show/hide sync-ams button based on filament sync mode
         auto agent = wxGetApp().getAgent();
         if (agent && agent->get_filament_sync_mode() != FilamentSyncMode::none)
@@ -2860,7 +2842,6 @@ void Sidebar::msw_rescale()
     p->m_panel_filament_title->GetSizer()
         ->SetMinSize(-1, 3 * wxGetApp().em_unit());
     p->m_printer_icon->msw_rescale();
-    p->m_printer_connect->msw_rescale();
     p->m_printer_bbl_sync->msw_rescale();
     p->m_printer_icon->msw_rescale();
     p->m_printer_setting->msw_rescale();
@@ -2968,7 +2949,6 @@ void Sidebar::sys_color_changed()
 #endif
     //p->btn_sync_printer->SetIcon("printer_sync");
     p->m_printer_bbl_sync->msw_rescale();
-    p->m_printer_connect->msw_rescale();
     // for (wxWindow* btn : std::vector<wxWindow*>{ p->btn_reslice, p->btn_export_gcode })
     //    wxGetApp().UpdateDarkUI(btn, true);
     p->m_printer_icon->msw_rescale();
