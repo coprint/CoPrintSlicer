@@ -96,7 +96,8 @@ public:
 private:
     BuildVolume m_build_volume;
     Type m_type{ Type::System };
-    //std::string m_texture_filename;
+    // CoPrint: bed_texture filename from the active printer preset (re-enabled, see render_texture()).
+    std::string m_texture_filename;
     std::string m_model_filename;
     // Print volume bounding box exteded with axes and model.
     BoundingBoxf3 m_extended_bounding_box;
@@ -104,10 +105,11 @@ private:
     // Slightly expanded print bed polygon, for collision detection.
     //Polygon m_polygon;
     GLModel m_triangles;
-    //GLModel m_gridlines;
-    // GLTexture m_texture;
-    // temporary texture shown until the main texture has still no levels compressed
-    //GLTexture m_temp_texture;
+    GLModel m_gridlines;
+    // CoPrint: quad covering the printable area plus any part of the bed model that extends
+    // beyond it (e.g. non-printable handle tabs), textured with m_texture. See update_texture_quad().
+    GLModel m_texture_quad;
+    GLTexture m_texture;
     GLModel m_model;
     Vec3d m_model_offset{ Vec3d::Zero() };
     Axes m_axes;
@@ -143,6 +145,8 @@ public:
     Type get_type() const { return m_type; }
     // Was the model generated procedurally?
     bool is_custom() const { return m_type == Type::Custom; }
+    // CoPrint: true when Bed3D will draw bed_texture itself (PartPlate must not also draw it).
+    bool has_texture() const { return !m_texture_filename.empty(); }
 
     // get the bed shape type
     BuildVolume_Type get_build_volume_type() const { return m_build_volume.type(); }
@@ -168,12 +172,19 @@ private:
     void update_model_offset();
     //BBS: with offset
     void update_bed_triangles();
+    // CoPrint: rebuild the grid reference lines from the current bed shape.
+    void update_gridlines();
+    // CoPrint: draw the grid reference lines (used for bottom view, where the bed model/background is hidden).
+    void render_gridlines(const Transform3d& view_matrix, const Transform3d& projection_matrix);
+    // CoPrint: rebuild the textured quad to cover the printable area + any bed model overhang (tabs).
+    void update_texture_quad();
     static std::tuple<Type, std::string, std::string> detect_type(const Pointfs& shape);
     void render_internal(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor,
         bool show_axes);
     void render_axes();
     void render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom);
-    //void render_texture(bool bottom, GLCanvas3D& canvas);
+    // CoPrint: draw the bed_texture image over the printable area + tab overhang (re-enabled, adapted to current GLModel/GLTexture API).
+    void render_texture(bool bottom, GLCanvas3D& canvas);
     void render_model(const Transform3d& view_matrix, const Transform3d& projection_matrix);
     void render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom);
     void render_default(bool bottom, const Transform3d& view_matrix, const Transform3d& projection_matrix);

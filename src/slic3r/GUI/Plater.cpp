@@ -11106,8 +11106,12 @@ void Plater::priv::set_bed_shape(const Pointfs       &shape,
     Pointfs prev_wrapping_exclude_areas = partplate_list.get_wrapping_exclude_area();
     new_shape |= (height_to_lid != prev_height_lid) || (height_to_rod != prev_height_rod) || (prev_exclude_areas != exclude_areas)
         || (prev_wrapping_exclude_areas != wrapping_exclude_areas);
-    if (!new_shape && partplate_list.get_logo_texture_filename() != custom_texture) {
-        partplate_list.update_logo_texture_filename(custom_texture);
+    // CoPrint: Bed3D::render_texture() already draws bed_texture over the printable area + tabs.
+    // Do not also feed the same file to PartPlate's third-party logo path — that path always
+    // stretches the image onto the printable rectangle only, which duplicates/squeezes the artwork.
+    const std::string plate_texture = bed.has_texture() ? std::string() : custom_texture;
+    if (!new_shape && partplate_list.get_logo_texture_filename() != plate_texture) {
+        partplate_list.update_logo_texture_filename(plate_texture);
     }
     if (new_shape) {
         if (view3D) view3D->bed_shape_changed();
@@ -11120,7 +11124,7 @@ void Plater::priv::set_bed_shape(const Pointfs       &shape,
         double z = config->opt_float("printable_height");
 
         partplate_list.reset_size(max.x() - min.x() - Bed3D::Axes::DefaultTipRadius, max.y() - min.y() - Bed3D::Axes::DefaultTipRadius, z);
-        partplate_list.set_shapes(shape, exclude_areas, wrapping_exclude_areas, extruder_areas, extruder_heights, custom_texture, height_to_lid, height_to_rod);
+        partplate_list.set_shapes(shape, exclude_areas, wrapping_exclude_areas, extruder_areas, extruder_heights, plate_texture, height_to_lid, height_to_rod);
 
         Vec2d new_shape_position = partplate_list.get_current_shape_position();
         if (shape_position != new_shape_position)

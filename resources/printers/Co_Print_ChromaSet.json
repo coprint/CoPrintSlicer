@@ -1,0 +1,8 @@
+{
+	"00.00.00.00": {
+		"display_name": "Co Print ChromaSet",
+		"print": {
+			"printer_thumbnail_image": "printer_thumbnail_chromaset"
+		}
+	}
+}
