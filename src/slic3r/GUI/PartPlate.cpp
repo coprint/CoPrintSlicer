@@ -980,7 +980,18 @@ void PartPlate::render_grid(bool bottom) {
     const Transform3d& view_matrix = camera.get_view_matrix();
     const Transform3d& projection_matrix = camera.get_projection_matrix();
 
-    shader->set_uniform("view_model_matrix", view_matrix);
+    // CoPrint: plate grid geometry sits at GROUND_Z_GRIDLINE (-0.26), below the unselected
+    // fill (-0.03). On the selected plate the PEI texture covers it (intentional). On
+    // unselected plates — and from below, where there is no texture — lift the lines
+    // above the fill and skip the depth test so the grid is actually visible.
+    const bool overlay_grid = !m_selected || bottom;
+    Transform3d grid_view = view_matrix;
+    if (overlay_grid) {
+        glsafe(::glDisable(GL_DEPTH_TEST));
+        grid_view = view_matrix * Eigen::Translation3d(0.0, 0.0, bottom ? -0.08 : 0.08);
+    }
+
+    shader->set_uniform("view_model_matrix", grid_view);
     shader->set_uniform("projection_matrix", projection_matrix);
 
 #if !SLIC3R_OPENGL_ES
@@ -991,12 +1002,8 @@ void PartPlate::render_grid(bool bottom) {
     ColorRGBA color;
 	if (bottom)
         color = LINE_BOTTOM_COLOR;
-	else {
-		if (m_selected)
-            color = m_partplate_list->m_is_dark ? LINE_TOP_SEL_DARK_COLOR : LINE_TOP_SEL_COLOR;
-		else
-            color = m_partplate_list->m_is_dark ? LINE_TOP_DARK_COLOR : LINE_TOP_COLOR;
-	}
+	else
+        color = m_partplate_list && m_partplate_list->m_is_dark ? LINE_TOP_DARK_COLOR : LINE_TOP_COLOR;
     m_gridlines.set_color(color);
     m_gridlines.render();
 
@@ -1013,7 +1020,7 @@ void PartPlate::render_grid(bool bottom) {
     }
     shader->start_using();
 
-    shader->set_uniform("view_model_matrix", view_matrix);
+    shader->set_uniform("view_model_matrix", grid_view);
     shader->set_uniform("projection_matrix", projection_matrix);
 
 #if !SLIC3R_OPENGL_ES
@@ -1031,6 +1038,9 @@ void PartPlate::render_grid(bool bottom) {
     m_gridlines_bolder.render();
 
     shader->stop_using();
+
+    if (overlay_grid)
+        glsafe(::glEnable(GL_DEPTH_TEST));
 }
 
 void PartPlate::render_height_limit(PartPlate::HeightLimitMode mode)
@@ -3383,7 +3393,11 @@ void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projec
         shader->stop_using();
     }
 
-    if (wxGetApp().show_plate_gridlines() && show_grid)
+    // CoPrint: the selected plate already has a grid baked into the PEI texture when viewed
+    // from above — do not overlay PartPlate gridlines there. Unselected plates have no
+    // texture, and the bottom view hides the texture, so draw a reference grid in those cases.
+    const bool draw_grid = show_grid && (!m_selected || bottom);
+    if (draw_grid)
         render_grid(bottom);
 
     if (!bottom && m_selected && !force_background_color) {

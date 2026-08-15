@@ -7,6 +7,7 @@
 	"from": "system",
 	"setting_id": "CoPrintQuadro02Optimal008",
 	"instantiation": "true",
+	"skirt_loops": "0",
 	"default_acceleration": [
 		"6000"
 	],

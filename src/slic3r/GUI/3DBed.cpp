@@ -635,7 +635,11 @@ void Bed3D::update_gridlines()
     if (m_gridlines.is_initialized() || m_bed_shape.size() < 3)
         return;
 
-    const ExPolygon poly{ Polygon::new_scale(m_bed_shape) };
+    std::vector<Vec2d> world_shape;
+    world_shape.reserve(m_bed_shape.size());
+    for (const Vec2d& p : m_bed_shape)
+        world_shape.emplace_back(p + m_position);
+    const ExPolygon poly{ Polygon::new_scale(world_shape) };
     const BoundingBox bed_bbox = poly.contour.bounding_box();
 
     Polylines axes_lines;
@@ -678,11 +682,13 @@ void Bed3D::update_texture_quad()
         return;
 
     // start from the raw printable area extents (no axes/tip-radius padding, unlike m_printable_bounding_box)
-    Vec2d min = m_bed_shape.front();
+    // Offset by m_position so the texture follows the currently selected part plate.
+    Vec2d min = m_bed_shape.front() + m_position;
     Vec2d max = min;
     for (const Vec2d& p : m_bed_shape) {
-        min = min.cwiseMin(p).eval();
-        max = max.cwiseMax(p).eval();
+        const Vec2d world = p + m_position;
+        min = min.cwiseMin(world).eval();
+        max = max.cwiseMax(world).eval();
     }
 
     // Quadro PEI PNG is 4096x4418: 134px back tab, 4096px square body, 188px front tab.

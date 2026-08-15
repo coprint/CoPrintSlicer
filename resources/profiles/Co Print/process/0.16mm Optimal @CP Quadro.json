@@ -7,6 +7,7 @@
 	"from": "system",
 	"setting_id": "CoPrintQuadroOptimal01604",
 	"instantiation": "true",
+	"skirt_loops": "0",
 	"bottom_shell_layers": "4",
 	"bottom_color_penetration_layers": "4",
 	"bridge_flow": "1",
