@@ -157,6 +157,7 @@
 #include "PhysicalPrinterDialog.hpp"
 #include "PrintHostDialogs.hpp"
 #include "PlateSettingsDialog.hpp"
+#include "SelectCoPrintPrinterDialog.hpp"
 #include "DailyTips.hpp"
 #include "CreatePresetsDialog.hpp"
 #include "FileArchiveDialog.hpp"
@@ -5949,6 +5950,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 DynamicPrintConfig config;
                 Semver             file_version;
                 En3mfType          en_3mf_file_type = En3mfType::From_BBS;
+                std::string        coprint_target_printer;
                 {
                     DynamicPrintConfig config_loaded;
 
@@ -6320,7 +6322,44 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             if (wipe_tower_y_opt)
                                 file_wipe_tower_y = *wipe_tower_y_opt;
 
-                            preset_bundle->load_config_model(filename.string(), std::move(config), file_version);
+                            {
+                                const bool is_restore = strategy & LoadStrategy::Restore;
+                                std::string last_used;
+                                {
+                                    const Preset &current = preset_bundle->printers.get_selected_preset();
+                                    if (PresetBundle::config_uses_coprint_printer(current.config) ||
+                                        boost::algorithm::icontains(current.name, "Co Print"))
+                                        last_used = current.name;
+                                }
+                                if (last_used.empty()) {
+                                    const std::string from_app = wxGetApp().app_config->get("presets", PRESET_PRINTER_NAME);
+                                    if (const Preset *stored = preset_bundle->printers.find_preset(from_app, false);
+                                        stored != nullptr && (PresetBundle::config_uses_coprint_printer(stored->config) ||
+                                                              boost::algorithm::icontains(stored->name, "Co Print")))
+                                        last_used = stored->name;
+                                    else if (boost::algorithm::icontains(from_app, "Co Print"))
+                                        last_used = from_app;
+                                }
+
+                                if (PresetBundle::config_uses_coprint_printer(config)) {
+                                    coprint_target_printer = preset_bundle->coprint_printer_preset_from_config(config);
+                                } else if (is_restore) {
+                                    coprint_target_printer = last_used;
+                                } else {
+                                    SelectCoPrintPrinterDialog dlg(q, last_used);
+                                    if (dlg.ShowModal() != wxID_OK) {
+                                        q->skip_thumbnail_invalid = false;
+                                        return empty_result;
+                                    }
+                                    coprint_target_printer = dlg.selected_preset_name();
+                                    if (coprint_target_printer.empty()) {
+                                        q->skip_thumbnail_invalid = false;
+                                        return empty_result;
+                                    }
+                                }
+                            }
+
+                            preset_bundle->load_config_model(filename.string(), std::move(config), file_version, coprint_target_printer);
 
                             ConfigOption* bed_type_opt = preset_bundle->project_config.option("curr_bed_type");
                             if (bed_type_opt != nullptr) {
@@ -6391,8 +6430,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             // currently found only needs re-active here
                             wxGetApp().load_current_presets(false, false);
                             // CoPrint: load_current_presets can rebind UI around foreign project presets —
-                            // enforce again so Bambu printer/filaments never stick, then refresh UI.
-                            preset_bundle->enforce_coprint_identity();
+                            // enforce again with the chosen/restore/native target so Bambu never sticks.
+                            preset_bundle->enforce_coprint_identity(coprint_target_printer);
                             wxGetApp().load_current_presets(false, false);
                             // Update filament colors for the MM-printer profile in the full config
                             // to avoid black (default) colors for Extruders in the ObjectList,

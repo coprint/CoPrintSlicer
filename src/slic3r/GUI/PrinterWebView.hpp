@@ -6,6 +6,7 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <functional>
 
 #include <wx/panel.h>
 #include <wx/gdicmn.h>
@@ -93,7 +94,7 @@ public:
     void sync_model_colors_from_plater();
 
     /** Starts a background Moonraker filament_selections fetch; updates tool colour cache on the UI thread. */
-    void sync_loaded_tool_filaments(MachineObject *obj);
+    void sync_loaded_tool_filaments(MachineObject *obj, std::function<void()> on_done = {});
 
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
     bool get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const;

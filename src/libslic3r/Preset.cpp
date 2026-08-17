@@ -1919,19 +1919,28 @@ void PresetCollection::load_project_embedded_presets(std::vector<Preset*>& proje
     lock();
     for (it = project_presets.begin(); it != project_presets.end(); it++) {
         Preset* preset = *it;
+        if (preset == nullptr)
+            continue;
         if (preset->type != Preset::get_type_from_string(type)) continue;
         if (!preset->is_project_embedded) continue;
         std::string name = preset->name;
         // CoPrintSlicer: never install foreign (BBL/etc.) project-embedded presets.
         // Geometry/colours still load; identity is remapped onto Co Print system presets.
+        // Keys like printer_model / filament_vendor are type-specific — missing options must
+        // not be read with opt_string(), which dereferences a null ConfigOption.
         {
             const bool is_coprint_name =
                 boost::algorithm::icontains(name, "Co Print") ||
                 boost::algorithm::istarts_with(name, "CoPrint ") ||
                 name.find("@CP ") != std::string::npos ||
                 name.find("@CP") != std::string::npos;
-            const std::string model  = preset->config.opt_string("printer_model");
-            const std::string vendor = preset->config.opt_string("filament_vendor", 0u);
+            std::string model;
+            if (const auto *opt = preset->config.option<ConfigOptionString>("printer_model"))
+                model = opt->value;
+            std::string vendor;
+            if (const auto *opt = preset->config.option<ConfigOptionStrings>("filament_vendor");
+                opt != nullptr && !opt->values.empty())
+                vendor = opt->values.front();
             const bool is_coprint_meta =
                 boost::algorithm::istarts_with(model, "Co Print") ||
                 boost::algorithm::iequals(vendor, "Co Print") ||

@@ -450,6 +450,7 @@ set(SLIC3R_GUI_SOURCES
     GUI/RemovableDriveManager.hpp
     GUI/SavePresetDialog.cpp
     GUI/SavePresetDialog.hpp
+    GUI/SelectCoPrintPrinterDialog.hpp
     GUI/SceneRaycaster.cpp
     GUI/SceneRaycaster.hpp
     GUI/PartSkipCommon.hpp

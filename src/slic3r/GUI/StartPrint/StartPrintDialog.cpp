@@ -4,6 +4,7 @@
 #include "../GUI_App.hpp"
 #include "../I18N.hpp"
 #include "../MainFrame.hpp"
+#include "../MsgDialog.hpp"
 #include "../PrinterWebView.hpp"
 #include "../PartPlate.hpp"
 #include "../Plater.hpp"
@@ -13,18 +14,29 @@
 #include "../DeviceDashboard/DeviceUiStyle.hpp"
 #include "../DeviceDashboard/FilamentTrackSlot.hpp"
 #include "../wxExtensions.hpp"
+#include "../Widgets/PopupWindow.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/Preset.hpp"
 #include "libslic3r/Utils.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
 
 #include <algorithm>
+#include <cstring>
+#include <limits>
+#include <map>
+#include <memory>
+#include <set>
 #include <thread>
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
+#include <wx/graphics.h>
 #include <wx/popupwin.h>
 #include <wx/statbmp.h>
+#include <wx/timer.h>
+#include <wx/utils.h>
+#include <wx/weakref.h>
 
 #include <boost/filesystem.hpp>
 #include <nlohmann/json.hpp>
@@ -36,9 +48,17 @@ namespace Slic3r { namespace GUI {
 namespace {
 
 using Ui = DeviceDashboard::DeviceUiStyle;
+using DeviceDashboard::FilamentTrackCenter;
 using DeviceDashboard::FilamentTrackSlot;
 
 constexpr int kRefreshIntervalMs = 2000;
+const wxColour kPageBackground(255, 255, 255);
+const wxColour kCardBackground(255, 255, 255);
+const wxColour kControlBackground(255, 255, 255);
+const wxColour kCardBorder(224, 224, 224);
+const wxColour kTextPrimary(26, 26, 26);
+const wxColour kTextMuted(107, 114, 128);
+const wxColour kDisconnectedToolFill(0x93, 0x93, 0x93);
 
 MachineObject *find_machine_by_id(Slic3r::DeviceManager *dev_manager, const std::string &dev_id)
 {
@@ -122,18 +142,14 @@ void send_tool_map_sync(MachineObject *obj, int model_slot_index, int physical_t
         .perform_sync();
 }
 
-std::vector<FilamentInfo> filament_rows_for_plate(PartPlate *plate)
+std::vector<FilamentInfo> filament_rows_from_project()
 {
-    if (plate != nullptr && !plate->get_slice_filaments_info().empty())
-        return plate->get_slice_filaments_info();
-
     std::vector<FilamentInfo> rows;
     auto *preset_bundle = wxGetApp().preset_bundle;
     if (preset_bundle == nullptr)
         return rows;
 
     const auto *color_opt = preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour");
-    // Store full_config to prevent dangling pointer (full_config() returns temporary by value)
     const DynamicPrintConfig full_config = preset_bundle->full_config();
     const auto *type_opt = full_config.option<ConfigOptionStrings>("filament_type");
     if (color_opt == nullptr)
@@ -154,15 +170,64 @@ std::vector<FilamentInfo> filament_rows_for_plate(PartPlate *plate)
     return rows;
 }
 
-/** tray_id is 0-based physical tool index; UI shows T1..T4 (1-based). */
-int physical_tool_for_filament(int model_slot, const FilamentInfo &info)
+std::set<int> used_model_slots_0based(PartPlate *plate)
 {
-    const int slot = std::clamp(model_slot, 0, 3);
-    if (info.mapping_result != MAPPING_RESULT_DEFAULT && info.tray_id >= 0 && info.tray_id <= 3)
-        return info.tray_id + 1;
-    if (info.tray_id >= 0 && info.tray_id <= 3 && info.tray_id == info.id)
-        return info.tray_id + 1;
-    return slot + 1;
+    std::set<int> ids;
+    if (plate == nullptr)
+        return ids;
+
+    std::vector<int> used = plate->get_used_filaments();
+    if (used.empty())
+        used = plate->get_extruders_without_support();
+    if (used.empty())
+        used = plate->get_extruders(true);
+
+    for (int id_1based : used) {
+        const int id_0based = id_1based - 1;
+        if (id_0based >= 0 && id_0based < 4)
+            ids.insert(id_0based);
+    }
+    return ids;
+}
+
+std::vector<FilamentInfo> filament_rows_for_plate(PartPlate *plate)
+{
+    std::vector<FilamentInfo> source;
+    if (plate != nullptr && !plate->get_slice_filaments_info().empty())
+        source = plate->get_slice_filaments_info();
+    else
+        source = filament_rows_from_project();
+
+    const std::set<int> used = used_model_slots_0based(plate);
+    if (used.empty()) {
+        if (plate != nullptr && !plate->get_slice_filaments_info().empty())
+            return plate->get_slice_filaments_info();
+        return {};
+    }
+
+    std::map<int, FilamentInfo> by_id;
+    for (const FilamentInfo &info : source)
+        by_id[info.id] = info;
+    if (source.empty() || by_id.size() < used.size()) {
+        for (const FilamentInfo &info : filament_rows_from_project())
+            if (!by_id.count(info.id))
+                by_id[info.id] = info;
+    }
+
+    std::vector<FilamentInfo> rows;
+    rows.reserve(used.size());
+    for (int id : used) {
+        auto it = by_id.find(id);
+        if (it != by_id.end()) {
+            rows.push_back(it->second);
+            continue;
+        }
+        FilamentInfo info;
+        info.id = id;
+        info.type = "PLA";
+        rows.push_back(std::move(info));
+    }
+    return rows;
 }
 
 wxImage thumbnail_data_to_wximage(const ThumbnailData &data)
@@ -242,42 +307,133 @@ wxColour readable_on_fill(const wxColour &fill)
     return is_dark_fill(fill) ? *wxWHITE : wxColour(35, 39, 46);
 }
 
+wxString filament_type_key(wxString raw)
+{
+    raw.Trim(true).Trim(false);
+    raw.MakeUpper();
+    if (raw.StartsWith("SUP."))
+        raw = raw.Mid(4);
+    if (raw.StartsWith("GENERIC "))
+        raw = raw.Mid(8);
+    if (raw.EndsWith("-S"))
+        raw.RemoveLast(2);
+    return raw;
+}
+
+bool filament_types_match(const wxString &a, const wxString &b)
+{
+    const wxString ka = filament_type_key(a);
+    const wxString kb = filament_type_key(b);
+    return !ka.empty() && ka == kb;
+}
+
+int colour_distance_sq(const wxColour &a, const wxColour &b)
+{
+    const int dr = a.Red() - b.Red();
+    const int dg = a.Green() - b.Green();
+    const int db = a.Blue() - b.Blue();
+    return dr * dr + dg * dg + db * db;
+}
+
 class RoundedColorBlock : public wxPanel
 {
 public:
-    explicit RoundedColorBlock(wxWindow *parent)
+    enum class Corners { Top, Bottom };
+
+    RoundedColorBlock(wxWindow *parent, Corners corners)
         : wxPanel(parent, wxID_ANY)
+        , m_corners(corners)
     {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
-        SetBackgroundColour(Ui::card_background());
+        SetBackgroundColour(kCardBackground);
         Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
             wxAutoBufferedPaintDC dc(this);
-            dc.SetBackground(wxBrush(Ui::card_background()));
+            dc.SetBackground(wxBrush(GetBackgroundColour()));
             dc.Clear();
 
-            wxGCDC gc(dc);
             const wxSize size = GetClientSize();
             if (size.x <= 0 || size.y <= 0)
                 return;
 
-            gc.SetPen(*wxTRANSPARENT_PEN);
-            gc.SetBrush(wxBrush(m_fill));
-            gc.DrawRoundedRectangle(0, 0, size.x, size.y, FromDIP(8));
+            std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+            if (!gc)
+                return;
+
+            gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
+            const double inset = 0.5;
+            const double x = inset;
+            const double y = inset;
+            const double w = size.x - 1.0;
+            const double h = size.y - 1.0;
+            const double r = std::min(static_cast<double>(FromDIP(7)), std::min(w, h) / 2.0);
+            const bool   top = m_corners == Corners::Top;
+
+            wxGraphicsPath path = gc->CreatePath();
+            if (top) {
+                path.MoveToPoint(x + r, y);
+                path.AddLineToPoint(x + w - r, y);
+                path.AddArcToPoint(x + w, y, x + w, y + r, r);
+                path.AddLineToPoint(x + w, y + h);
+                path.AddLineToPoint(x, y + h);
+                path.AddLineToPoint(x, y + r);
+                path.AddArcToPoint(x, y, x + r, y, r);
+            } else {
+                path.MoveToPoint(x, y);
+                path.AddLineToPoint(x + w, y);
+                path.AddLineToPoint(x + w, y + h - r);
+                path.AddArcToPoint(x + w, y + h, x + w - r, y + h, r);
+                path.AddLineToPoint(x + r, y + h);
+                path.AddArcToPoint(x, y + h, x, y + h - r, r);
+                path.AddLineToPoint(x, y);
+            }
+            path.CloseSubpath();
+            gc->SetBrush(wxBrush(m_fill));
+            gc->SetPen(wxPen(wxColour(0xDF, 0xDF, 0xDF), 1));
+            gc->FillPath(path);
+            gc->StrokePath(path);
+
+            if (!m_text.empty()) {
+                wxFont font = GetFont();
+                font.SetPointSize(9);
+                font.SetWeight(wxFONTWEIGHT_BOLD);
+                gc->SetFont(font, readable_on_fill(m_fill));
+                double tw = 0.0;
+                double th = 0.0;
+                gc->GetTextExtent(m_text, &tw, &th);
+                gc->DrawText(m_text,
+                    std::max(0.0, (size.x - tw) / 2.0),
+                    std::max(0.0, (size.y - th) / 2.0));
+            }
         });
     }
 
     void set_fill(const wxColour &fill)
     {
-        m_fill = fill.IsOk() ? fill : Ui::control_background();
+        m_fill = fill.IsOk() ? fill : kControlBackground;
+        Refresh();
+    }
+
+    void set_text(const wxString &text)
+    {
+        m_text = text;
+        Refresh();
+    }
+
+    void set_content(const wxColour &fill, const wxString &text)
+    {
+        m_fill = fill.IsOk() ? fill : kControlBackground;
+        m_text = text;
         Refresh();
     }
 
 private:
-    wxColour m_fill{Ui::control_background()};
+    Corners  m_corners{Corners::Top};
+    wxColour m_fill{kControlBackground};
+    wxString m_text;
 };
 
 struct PrinterToolInfo {
-    wxColour  color{Ui::control_background()};
+    wxColour  color{kControlBackground};
     wxString  material;
     bool      has_filament{false};
 };
@@ -354,11 +510,24 @@ static void sync_printer_tool_colours(MachineObject *obj)
     }
 }
 
+bool printer_view_has_loaded_filaments()
+{
+    MainFrame *frame = wxGetApp().mainframe;
+    if (frame == nullptr || frame->m_printer_view == nullptr)
+        return false;
+    for (int i = 0; i < 4; ++i) {
+        wxColour cached;
+        if (frame->m_printer_view->get_loaded_tool_filament(i, &cached, nullptr) && cached.IsOk())
+            return true;
+    }
+    return false;
+}
+
 void style_primary_text(wxStaticText *label, bool bold = false)
 {
     if (label == nullptr)
         return;
-    label->SetForegroundColour(Ui::text_primary());
+    label->SetForegroundColour(kTextPrimary);
     if (bold) {
         wxFont font = label->GetFont();
         font.SetWeight(wxFONTWEIGHT_BOLD);
@@ -369,7 +538,7 @@ void style_primary_text(wxStaticText *label, bool bold = false)
 void style_muted_text(wxStaticText *label)
 {
     if (label != nullptr)
-        label->SetForegroundColour(Ui::text_muted());
+        label->SetForegroundColour(kTextMuted);
 }
 
 StaticBox *make_card(wxWindow *parent, const wxColour &bg, int radius_dip = -1)
@@ -378,94 +547,169 @@ StaticBox *make_card(wxWindow *parent, const wxColour &bg, int radius_dip = -1)
     const int radius = radius_dip < 0 ? Ui::card_radius() : radius_dip;
     card->SetCornerRadius(parent->FromDIP(radius));
     card->SetBorderWidth(Ui::card_border_width());
-    card->SetBorderColorNormal(Ui::card_border());
+    card->SetBorderColorNormal(kCardBorder);
     card->SetBackgroundColorNormal(bg);
     card->SetBackgroundColour(bg);
     return card;
 }
 
-wxPanel *make_mini_tool_pick_track(wxWindow *parent, int tool_1based, const PrinterToolInfo &info,
-    int cell_h_dip, int track_w_dip, std::function<void()> on_pick)
+FilamentTrackSlot *make_mini_tool_pick_track(wxWindow *parent, int tool_1based, const PrinterToolInfo &info,
+    int cell_h_dip, int track_w_dip, const wxString &required_type, bool selected, std::function<void()> on_pick)
 {
     const int cell_h  = parent->FromDIP(cell_h_dip);
     const int track_w = parent->FromDIP(track_w_dip);
 
     const bool filled = info.has_filament && info.color.IsOk();
-    auto *track = new FilamentTrackSlot(parent, tool_1based, info.color, filled);
+    const bool type_ok = filled && (required_type.empty() || filament_types_match(required_type, info.material));
+    const auto center = filled ? FilamentTrackCenter::ToolNumber : FilamentTrackCenter::SlashSign;
+    const wxString label = filled ? info.material : wxString();
+    auto *track = new FilamentTrackSlot(parent, tool_1based, info.color, filled, center, label);
+    track->SetBackgroundColour(parent->GetBackgroundColour());
     track->SetMinSize(wxSize(track_w, cell_h));
     track->SetMaxSize(wxSize(track_w, cell_h));
+    track->SetCursor(wxCursor(type_ok ? wxCURSOR_HAND : wxCURSOR_ARROW));
+    track->set_selected(selected);
+    if (filled)
+        track->enable_hover(true);
 
-    const auto pick = [on_pick](wxMouseEvent &event) {
-        event.Skip(false);
-        on_pick();
-    };
-    track->Bind(wxEVT_LEFT_DOWN, pick);
+    if (type_ok) {
+        const auto pick = [on_pick](wxMouseEvent &event) {
+            event.Skip(false);
+            on_pick();
+        };
+        track->Bind(wxEVT_LEFT_DOWN, pick);
+    }
 
     return track;
 }
 
-class StartPrintToolPickerPopup : public wxPopupTransientWindow
+class StartPrintToolPickerPopup : public PopupWindow
 {
 public:
     using PickHandler = std::function<void(int tool_1based)>;
 
-    StartPrintToolPickerPopup(wxWindow *parent, MachineObject *obj, PickHandler on_pick)
-        : wxPopupTransientWindow(parent, wxBORDER_NONE | wxPU_CONTAINS_CONTROLS)
+    StartPrintToolPickerPopup(wxWindow *parent, MachineObject *obj, const wxString &required_type,
+        int current_tool, PickHandler on_pick)
+        : PopupWindow(parent, wxBORDER_NONE | wxPU_CONTAINS_CONTROLS)
         , m_on_pick(std::move(on_pick))
     {
-        SetBackgroundColour(Ui::page_background());
+        SetBackgroundColour(kPageBackground);
 
-        const int pad         = FromDIP(12);
-        const int gap         = FromDIP(10);
-        const int track_w_dip = 64;
-        const int cell_h_dip  = 80;
+        const int outer_pad   = FromDIP(8);
+        const int inner_pad   = FromDIP(14);
+        const int min_gap     = FromDIP(16);
+        const int track_w_dip = 50;
+        const int cell_h_dip  = 60;
 
         auto *outer = new wxBoxSizer(wxVERTICAL);
-        auto *frame = make_card(this, Ui::card_background(), 8);
-        outer->Add(frame, 0, wxEXPAND | wxALL, pad);
+        auto *frame = make_card(this, kCardBackground, 8);
+        outer->Add(frame, 0, wxEXPAND | wxALL, outer_pad);
 
-        auto *grid = new wxFlexGridSizer(2, gap, gap);
-        const std::array<int, 4> tool_order{{0, 2, 1, 3}};
-        for (const int tool_0based : tool_order) {
+        auto *row = new wxBoxSizer(wxHORIZONTAL);
+        for (int tool_0based = 0; tool_0based < 4; ++tool_0based) {
             const int tool = tool_0based + 1;
             const PrinterToolInfo tool_info = query_printer_tool(obj, tool_0based);
-            auto *track = make_mini_tool_pick_track(frame, tool, tool_info, cell_h_dip, track_w_dip,
+            auto *track = make_mini_tool_pick_track(frame, tool, tool_info, cell_h_dip, track_w_dip, required_type,
+                tool == current_tool,
                 [this, tool]() {
                     if (m_on_pick)
                         m_on_pick(tool);
                     Dismiss();
                 });
-            grid->Add(track);
+            m_tracks.push_back(track);
+            if (tool_0based > 0) {
+                row->AddSpacer(min_gap);
+                row->AddStretchSpacer(1);
+            }
+            row->Add(track, 0, wxALIGN_CENTER_VERTICAL);
         }
 
+        auto *hint = new wxStaticText(frame, wxID_ANY, _L("Only the same filament can be selected"),
+            wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER | wxST_NO_AUTORESIZE);
+        hint->SetForegroundColour(Ui::danger());
+        hint->SetFont(::Label::Body_14);
+
         auto *frame_sizer = new wxBoxSizer(wxVERTICAL);
-        frame_sizer->Add(grid, 0, wxALL, pad);
+        frame_sizer->Add(row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, inner_pad);
+        frame_sizer->Add(hint, 0, wxALIGN_CENTER | wxALL, inner_pad);
         frame->SetSizer(frame_sizer);
         SetSizerAndFit(outer);
+
+        m_hover_timer.SetOwner(this);
+        Bind(wxEVT_TIMER, [this](wxTimerEvent &) {
+            if (IsShown())
+                sync_track_hover();
+        });
+    }
+
+    ~StartPrintToolPickerPopup() override { m_hover_timer.Stop(); }
+
+    void Popup(wxWindow *focus = nullptr) override
+    {
+        PopupWindow::Popup(focus);
+        m_hover_timer.Start(16);
+        CallAfter([this] {
+            if (IsShown())
+                sync_track_hover();
+        });
+    }
+
+    void OnDismiss() override
+    {
+        m_hover_timer.Stop();
+        PopupWindow::OnDismiss();
     }
 
 private:
+    void sync_track_hover()
+    {
+        const wxPoint screen = wxGetMousePosition();
+        for (FilamentTrackSlot *track : m_tracks) {
+            if (track == nullptr)
+                continue;
+            const wxRect rect(track->ClientToScreen(wxPoint(0, 0)), track->GetSize());
+            track->set_hovered(rect.Contains(screen));
+        }
+    }
+
     PickHandler m_on_pick;
+    std::vector<FilamentTrackSlot *> m_tracks;
+    wxTimer m_hover_timer;
 };
 
 void apply_dark_combo(ComboBox *combo)
 {
     if (combo == nullptr)
         return;
-    const wxColour bg       = Ui::control_background();
-    const wxColour bg_hover = wxColour(52, 56, 62);
+    const wxColour bg       = kControlBackground;
+    const wxColour bg_hover = wxColour(245, 245, 245);
     combo->SetCornerRadius(combo->FromDIP(6));
     combo->SetBorderColor(StateColor(
-        std::make_pair(Ui::card_border(), (int) StateColor::Disabled),
+        std::make_pair(kCardBorder, (int) StateColor::Disabled),
         std::make_pair(Ui::accent(), (int) StateColor::Hovered),
-        std::make_pair(Ui::card_border(), (int) StateColor::Normal)));
+        std::make_pair(kCardBorder, (int) StateColor::Normal)));
     combo->SetBackgroundColor(StateColor(
-        std::make_pair(wxColour(35, 38, 44), (int) StateColor::Disabled),
+        std::make_pair(wxColour(240, 240, 240), (int) StateColor::Disabled),
         std::make_pair(bg_hover, (int) StateColor::Focused),
         std::make_pair(bg, (int) StateColor::Normal)));
     combo->SetLabelColor(StateColor(
-        std::make_pair(Ui::text_muted(), (int) StateColor::Disabled),
-        std::make_pair(Ui::text_primary(), (int) StateColor::Normal)));
+        std::make_pair(kTextMuted, (int) StateColor::Disabled),
+        std::make_pair(kTextPrimary, (int) StateColor::Normal)));
+
+    DropDown &drop = combo->GetDropDown();
+    drop.SetApplyDarkMode(false);
+    drop.SetBackgroundColour(bg);
+    drop.SetBorderColor(StateColor(
+        std::make_pair(kCardBorder, (int) StateColor::Normal)));
+    drop.SetTextColor(StateColor(
+        std::make_pair(kTextMuted, (int) StateColor::Disabled),
+        std::make_pair(kTextPrimary, (int) StateColor::Normal)));
+    drop.SetSelectorBackgroundColor(StateColor(
+        std::make_pair(wxColour(232, 244, 255), (int) StateColor::Checked),
+        std::make_pair(bg, (int) StateColor::Normal)));
+    drop.SetSelectorBorderColor(StateColor(
+        std::make_pair(Ui::accent(), (int) StateColor::Hovered),
+        std::make_pair(bg, (int) StateColor::Normal)));
 }
 
 void apply_dark_secondary_button(Button *btn)
@@ -474,19 +718,19 @@ void apply_dark_secondary_button(Button *btn)
         return;
     btn->SetStyle(ButtonStyle::Regular, ButtonType::Expanded);
     btn->SetCornerRadius(btn->FromDIP(10));
-    btn->SetBackgroundColour(Ui::page_background());
-    const wxColour bg = Ui::control_background();
+    btn->SetBackgroundColour(kPageBackground);
+    const wxColour bg = kControlBackground;
     btn->SetBackgroundColor(StateColor(
-        std::make_pair(wxColour(35, 38, 44), (int) StateColor::Disabled),
-        std::make_pair(wxColour(52, 56, 62), (int) StateColor::Pressed),
-        std::make_pair(wxColour(52, 56, 62), (int) StateColor::Hovered),
+        std::make_pair(wxColour(240, 240, 240), (int) StateColor::Disabled),
+        std::make_pair(wxColour(245, 245, 245), (int) StateColor::Pressed),
+        std::make_pair(wxColour(245, 245, 245), (int) StateColor::Hovered),
         std::make_pair(bg, (int) StateColor::Normal)));
     btn->SetBorderColor(StateColor(
-        std::make_pair(Ui::card_border(), (int) StateColor::Disabled),
-        std::make_pair(Ui::card_border(), (int) StateColor::Normal)));
+        std::make_pair(kCardBorder, (int) StateColor::Disabled),
+        std::make_pair(kCardBorder, (int) StateColor::Normal)));
     btn->SetTextColor(StateColor(
-        std::make_pair(Ui::text_muted(), (int) StateColor::Disabled),
-        std::make_pair(Ui::text_primary(), (int) StateColor::Normal)));
+        std::make_pair(kTextMuted, (int) StateColor::Disabled),
+        std::make_pair(kTextPrimary, (int) StateColor::Normal)));
 }
 
 void apply_dark_primary_button(Button *btn)
@@ -495,18 +739,18 @@ void apply_dark_primary_button(Button *btn)
         return;
     btn->SetStyle(ButtonStyle::Confirm, ButtonType::Expanded);
     btn->SetCornerRadius(btn->FromDIP(10));
-    btn->SetBackgroundColour(Ui::page_background());
+    btn->SetBackgroundColour(kPageBackground);
     const wxColour accent = Ui::accent();
     btn->SetBackgroundColor(StateColor(
-        std::make_pair(wxColour(35, 38, 44), (int) StateColor::Disabled),
+        std::make_pair(wxColour(240, 240, 240), (int) StateColor::Disabled),
         std::make_pair(wxColour(36, 150, 104), (int) StateColor::Pressed),
         std::make_pair(wxColour(52, 196, 140), (int) StateColor::Hovered),
         std::make_pair(accent, (int) StateColor::Normal)));
     btn->SetBorderColor(StateColor(
-        std::make_pair(Ui::card_border(), (int) StateColor::Disabled),
+        std::make_pair(kCardBorder, (int) StateColor::Disabled),
         std::make_pair(accent, (int) StateColor::Normal)));
     btn->SetTextColor(StateColor(
-        std::make_pair(Ui::text_muted(), (int) StateColor::Disabled),
+        std::make_pair(kTextMuted, (int) StateColor::Disabled),
         std::make_pair(*wxWHITE, (int) StateColor::Normal)));
 }
 
@@ -527,10 +771,10 @@ wxBoxSizer *make_info_row(wxWindow *parent, const wxString &label, wxStaticText 
 wxPanel *make_option_row(wxWindow *parent, const wxString &label_text, CheckBox *&checkbox)
 {
     auto *row = new wxPanel(parent, wxID_ANY);
-    row->SetBackgroundColour(Ui::card_background());
+    row->SetBackgroundColour(kCardBackground);
     auto *sizer = new wxBoxSizer(wxHORIZONTAL);
     checkbox = new CheckBox(row);
-    checkbox->SetBackgroundColour(Ui::card_background());
+    checkbox->SetBackgroundColour(kCardBackground);
     auto *label = new wxStaticText(row, wxID_ANY, label_text);
     style_primary_text(label);
     sizer->Add(checkbox, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(6));
@@ -541,110 +785,114 @@ wxPanel *make_option_row(wxWindow *parent, const wxString &label_text, CheckBox 
 
 } // namespace
 
+class PrinterToolSwatch : public wxPanel
+{
+public:
+    explicit PrinterToolSwatch(wxWindow *parent)
+        : wxPanel(parent, wxID_ANY)
+    {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetBackgroundColour(parent->GetBackgroundColour());
+        Bind(wxEVT_PAINT, &PrinterToolSwatch::on_paint, this);
+    }
+
+    void set_tool(const wxColour &color, bool has_filament)
+    {
+        m_color        = color;
+        m_has_filament = has_filament && color.IsOk();
+        Refresh();
+    }
+
+private:
+    void on_paint(wxPaintEvent &)
+    {
+        wxAutoBufferedPaintDC dc(this);
+        dc.SetBackground(wxBrush(GetBackgroundColour()));
+        dc.Clear();
+
+        const wxSize size = GetClientSize();
+        if (size.x <= 0 || size.y <= 0)
+            return;
+
+        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+        if (!gc)
+            return;
+
+        gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
+        const double inset = 0.5;
+        const double x = inset;
+        const double y = inset;
+        const double w = size.x - 1.0;
+        const double h = size.y - 1.0;
+        const double r = std::min(static_cast<double>(FromDIP(4)), std::min(w, h) / 2.0);
+
+        const wxColour fill = m_has_filament ? m_color : *wxWHITE;
+        gc->SetBrush(wxBrush(fill));
+        gc->SetPen(wxPen(wxColour(0xDF, 0xDF, 0xDF), 1));
+        gc->DrawRoundedRectangle(x, y, w, h, r);
+
+        if (!m_has_filament) {
+            wxFont font = GetFont();
+            font.SetPointSize(8);
+            font.SetWeight(wxFONTWEIGHT_BOLD);
+            gc->SetFont(font, wxColour(130, 134, 140));
+            double tw = 0.0;
+            double th = 0.0;
+            const wxString slash("/");
+            gc->GetTextExtent(slash, &tw, &th);
+            gc->DrawText(slash,
+                std::max(0.0, (size.x - tw) / 2.0),
+                std::max(0.0, (size.y - th) / 2.0));
+        }
+    }
+
+    wxColour m_color;
+    bool     m_has_filament{false};
+};
+
 StartPrintFilamentSlot::StartPrintFilamentSlot(wxWindow *parent, int model_slot_index)
     : wxPanel(parent, wxID_ANY)
     , m_model_slot_index(model_slot_index)
     , m_mapped_tool(model_slot_index + 1)
 {
-    SetBackgroundColour(Ui::page_background());
+    SetBackgroundColour(kPageBackground);
 
-    const int half_h   = parent->FromDIP(40);
-    const int half_gap = parent->FromDIP(4);
-
-    auto *root = new wxBoxSizer(wxHORIZONTAL);
-    SetSizer(root);
-
-    m_row_card = make_card(this, Ui::card_background(), 8);
-    m_row_card->SetMinSize(wxSize(-1, half_h * 2 + half_gap));
-    m_row_card->SetBorderWidth(1);
-    m_row_card->SetBorderColorNormal(Ui::card_border());
+    const int box_w = FromDIP(90);
+    const int box_h = FromDIP(23);
+    const int gap   = FromDIP(1);
+    SetMinSize(wxSize(box_w, box_h * 2 + gap));
+    SetMaxSize(wxSize(box_w, box_h * 2 + gap));
 
     auto *col = new wxBoxSizer(wxVERTICAL);
 
-    m_model_half = new RoundedColorBlock(m_row_card);
-    m_model_half->SetMinSize(wxSize(-1, half_h));
+    auto *model_block = new RoundedColorBlock(this, RoundedColorBlock::Corners::Top);
+    m_model_half = model_block;
+    m_model_half->SetMinSize(wxSize(box_w, box_h));
+    m_model_half->SetMaxSize(wxSize(box_w, box_h));
 
-    auto *model_inner = new wxBoxSizer(wxHORIZONTAL);
-    m_model_type = new wxStaticText(m_model_half, wxID_ANY, wxEmptyString);
-    wxFont type_font = m_model_type->GetFont();
-    type_font.SetPointSize(9);
-    type_font.SetWeight(wxFONTWEIGHT_BOLD);
-    m_model_type->SetFont(type_font);
-    model_inner->AddStretchSpacer();
-    model_inner->Add(m_model_type, 0, wxALIGN_CENTER_VERTICAL);
-    model_inner->AddStretchSpacer();
-    m_model_half->SetSizer(model_inner);
-
-    m_printer_half = new RoundedColorBlock(m_row_card);
-    m_printer_half->SetMinSize(wxSize(-1, half_h));
+    auto *printer_block = new RoundedColorBlock(this, RoundedColorBlock::Corners::Bottom);
+    m_printer_half = printer_block;
+    m_printer_half->SetMinSize(wxSize(box_w, box_h));
+    m_printer_half->SetMaxSize(wxSize(box_w, box_h));
     m_printer_half->SetCursor(wxCursor(wxCURSOR_HAND));
+    m_printer_half->Bind(wxEVT_LEFT_DOWN, &StartPrintFilamentSlot::on_printer_half_clicked, this);
 
-    auto *printer_inner = new wxBoxSizer(wxHORIZONTAL);
-    m_printer_filament_icon = new wxStaticBitmap(m_printer_half, wxID_ANY,
-        create_scaled_bitmap("start_print_filament_spool", m_printer_half, 18));
-    m_printer_tag = new wxStaticText(m_printer_half, wxID_ANY, wxEmptyString);
-    m_printer_type = new wxStaticText(m_printer_half, wxID_ANY, wxEmptyString);
-    wxFont tag_font = m_printer_tag->GetFont();
-    tag_font.SetPointSize(9);
-    tag_font.SetWeight(wxFONTWEIGHT_BOLD);
-    m_printer_tag->SetFont(tag_font);
-    m_printer_type->SetFont(type_font);
-    m_printer_filament_icon->SetCursor(wxCursor(wxCURSOR_HAND));
-    m_printer_tag->SetCursor(wxCursor(wxCURSOR_HAND));
-    m_printer_type->SetCursor(wxCursor(wxCURSOR_HAND));
-    printer_inner->AddStretchSpacer();
-    printer_inner->Add(m_printer_filament_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(5));
-    printer_inner->Add(m_printer_tag, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(4));
-    printer_inner->Add(m_printer_type, 0, wxALIGN_CENTER_VERTICAL);
-    printer_inner->AddStretchSpacer();
-    m_printer_half->SetSizer(printer_inner);
+    col->Add(m_model_half, 0);
+    col->AddSpacer(gap);
+    col->Add(m_printer_half, 0);
+    SetSizer(col);
 
-    const auto bind_printer_click = [this](wxWindow *win) {
-        win->Bind(wxEVT_LEFT_DOWN, &StartPrintFilamentSlot::on_printer_half_clicked, this);
-    };
-    bind_printer_click(m_printer_half);
-    bind_printer_click(m_printer_filament_icon);
-    bind_printer_click(m_printer_tag);
-    bind_printer_click(m_printer_type);
-
-    col->Add(m_model_half, 1, wxEXPAND | wxBOTTOM, half_gap);
-    col->Add(m_printer_half, 1, wxEXPAND);
-    m_row_card->SetSizer(col);
-
-    root->Add(m_row_card, 1, wxEXPAND);
-
-    const wxColour placeholder = wxColour(120, 120, 120);
-    style_half(m_model_half, nullptr, m_model_type, placeholder, wxEmptyString, _L("PLA"));
-    style_half(m_printer_half, m_printer_tag, m_printer_type, Ui::control_background(),
-        wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool), _L("Empty"));
+    style_block(m_model_half, wxColour(120, 120, 120), _L("PLA"));
+    style_block(m_printer_half, kDisconnectedToolFill, wxString::FromUTF8("/"));
+    m_printer_half->SetCursor(wxCursor(wxCURSOR_ARROW));
 }
 
-void StartPrintFilamentSlot::style_half(wxPanel *half, wxStaticText *tag, wxStaticText *type_label,
-    const wxColour &bg, const wxString &tag_text, const wxString &type_text)
+void StartPrintFilamentSlot::style_block(wxPanel *block, const wxColour &bg, const wxString &text)
 {
-    if (half == nullptr)
-        return;
-    if (auto *block = dynamic_cast<RoundedColorBlock *>(half))
-        block->set_fill(bg);
-    const wxColour text = readable_on_fill(bg);
-    if (tag != nullptr) {
-        if (tag_text.empty())
-            tag->Hide();
-        else {
-            tag->SetLabel(tag_text);
-            tag->SetForegroundColour(text);
-            tag->SetBackgroundColour(bg);
-            tag->Show();
-        }
-    }
-    if (m_printer_filament_icon != nullptr && half == m_printer_half)
-        m_printer_filament_icon->SetBackgroundColour(bg);
-    if (type_label != nullptr) {
-        type_label->SetLabel(type_text);
-        type_label->SetForegroundColour(text);
-        type_label->SetBackgroundColour(bg);
-    }
-    half->Refresh();
+    if (auto *rounded = dynamic_cast<RoundedColorBlock *>(block))
+        rounded->set_content(bg, text);
+    else if (block != nullptr)
+        block->Refresh();
 }
 
 void StartPrintFilamentSlot::set_visible(bool visible)
@@ -652,41 +900,54 @@ void StartPrintFilamentSlot::set_visible(bool visible)
     Show(visible);
 }
 
+void StartPrintFilamentSlot::set_model_slot_index(int model_slot_index)
+{
+    m_model_slot_index = std::clamp(model_slot_index, 0, 3);
+}
+
 void StartPrintFilamentSlot::set_model_filament(const std::string &type, const wxColour &color)
 {
-    style_half(m_model_half, nullptr, m_model_type, color, wxEmptyString, from_u8(type));
+    m_model_type_name = from_u8(type);
+    m_model_color = color.IsOk() ? color : wxColour(120, 120, 120);
+    style_block(m_model_half, m_model_color, m_model_type_name);
 }
 
 void StartPrintFilamentSlot::set_mapped_tool(int mapped_tool)
 {
     m_mapped_tool = std::clamp(mapped_tool, 1, 4);
-    if (m_printer_tag != nullptr)
-        m_printer_tag->SetLabel(wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool));
+    if (!m_interactive)
+        return;
+    if (auto *rounded = dynamic_cast<RoundedColorBlock *>(m_printer_half))
+        rounded->set_text(wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool));
 }
 
-void StartPrintFilamentSlot::update_printer_tool(const wxColour &color, const wxString &material, int tool_1based)
+void StartPrintFilamentSlot::set_interactive(bool interactive)
 {
-    try {
-        m_mapped_tool = std::clamp(tool_1based, 1, 4);
-        const wxColour fill = color.IsOk() ? color : Ui::control_background();
-        
-        // Safely copy the material string
-        wxString safe_material;
-        try {
-            if (!material.IsEmpty()) {
-                safe_material = material;
-            } else {
-                safe_material = _L("Empty");
-            }
-        } catch (...) {
-            safe_material = _L("Empty");
-        }
-        
-        style_half(m_printer_half, m_printer_tag, m_printer_type, fill,
-            wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool), safe_material);
-    } catch (...) {
-        // If anything fails, just don't update
+    m_interactive = interactive;
+    if (m_printer_half == nullptr)
+        return;
+    if (!interactive) {
+        m_printer_half->SetCursor(wxCursor(wxCURSOR_ARROW));
+        style_block(m_printer_half, kDisconnectedToolFill, wxString::FromUTF8("/"));
+        return;
     }
+    m_printer_half->SetCursor(wxCursor(wxCURSOR_HAND));
+}
+
+void StartPrintFilamentSlot::update_printer_tool(const wxColour &color, bool has_filament, int tool_1based)
+{
+    m_mapped_tool = std::clamp(tool_1based, 1, 4);
+    if (!m_interactive) {
+        style_block(m_printer_half, kDisconnectedToolFill, wxString::FromUTF8("/"));
+        return;
+    }
+    if (!has_filament) {
+        style_block(m_printer_half, ui_warning(), wxString::FromUTF8("EF"));
+        return;
+    }
+    const wxColour fill = color.IsOk() ? color : kControlBackground;
+    style_block(m_printer_half, fill,
+        wxString::Format(wxString::FromUTF8("▼ T%d"), m_mapped_tool));
 }
 
 void StartPrintFilamentSlot::bind_tool_pick_handler(ToolPickHandler handler)
@@ -697,6 +958,8 @@ void StartPrintFilamentSlot::bind_tool_pick_handler(ToolPickHandler handler)
 void StartPrintFilamentSlot::on_printer_half_clicked(wxMouseEvent &event)
 {
     event.Skip(false);
+    if (!m_interactive)
+        return;
     if (m_pick_handler)
         m_pick_handler(m_model_slot_index, m_printer_half);
 }
@@ -708,7 +971,7 @@ StartPrintDialog::StartPrintDialog(wxWindow *parent)
     m_plater = wxGetApp().plater();
     build_ui();
     bind_events();
-    SetBackgroundColour(Ui::page_background());
+    SetBackgroundColour(kPageBackground);
 }
 
 void StartPrintDialog::build_ui()
@@ -717,31 +980,50 @@ void StartPrintDialog::build_ui()
     auto *main_sizer = new wxBoxSizer(wxVERTICAL);
     main_sizer->AddSpacer(FromDIP(16));
 
-    auto *title = new wxStaticText(this, wxID_ANY, _L("Start Print"));
-    style_primary_text(title, true);
-    wxFont title_font = title->GetFont();
+    m_task_name_switch_panel = new wxSimplebook(this);
+    m_task_name_switch_panel->SetMinSize(wxSize(-1, FromDIP(28)));
+    m_task_name_switch_panel->SetBackgroundColour(kPageBackground);
+
+    m_task_name_normal_panel = new wxPanel(m_task_name_switch_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
+    m_task_name_normal_panel->SetBackgroundColour(kPageBackground);
+    auto *title_sizer = new wxBoxSizer(wxHORIZONTAL);
+
+    m_task_name_label = new wxStaticText(m_task_name_normal_panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+    m_task_name_label->SetForegroundColour(*wxBLACK);
+    wxFont title_font = m_task_name_label->GetFont();
     title_font.SetPointSize(15);
-    title->SetFont(title_font);
-    main_sizer->Add(title, 0, wxLEFT | wxRIGHT, margin);
+    title_font.SetWeight(wxFONTWEIGHT_BOLD);
+    m_task_name_label->SetFont(title_font);
+    m_task_name_label->SetMaxSize(wxSize(FromDIP(420), -1));
+    m_task_name_edit_button = new Button(m_task_name_normal_panel, "", "rename_edit", wxBORDER_NONE, FromDIP(13));
+    m_task_name_edit_button->SetBackgroundColor(*wxWHITE);
+    m_task_name_edit_button->SetBackgroundColour(*wxWHITE);
+    title_sizer->AddStretchSpacer();
+    title_sizer->Add(m_task_name_label, 0, wxALIGN_CENTER_VERTICAL);
+    title_sizer->Add(m_task_name_edit_button, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(6));
+    title_sizer->AddStretchSpacer();
+    m_task_name_normal_panel->SetSizer(title_sizer);
 
-    main_sizer->AddSpacer(FromDIP(6));
+    auto *task_name_edit_panel = new wxPanel(m_task_name_switch_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
+    task_name_edit_panel->SetBackgroundColour(kPageBackground);
+    auto *edit_sizer = new wxBoxSizer(wxVERTICAL);
+    m_task_name_input = new ::TextInput(task_name_edit_panel, wxEmptyString, wxEmptyString, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
+    m_task_name_input->GetTextCtrl()->SetFont(::Label::Body_13);
+    edit_sizer->Add(m_task_name_input, 1, wxEXPAND);
+    task_name_edit_panel->SetSizer(edit_sizer);
 
-    auto *task_row = new wxBoxSizer(wxHORIZONTAL);
-    task_row->AddSpacer(margin);
-    m_task_label = new wxStaticText(this, wxID_ANY, _L("Printing task:"));
-    style_muted_text(m_task_label);
-    task_row->Add(m_task_label, 0, wxALIGN_CENTER_VERTICAL);
-    task_row->AddSpacer(FromDIP(6));
-    m_task_name_label = new wxStaticText(this, wxID_ANY, wxEmptyString);
-    style_primary_text(m_task_name_label, true);
-    task_row->Add(m_task_name_label, 1, wxALIGN_CENTER_VERTICAL);
-    task_row->AddSpacer(margin);
-    main_sizer->Add(task_row, 0, wxEXPAND);
+    m_task_name_switch_panel->AddPage(m_task_name_normal_panel, wxEmptyString, true);
+    m_task_name_switch_panel->AddPage(task_name_edit_panel, wxEmptyString, false);
+
+    auto *title_outer = new wxBoxSizer(wxHORIZONTAL);
+    title_outer->Add(m_task_name_switch_panel, 1, wxEXPAND);
+    main_sizer->Add(title_outer, 0, wxEXPAND | wxLEFT | wxRIGHT, margin);
 
     main_sizer->AddSpacer(FromDIP(12));
 
     // Job summary: thumbnail left, print stats right
-    m_preview_card = make_card(this, Ui::card_background());
+    m_preview_card = make_card(this, kCardBackground);
+    m_preview_card->SetBorderWidth(0);
     auto *preview_outer = new wxBoxSizer(wxHORIZONTAL);
     preview_outer->AddSpacer(margin);
     preview_outer->Add(m_preview_card, 1, wxEXPAND);
@@ -749,9 +1031,10 @@ void StartPrintDialog::build_ui()
     main_sizer->Add(preview_outer, 0, wxEXPAND);
 
     auto *preview_body = new wxBoxSizer(wxHORIZONTAL);
-    const int thumb_dip = 144;
-    auto *thumb_host = make_card(m_preview_card, Ui::control_background(), 8);
+    const int thumb_dip = 90;
+    auto *thumb_host = make_card(m_preview_card, kControlBackground, 8);
     thumb_host->SetMinSize(wxSize(FromDIP(thumb_dip), FromDIP(thumb_dip)));
+    thumb_host->SetMaxSize(wxSize(FromDIP(thumb_dip), FromDIP(thumb_dip)));
     auto *thumb_stack = new wxBoxSizer(wxVERTICAL);
     m_thumbnail_panel = new ThumbnailPanel(thumb_host, wxID_ANY, wxDefaultPosition,
         wxSize(FromDIP(thumb_dip), FromDIP(thumb_dip)));
@@ -767,56 +1050,24 @@ void StartPrintDialog::build_ui()
 
     preview_body->AddSpacer(FromDIP(16));
 
+    auto *stats_host = new wxPanel(m_preview_card);
+    stats_host->SetBackgroundColour(kCardBackground);
+    stats_host->SetMinSize(wxSize(-1, FromDIP(90)));
+    stats_host->SetMaxSize(wxSize(-1, FromDIP(90)));
     auto *stats_col = new wxBoxSizer(wxVERTICAL);
-    stats_col->Add(make_info_row(m_preview_card, _L("Time"), m_time_label), 0, wxEXPAND | wxBOTTOM, FromDIP(8));
-    stats_col->Add(make_info_row(m_preview_card, _L("Filament"), m_weight_label), 0, wxEXPAND | wxBOTTOM, FromDIP(8));
-    stats_col->Add(make_info_row(m_preview_card, _L("Sliced for"), m_target_printer_label), 0, wxEXPAND);
-    stats_col->AddStretchSpacer();
-    preview_body->Add(stats_col, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
+    stats_col->Add(make_info_row(stats_host, _L("Time"), m_time_label), 1, wxEXPAND);
+    stats_col->Add(make_info_row(stats_host, _L("Filament"), m_weight_label), 1, wxEXPAND);
+    stats_col->Add(make_info_row(stats_host, _L("Sliced for"), m_target_printer_label), 1, wxEXPAND);
+    stats_host->SetSizer(stats_col);
+    preview_body->Add(stats_host, 1, wxEXPAND | wxALIGN_CENTER_VERTICAL);
     m_preview_card->SetSizer(new wxBoxSizer(wxVERTICAL));
     m_preview_card->GetSizer()->Add(preview_body, 1, wxEXPAND | wxALL, FromDIP(12));
 
     main_sizer->AddSpacer(FromDIP(12));
 
-    // Filament mapping section
-    auto *mapping_card = make_card(this, Ui::card_background());
-    auto *mapping_outer = new wxBoxSizer(wxHORIZONTAL);
-    mapping_outer->AddSpacer(margin);
-    mapping_outer->Add(mapping_card, 1, wxEXPAND);
-    mapping_outer->AddSpacer(margin);
-    main_sizer->Add(mapping_outer, 0, wxEXPAND);
-
-    auto *mapping_sizer = new wxBoxSizer(wxVERTICAL);
-    auto *mapping_title = new wxStaticText(mapping_card, wxID_ANY, _L("Filament Mapping"));
-    style_primary_text(mapping_title, true);
-    mapping_sizer->Add(mapping_title, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
-    mapping_sizer->AddSpacer(FromDIP(8));
-
-    const int grid_gap = FromDIP(20);
-    auto *mapping_grid = new wxFlexGridSizer(2, grid_gap, grid_gap);
-    mapping_grid->AddGrowableCol(0, 1);
-    mapping_grid->AddGrowableCol(1, 1);
-    for (int i = 0; i < 4; ++i) {
-        m_filament_slots[i] = new StartPrintFilamentSlot(mapping_card, i);
-        m_filament_slots[i]->bind_tool_pick_handler([this](int model_slot, wxWindow *anchor) {
-            show_tool_picker_for_slot(model_slot, anchor);
-        });
-        mapping_grid->Add(m_filament_slots[i], 1, wxEXPAND);
-    }
-    mapping_sizer->Add(mapping_grid, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
-
-    m_filament_hint = new wxStaticText(mapping_card, wxID_ANY, _L("Click the bottom row to change tool mapping."));
-    m_filament_hint->SetForegroundColour(Ui::accent());
-    wxFont hint_font = m_filament_hint->GetFont();
-    hint_font.SetPointSize(9);
-    m_filament_hint->SetFont(hint_font);
-    mapping_sizer->Add(m_filament_hint, 0, wxALL, FromDIP(12));
-    mapping_card->SetSizer(mapping_sizer);
-
-    main_sizer->AddSpacer(FromDIP(12));
-
     // Printer selection
-    auto *printer_card = make_card(this, Ui::card_background());
+    auto *printer_card = make_card(this, kCardBackground);
+    printer_card->SetBorderWidth(0);
     auto *printer_card_outer = new wxBoxSizer(wxHORIZONTAL);
     printer_card_outer->AddSpacer(margin);
     printer_card_outer->Add(printer_card, 1, wxEXPAND);
@@ -843,8 +1094,9 @@ void StartPrintDialog::build_ui()
     printer_row->Add(m_printer_combo, 1, wxALIGN_CENTER_VERTICAL);
     printer_row->AddSpacer(FromDIP(8));
     for (int i = 0; i < 4; ++i) {
-        auto *swatch = make_card(printer_card, Ui::control_background(), 4);
-        swatch->SetMinSize(wxSize(FromDIP(16), FromDIP(16)));
+        auto *swatch = new PrinterToolSwatch(printer_card);
+        swatch->SetMinSize(wxSize(FromDIP(18), FromDIP(18)));
+        swatch->SetMaxSize(wxSize(FromDIP(18), FromDIP(18)));
         m_printer_tool_swatches[i] = swatch;
         printer_row->Add(swatch, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(3));
     }
@@ -855,15 +1107,56 @@ void StartPrintDialog::build_ui()
     printer_sizer->Add(m_printer_status, 0, wxALL, FromDIP(12));
     printer_card->SetSizer(printer_sizer);
 
+    main_sizer->AddSpacer(FromDIP(12));
+
+    // Filament mapping section stays visible even when no printer is selected.
+    auto *mapping_card = make_card(this, kCardBackground);
+    mapping_card->SetBorderWidth(0);
+    auto *mapping_outer = new wxBoxSizer(wxHORIZONTAL);
+    mapping_outer->AddSpacer(margin);
+    mapping_outer->Add(mapping_card, 1, wxEXPAND);
+    mapping_outer->AddSpacer(margin);
+    main_sizer->Add(mapping_outer, 0, wxEXPAND);
+
+    auto *mapping_sizer = new wxBoxSizer(wxVERTICAL);
+    auto *mapping_title = new wxStaticText(mapping_card, wxID_ANY, _L("Filament"));
+    style_primary_text(mapping_title, true);
+    mapping_sizer->Add(mapping_title, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+    mapping_sizer->AddSpacer(FromDIP(8));
+
+    auto *mapping_row = new wxBoxSizer(wxHORIZONTAL);
+    for (int i = 0; i < 4; ++i) {
+        m_filament_slots[i] = new StartPrintFilamentSlot(mapping_card, i);
+        m_filament_slots[i]->bind_tool_pick_handler([this](int model_slot, wxWindow *anchor) {
+            show_tool_picker_for_slot(model_slot, anchor);
+        });
+        mapping_row->Add(m_filament_slots[i], 0, wxALIGN_CENTER_VERTICAL | (i > 0 ? wxLEFT : 0),
+            i > 0 ? FromDIP(8) : 0);
+    }
+    mapping_sizer->Add(mapping_row, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+
+    m_filament_hint = new wxStaticText(mapping_card, wxID_ANY, _L("Click the bottom row to change tool mapping."));
+    m_filament_hint->SetForegroundColour(Ui::accent());
+    wxFont hint_font = m_filament_hint->GetFont();
+    hint_font.SetPointSize(9);
+    m_filament_hint->SetFont(hint_font);
+    mapping_sizer->Add(m_filament_hint, 0, wxALL, FromDIP(12));
+    mapping_card->SetSizer(mapping_sizer);
+
     main_sizer->AddSpacer(FromDIP(10));
 
+    m_options_section = new wxPanel(this, wxID_ANY);
+    m_options_section->SetBackgroundColour(kPageBackground);
+    auto *options_outer_sizer = new wxBoxSizer(wxVERTICAL);
+
     // Print options
-    auto *options_card = make_card(this, Ui::card_background());
+    auto *options_card = make_card(m_options_section, kCardBackground);
+    options_card->SetBorderWidth(0);
     auto *options_outer = new wxBoxSizer(wxHORIZONTAL);
     options_outer->AddSpacer(margin);
     options_outer->Add(options_card, 1, wxEXPAND);
     options_outer->AddSpacer(margin);
-    main_sizer->Add(options_outer, 0, wxEXPAND);
+    options_outer_sizer->Add(options_outer, 0, wxEXPAND);
 
     auto *options_row = new wxBoxSizer(wxHORIZONTAL);
     options_row->Add(make_option_row(options_card, _L("Bed leveling"), m_bed_leveling), 0, wxRIGHT, FromDIP(18));
@@ -875,6 +1168,9 @@ void StartPrintDialog::build_ui()
     m_bed_leveling->SetValue(true);
     m_timelapse->SetValue(false);
     m_flow_calibration->SetValue(false);
+
+    m_options_section->SetSizer(options_outer_sizer);
+    main_sizer->Add(m_options_section, 0, wxEXPAND);
 
     main_sizer->AddStretchSpacer();
 
@@ -901,6 +1197,111 @@ void StartPrintDialog::bind_events()
     m_cancel_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_cancel, this);
     m_start_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_start_print, this);
     m_refresh_timer.Bind(wxEVT_TIMER, &StartPrintDialog::on_timer, this);
+
+    m_task_name_edit_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_task_name_edit, this);
+    m_task_name_input->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &) { on_task_name_enter(); });
+    m_task_name_input->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent &event) {
+        if (!m_task_name_input->HasFocus() && !m_task_name_label->HasFocus())
+            on_task_name_enter();
+        else
+            event.Skip();
+    });
+    Bind(wxEVT_CHAR_HOOK, [this](wxKeyEvent &event) {
+        if (event.GetKeyCode() == WXK_ESCAPE && m_is_rename_mode) {
+            m_is_rename_mode = false;
+            m_task_name_switch_panel->SetSelection(0);
+            m_task_name_label->SetLabel(m_current_task_name);
+            m_task_name_normal_panel->Layout();
+            return;
+        }
+        event.Skip();
+    });
+}
+
+void StartPrintDialog::on_task_name_edit(wxCommandEvent &event)
+{
+    (void) event;
+    m_is_rename_mode = true;
+    m_task_name_input->GetTextCtrl()->SetValue(m_current_task_name);
+    m_task_name_switch_panel->SetSelection(1);
+    m_task_name_input->GetTextCtrl()->SetFocus();
+    m_task_name_input->GetTextCtrl()->SetInsertionPointEnd();
+}
+
+void StartPrintDialog::on_task_name_enter()
+{
+    if (!m_is_rename_mode)
+        return;
+    m_is_rename_mode = false;
+
+    wxString new_file_name = m_task_name_input->GetTextCtrl()->GetValue();
+
+    wxString temp;
+    int      space_run = 0;
+    for (auto ch : new_file_name) {
+        if (ch == wxString::FromUTF8("\x20")) {
+            ++space_run;
+            if (space_run == 1)
+                temp += ch;
+        } else {
+            space_run = 0;
+            temp += ch;
+        }
+    }
+    new_file_name = temp;
+
+    enum { Valid, NoValid };
+    int      valid_type = Valid;
+    wxString info_line;
+
+    const char *unusable_symbols = "<>[]:/\\|?*\"";
+    const std::string unusable_suffix = PresetCollection::get_suffix_modified();
+    for (size_t i = 0; i < std::strlen(unusable_symbols); ++i) {
+        if (new_file_name.find_first_of(unusable_symbols[i]) != wxString::npos) {
+            info_line  = _L("Name is invalid;") + "\n" + _L("illegal characters:") + " " + unusable_symbols;
+            valid_type = NoValid;
+            break;
+        }
+    }
+
+    if (valid_type == Valid && new_file_name.find(from_u8(unusable_suffix)) != wxString::npos) {
+        info_line  = _L("Name is invalid;") + "\n" + _L("illegal suffix:") + "\n\t" + from_u8(PresetCollection::get_suffix_modified());
+        valid_type = NoValid;
+    }
+
+    if (valid_type == Valid && new_file_name.empty()) {
+        info_line  = _L("The name is not allowed to be empty.");
+        valid_type = NoValid;
+    }
+
+    if (valid_type == Valid && new_file_name.find_first_of(' ') == 0) {
+        info_line  = _L("The name is not allowed to start with space character.");
+        valid_type = NoValid;
+    }
+
+    if (valid_type == Valid && new_file_name.find_last_of(' ') == new_file_name.length() - 1) {
+        info_line  = _L("The name is not allowed to end with space character.");
+        valid_type = NoValid;
+    }
+
+    if (valid_type == Valid && new_file_name.size() >= 100) {
+        info_line  = _L("The name length exceeds the limit.");
+        valid_type = NoValid;
+    }
+
+    if (valid_type != Valid) {
+        MessageDialog msg_window(this, info_line, "", wxICON_WARNING | wxOK);
+        msg_window.ShowModal();
+        m_task_name_switch_panel->SetSelection(0);
+        m_task_name_label->SetLabel(m_current_task_name);
+        m_task_name_normal_panel->Layout();
+        return;
+    }
+
+    m_current_task_name = new_file_name;
+    m_task_name_switch_panel->SetSelection(0);
+    m_task_name_label->SetLabel(m_current_task_name);
+    m_task_name_normal_panel->Layout();
 }
 
 void StartPrintDialog::prepare(int print_plate_idx)
@@ -917,13 +1318,17 @@ void StartPrintDialog::on_dpi_changed(const wxRect &suggested_rect)
     if (m_cancel_button) {
         m_cancel_button->Rescale();
         apply_dark_secondary_button(m_cancel_button);
-        m_cancel_button->SetBackgroundColour(Ui::page_background());
+        m_cancel_button->SetBackgroundColour(kPageBackground);
     }
     if (m_start_button) {
         m_start_button->Rescale();
         apply_dark_primary_button(m_start_button);
-        m_start_button->SetBackgroundColour(Ui::page_background());
+        m_start_button->SetBackgroundColour(kPageBackground);
     }
+    if (m_task_name_edit_button)
+        m_task_name_edit_button->Rescale();
+    if (m_task_name_input)
+        m_task_name_input->Rescale();
     Fit();
     Refresh();
     (void) suggested_rect;
@@ -940,15 +1345,15 @@ int StartPrintDialog::ShowModal()
     }
     refresh_from_plate();
     refresh_printer_list();
-    
-    // Yazıcı varsa bilgileri güncelle
-    MachineObject *machine = selected_machine();
-    if (machine != nullptr) {
-        sync_printer_tool_colours(machine);
+    m_user_mapped_tools = false;
+    m_filament_sync_done = false;
+    if (printer_view_has_loaded_filaments()) {
+        m_filament_sync_done = true;
+        assign_tools_by_color();
+        update_printer_status();
     }
-    
-    update_printer_status();
     update_start_button_state();
+    sync_filaments_then_map(true);
     Layout();
     Fit();
     CenterOnParent();
@@ -978,8 +1383,12 @@ void StartPrintDialog::refresh_from_plate()
     wxString filename = m_plater->get_export_gcode_filename(wxEmptyString, true);
     if (filename.empty())
         filename = _L("Untitled");
+    m_current_task_name = wxFileName(filename).GetFullName();
     if (m_task_name_label != nullptr)
-        m_task_name_label->SetLabel(wxFileName(filename).GetFullName());
+        m_task_name_label->SetLabel(m_current_task_name);
+    if (m_task_name_switch_panel != nullptr)
+        m_task_name_switch_panel->SetSelection(0);
+    m_is_rename_mode = false;
 
     if (m_target_printer_label != nullptr) {
         try {
@@ -1028,9 +1437,9 @@ void StartPrintDialog::refresh_from_plate()
         }
 
         wxWindow *thumb_host = m_thumbnail_panel ? m_thumbnail_panel->GetParent() : nullptr;
-        apply_plate_thumbnail(thumb_host, m_thumbnail_panel, m_thumbnail_placeholder, plate, 144);
+        apply_plate_thumbnail(thumb_host, m_thumbnail_panel, m_thumbnail_placeholder, plate, 90);
     } else {
-        apply_plate_thumbnail(nullptr, m_thumbnail_panel, m_thumbnail_placeholder, nullptr, 144);
+        apply_plate_thumbnail(nullptr, m_thumbnail_panel, m_thumbnail_placeholder, nullptr, 90);
     }
 
     char weight_buf[64];
@@ -1049,46 +1458,32 @@ void StartPrintDialog::refresh_from_plate()
         if (m_filament_slots[i] != nullptr)
             m_filament_slots[i]->set_visible(false);
     }
-    
+
     const std::vector<FilamentInfo> filaments = filament_rows_for_plate(plate);
-    
+    int ui_slot = 0;
     for (const FilamentInfo &info : filaments) {
-            const int model_slot = info.id;
-            if (model_slot < 0 || model_slot >= 4)
-                continue;
-            if (m_filament_slots[model_slot] == nullptr)
-                continue;
-            
-            std::string display_type = info.type;
-            if (info.type == "PLA-S")
-                display_type = "Sup.PLA";
-            else if (info.type == "PA-S")
-                display_type = "Sup.PA";
-            else if (info.type == "ABS-S")
-                display_type = "Sup.ABS";
-            
-            const int mapped_tool = physical_tool_for_filament(model_slot, info);
-            m_filament_slots[model_slot]->set_model_filament(display_type, parse_filament_colour(info.color));
-            m_filament_slots[model_slot]->set_mapped_tool(mapped_tool);
-            m_filament_slots[model_slot]->set_visible(true);
-        }
+        if (ui_slot >= 4)
+            break;
+        if (m_filament_slots[ui_slot] == nullptr)
+            break;
 
-    refresh_filament_printer_sides();
+        std::string display_type = info.type;
+        if (info.type == "PLA-S")
+            display_type = "Sup.PLA";
+        else if (info.type == "PA-S")
+            display_type = "Sup.PA";
+        else if (info.type == "ABS-S")
+            display_type = "Sup.ABS";
 
-    if (m_filament_hint != nullptr) {
-        if (!plate_ready_for_device_print(plate)) {
-            m_filament_hint->SetLabel(plate && plate->is_slice_result_valid()
-                ? _L("G-code file is missing. Please slice again.")
-                : _L("Slice the plate before starting a print."));
-            m_filament_hint->SetForegroundColour(Ui::danger());
-        } else if (plate && !plate->is_slice_result_ready_for_print()) {
-            m_filament_hint->SetLabel(_L("There are slicing warnings. Review them before printing."));
-            m_filament_hint->SetForegroundColour(ui_warning());
-        } else {
-            m_filament_hint->SetLabel(_L("Click the bottom row to change tool mapping."));
-            m_filament_hint->SetForegroundColour(Ui::accent());
-        }
+        m_filament_slots[ui_slot]->set_model_slot_index(info.id);
+        m_filament_slots[ui_slot]->set_model_filament(display_type, parse_filament_colour(info.color));
+        m_filament_slots[ui_slot]->set_mapped_tool(ui_slot + 1);
+        m_filament_slots[ui_slot]->set_visible(true);
+        ++ui_slot;
     }
+
+    if (m_filament_slots[0] != nullptr && m_filament_slots[0]->GetParent() != nullptr)
+        m_filament_slots[0]->GetParent()->Layout();
 }
 
 void StartPrintDialog::refresh_printer_list()
@@ -1180,28 +1575,169 @@ void StartPrintDialog::refresh_filament_printer_sides()
 {
     try {
         MachineObject *obj = selected_machine();
-        
-        // Yazıcı bağlı değilse yazıcı tarafını güncelleme
-        if (obj == nullptr)
-            return;
-        
+        const bool printer_connected = obj != nullptr && obj->is_online();
         for (int i = 0; i < 4; ++i) {
             if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
                 continue;
+            m_filament_slots[i]->set_interactive(printer_connected);
+            const int tool = m_filament_slots[i]->get_mapped_tool();
+            if (!printer_connected) {
+                m_filament_slots[i]->update_printer_tool(wxNullColour, false, tool);
+                continue;
+            }
             try {
-                const int tool = m_filament_slots[i]->get_mapped_tool();
                 const PrinterToolInfo info = query_printer_tool(obj, tool - 1);
-                // Safely update with validated material string
-                wxString safe_material = info.material.IsEmpty() ? _L("Empty") : info.material;
-                m_filament_slots[i]->update_printer_tool(info.color, safe_material, tool);
+                m_filament_slots[i]->update_printer_tool(info.color, info.has_filament, tool);
             } catch (...) {
-                // If anything goes wrong, set empty
-                m_filament_slots[i]->update_printer_tool(wxNullColour, _L("Empty"), i + 1);
+                m_filament_slots[i]->update_printer_tool(wxNullColour, false, tool);
             }
         }
     } catch (...) {
         // Silently fail if the whole function crashes
     }
+    update_filament_mapping_hint();
+    update_start_button_state();
+}
+
+bool StartPrintDialog::has_unloaded_mapping() const
+{
+    MachineObject *obj = selected_machine();
+    for (int i = 0; i < 4; ++i) {
+        if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
+            continue;
+        if (obj == nullptr)
+            return true;
+        const PrinterToolInfo info = query_printer_tool(obj, m_filament_slots[i]->get_mapped_tool() - 1);
+        if (!info.has_filament)
+            return true;
+    }
+    return false;
+}
+
+void StartPrintDialog::update_filament_mapping_hint()
+{
+    if (m_filament_hint == nullptr)
+        return;
+
+    MachineObject *obj = selected_machine();
+    if (obj == nullptr || !obj->is_online()) {
+        m_filament_hint->SetLabel(_L("Connect a printer to map filaments."));
+        m_filament_hint->SetForegroundColour(kTextMuted);
+        return;
+    }
+
+    if (!m_filament_sync_done) {
+        m_filament_hint->SetLabel(_L("Loading printer filaments..."));
+        m_filament_hint->SetForegroundColour(kTextMuted);
+        return;
+    }
+
+    PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
+    if (!plate_ready_for_device_print(plate)) {
+        m_filament_hint->SetLabel(plate && plate->is_slice_result_valid()
+            ? _L("G-code file is missing. Please slice again.")
+            : _L("Slice the plate before starting a print."));
+        m_filament_hint->SetForegroundColour(Ui::danger());
+        return;
+    }
+    if (plate && !plate->is_slice_result_ready_for_print()) {
+        m_filament_hint->SetLabel(_L("There are slicing warnings. Review them before printing."));
+        m_filament_hint->SetForegroundColour(ui_warning());
+        return;
+    }
+    if (has_unloaded_mapping()) {
+        m_filament_hint->SetLabel(_L("Empty filament (EF). Map each color to a loaded tool before starting."));
+        m_filament_hint->SetForegroundColour(ui_warning());
+        return;
+    }
+    m_filament_hint->SetLabel(_L("Click the bottom row to change tool mapping."));
+    m_filament_hint->SetForegroundColour(Ui::accent());
+}
+
+void StartPrintDialog::assign_tools_by_color()
+{
+    std::vector<int> visible;
+    for (int i = 0; i < 4; ++i) {
+        if (m_filament_slots[i] != nullptr && m_filament_slots[i]->IsShown())
+            visible.push_back(i);
+    }
+
+    MachineObject *obj = selected_machine();
+    if (obj == nullptr) {
+        for (int slot : visible)
+            m_filament_slots[slot]->set_mapped_tool(slot + 1);
+        return;
+    }
+
+    std::array<PrinterToolInfo, 4> tools{};
+    for (int t = 0; t < 4; ++t)
+        tools[t] = query_printer_tool(obj, t);
+
+    bool used[4] = {false, false, false, false};
+
+    auto tool_loaded = [&](int t) {
+        return tools[t].has_filament && tools[t].color.IsOk();
+    };
+
+    auto pick_best = [&](int slot, bool match_type, bool loaded_only) {
+        const wxColour model_c = m_filament_slots[slot]->model_color();
+        const wxString model_type = m_filament_slots[slot]->model_type();
+        int best = -1;
+        int best_d = std::numeric_limits<int>::max();
+        for (int t = 0; t < 4; ++t) {
+            if (used[t])
+                continue;
+            if (loaded_only && !tool_loaded(t))
+                continue;
+            if (!loaded_only && tool_loaded(t))
+                continue;
+            if (match_type && !model_type.empty() && !filament_types_match(model_type, tools[t].material))
+                continue;
+            const int d = model_c.IsOk() && tool_loaded(t) ? colour_distance_sq(model_c, tools[t].color) : t;
+            if (d < best_d) {
+                best_d = d;
+                best = t;
+            }
+        }
+        return best;
+    };
+
+    for (int slot : visible) {
+        int best = pick_best(slot, true, true);
+        if (best < 0)
+            best = pick_best(slot, false, true);
+        if (best < 0)
+            best = pick_best(slot, false, false);
+        if (best < 0)
+            best = slot;
+        used[best] = true;
+        m_filament_slots[slot]->set_mapped_tool(best + 1);
+    }
+}
+
+void StartPrintDialog::sync_filaments_then_map(bool remap)
+{
+    wxWeakRef<StartPrintDialog> weak(this);
+    auto after = [weak, remap]() {
+        StartPrintDialog *dlg = weak.get();
+        if (dlg == nullptr)
+            return;
+        dlg->m_filament_sync_done = true;
+        if (remap && !dlg->m_user_mapped_tools)
+            dlg->assign_tools_by_color();
+        dlg->refresh_filament_printer_sides();
+        dlg->update_printer_status();
+        dlg->update_start_button_state();
+    };
+
+    MachineObject *obj = selected_machine();
+    if (MainFrame *frame = wxGetApp().mainframe) {
+        if (PrinterWebView *printer_view = frame->m_printer_view) {
+            printer_view->sync_loaded_tool_filaments(obj, after);
+            return;
+        }
+    }
+    after();
 }
 
 void StartPrintDialog::show_tool_picker_for_slot(int model_slot, wxWindow *anchor)
@@ -1215,10 +1751,24 @@ void StartPrintDialog::show_tool_picker_for_slot(int model_slot, wxWindow *ancho
 
     sync_printer_tool_colours(obj);
 
-    auto *popup = new StartPrintToolPickerPopup(this, obj, [this, model_slot](int tool) {
-        if (model_slot < 0 || model_slot >= 4 || m_filament_slots[model_slot] == nullptr)
-            return;
-        m_filament_slots[model_slot]->set_mapped_tool(tool);
+    wxString required_type;
+    int current_tool = 0;
+    for (StartPrintFilamentSlot *slot : m_filament_slots) {
+        if (slot != nullptr && slot->IsShown() && slot->model_slot_index() == model_slot) {
+            required_type = slot->model_type();
+            current_tool  = slot->get_mapped_tool();
+            break;
+        }
+    }
+
+    auto *popup = new StartPrintToolPickerPopup(this, obj, required_type, current_tool, [this, model_slot](int tool) {
+        for (StartPrintFilamentSlot *slot : m_filament_slots) {
+            if (slot == nullptr || !slot->IsShown() || slot->model_slot_index() != model_slot)
+                continue;
+            slot->set_mapped_tool(tool);
+            m_user_mapped_tools = true;
+            break;
+        }
         refresh_filament_printer_sides();
     });
 
@@ -1237,10 +1787,7 @@ void StartPrintDialog::update_printer_status()
         for (int i = 0; i < 4; ++i) {
             if (m_printer_tool_swatches[i] == nullptr)
                 continue;
-            const wxColour tint = Ui::control_background();
-            m_printer_tool_swatches[i]->SetBackgroundColorNormal(tint);
-            m_printer_tool_swatches[i]->SetBackgroundColour(tint);
-            m_printer_tool_swatches[i]->Refresh();
+            m_printer_tool_swatches[i]->set_tool(wxNullColour, false);
         }
         
         m_printer_status->SetLabel(_L("No printer selected."));
@@ -1249,17 +1796,15 @@ void StartPrintDialog::update_printer_status()
     }
     
     // Yazıcı varsa tool bilgilerini güncelle
-    for (int i = 0; i < 4; ++i) {
-        if (m_printer_tool_swatches[i] == nullptr)
-            continue;
-        const PrinterToolInfo info = query_printer_tool(obj, i);
-        const wxColour tint = info.has_filament && info.color.IsOk() ? info.color : Ui::control_background();
-        m_printer_tool_swatches[i]->SetBackgroundColorNormal(tint);
-        m_printer_tool_swatches[i]->SetBackgroundColour(tint);
-        m_printer_tool_swatches[i]->Refresh();
+    if (m_filament_sync_done) {
+        for (int i = 0; i < 4; ++i) {
+            if (m_printer_tool_swatches[i] == nullptr)
+                continue;
+            const PrinterToolInfo info = query_printer_tool(obj, i);
+            m_printer_tool_swatches[i]->set_tool(info.color, info.has_filament);
+        }
+        refresh_filament_printer_sides();
     }
-
-    refresh_filament_printer_sides();
 
     if (!obj->is_online()) {
         m_printer_status->SetLabel(_L("Printer is offline."));
@@ -1281,13 +1826,25 @@ void StartPrintDialog::update_start_button_state()
 {
     PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
     MachineObject *obj = selected_machine();
+    if (m_start_button == nullptr)
+        return;
     const bool slice_ready = plate_ready_for_device_print(plate);
-    const bool printer_ready = obj && obj->is_online() && !obj->is_in_printing();
-    const bool can_start = slice_ready && printer_ready;
+    const bool printer_connected = obj && obj->is_online();
+    const bool printer_ready = printer_connected && !obj->is_in_printing();
+    const bool mapping_ready = m_filament_sync_done && !has_unloaded_mapping();
+    const bool can_start = slice_ready && printer_ready && mapping_ready;
     m_start_button->Enable(can_start);
-    m_bed_leveling->Enable(printer_ready);
-    m_timelapse->Enable(printer_ready);
-    m_flow_calibration->Enable(printer_ready);
+    if (m_options_section != nullptr && m_options_section->IsShown() != printer_connected) {
+        m_options_section->Show(printer_connected);
+        Layout();
+        Refresh();
+    }
+    if (m_bed_leveling)
+        m_bed_leveling->Enable(printer_ready);
+    if (m_timelapse)
+        m_timelapse->Enable(printer_ready);
+    if (m_flow_calibration)
+        m_flow_calibration->Enable(printer_ready);
 }
 
 void StartPrintDialog::on_refresh_printers(wxCommandEvent &)
@@ -1303,8 +1860,9 @@ void StartPrintDialog::on_printer_changed(wxCommandEvent &)
     const int selection = m_printer_combo->GetSelection();
     if (dev_manager && selection >= 0 && selection < static_cast<int>(m_printer_ids.size()))
         dev_manager->set_selected_machine(m_printer_ids[selection]);
-    update_printer_status();
-    update_start_button_state();
+    m_user_mapped_tools = false;
+    m_filament_sync_done = false;
+    sync_filaments_then_map(true);
 }
 
 void StartPrintDialog::on_cancel(wxCommandEvent &)
@@ -1323,6 +1881,11 @@ void StartPrintDialog::on_start_print(wxCommandEvent &)
     MachineObject *obj = selected_machine();
     if (obj == nullptr || !obj->is_online() || obj->is_in_printing()) {
         show_error(this, _L("Selected printer is not ready."));
+        return;
+    }
+
+    if (has_unloaded_mapping()) {
+        show_error(this, _L("Empty filament (EF). Map each color to a loaded tool before starting."));
         return;
     }
 

@@ -5158,16 +5158,25 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
     }).detach();
 }
 
-void PrinterWebView::sync_loaded_tool_filaments(MachineObject *obj)
+void PrinterWebView::sync_loaded_tool_filaments(MachineObject *obj, std::function<void()> on_done)
 {
-    if (m_destroying)
+    auto finish = [on_done = std::move(on_done)]() {
+        if (on_done)
+            on_done();
+    };
+
+    if (m_destroying || obj == nullptr || !obj->is_online()) {
+        finish();
         return;
+    }
     const std::string base = moonraker_base_url(obj);
-    if (obj == nullptr || !obj->is_online() || base.empty())
+    if (base.empty()) {
+        finish();
         return;
+    }
 
     std::weak_ptr<int> lifetime = m_lifetime_token;
-    std::thread([this, lifetime, base]() {
+    std::thread([this, lifetime, base, finish = std::move(finish)]() {
         std::string db_body;
         Http::get(base + "/server/database/item?namespace=coprint&key=filament_selections")
             .timeout_connect(2)
@@ -5179,19 +5188,20 @@ void PrinterWebView::sync_loaded_tool_filaments(MachineObject *obj)
             .on_error([](std::string, std::string, unsigned) {})
             .perform_sync();
 
-        wxGetApp().CallAfter([this, lifetime, db_body]() {
-            if (lifetime.expired() || m_destroying)
-                return;
-            const auto loaded = parse_filament_db(parse_json_body(db_body));
-            for (int i = 0; i < 4; ++i) {
-                m_filament_tool_has_color[i] = loaded.tool_has_color[i];
-                if (loaded.tool_has_color[i]) {
-                    m_filament_loaded_tool_colors[i] = loaded.assigned_colors[i];
-                    m_filament_loaded_tool_materials[i] = loaded.materials[i].empty()
-                        ? wxString::FromUTF8("Empty")
-                        : loaded.materials[i];
+        wxGetApp().CallAfter([this, lifetime, db_body, finish]() {
+            if (!lifetime.expired() && !m_destroying && !db_body.empty()) {
+                const auto loaded = parse_filament_db(parse_json_body(db_body));
+                for (int i = 0; i < 4; ++i) {
+                    m_filament_tool_has_color[i] = loaded.tool_has_color[i];
+                    if (loaded.tool_has_color[i]) {
+                        m_filament_loaded_tool_colors[i] = loaded.assigned_colors[i];
+                        m_filament_loaded_tool_materials[i] = loaded.materials[i].empty()
+                            ? wxString::FromUTF8("Empty")
+                            : loaded.materials[i];
+                    }
                 }
             }
+            finish();
         });
     }).detach();
 }

@@ -88,6 +88,25 @@ void update_dark_ui(wxWindow* window);
 
 extern std::deque<wxDialog*> dialogStack;
 
+#ifdef __APPLE__
+void macos_attach_dialog_to_parent(wxDialog *dialog);
+void macos_detach_dialog_from_parent(wxDialog *dialog);
+void macos_install_dialog_zorder_filter();
+void macos_remove_dialog_zorder_filter();
+
+struct MacDialogAttachGuard
+{
+    wxDialog *dialog;
+    explicit MacDialogAttachGuard(wxDialog *d) : dialog(d)
+    {
+        macos_attach_dialog_to_parent(dialog);
+    }
+    ~MacDialogAttachGuard() { macos_detach_dialog_from_parent(dialog); }
+    MacDialogAttachGuard(const MacDialogAttachGuard &) = delete;
+    MacDialogAttachGuard &operator=(const MacDialogAttachGuard &) = delete;
+};
+#endif
+
 template<class P> class DPIAware : public P
 {
 public:
@@ -199,6 +218,9 @@ public:
     int ShowModal()
     {
         dialogStack.push_front(this);
+#ifdef __APPLE__
+        MacDialogAttachGuard attach(this);
+#endif
         int r = wxDialog::ShowModal();
         dialogStack.pop_front();
         return r;
@@ -271,6 +293,20 @@ class DPIDialog : public DPIAware<wxDialog>
 {
 public:
     using DPIAware<wxDialog>::DPIAware;
+
+    bool Show(bool show = true) override
+    {
+#ifdef __APPLE__
+        const bool result = wxDialog::Show(show);
+        if (show)
+            macos_attach_dialog_to_parent(this);
+        else
+            macos_detach_dialog_from_parent(this);
+        return result;
+#else
+        return wxDialog::Show(show);
+#endif
+    }
 
 public:
     void EndModal(int retCode) override

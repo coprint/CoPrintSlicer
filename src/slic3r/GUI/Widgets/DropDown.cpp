@@ -276,21 +276,27 @@ static void _DrawSplitItem(const wxWindow* w, wxDC& dc, wxString split_text, wxP
  */
 void DropDown::render(wxDC &dc)
 {
-    if (items.size() == 0) return;
     int states = state_handler.states();
     if (subDropDown)
         states |= subDropDown->state_handler.states();
     dc.SetPen(wxPen(border_color.colorForStates(states)));
-    dc.SetBrush(wxBrush(StateColor::darkModeColorFor(GetBackgroundColour())));
-    // if (GetWindowStyle() & wxBORDER_NONE)
-    //    dc.SetPen(wxNullPen);
+    wxColour bg = GetBackgroundColour();
+    if (!bg.IsOk())
+        bg = *wxWHITE;
+    if (apply_dark_mode)
+        bg = StateColor::darkModeColorFor(bg);
+    dc.SetBrush(wxBrush(bg));
 
-    // draw background
+    // Always fill the popup. An empty list used to return before painting,
+    // which left a native black bar (macOS PopupWindow + wxBG_STYLE_PAINT).
     wxSize size = GetSize();
     if (radius == 0)
         dc.DrawRectangle(0, 0, size.x, size.y);
     else
         dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
+
+    if (items.size() == 0)
+        return;
 
     int selected_item = selectedItem();
     int hover_index   = hoverIndex();

@@ -2679,6 +2679,10 @@ int GUI_App::OnExit()
         BOOST_LOG_TRIVIAL(error) << "Failed to clean up encrypt bbl network log file";
     }
 
+#ifdef __APPLE__
+    macos_remove_dialog_zorder_filter();
+#endif
+
     return wxApp::OnExit();
 }
 
@@ -2733,6 +2737,10 @@ bool GUI_App::on_init_inner()
     wxInitAllImageHandlers();
 #ifdef NDEBUG
     wxImage::SetDefaultLoadFlags(0); // ignore waring in release build
+#endif
+
+#ifdef __APPLE__
+    macos_install_dialog_zorder_filter();
 #endif
 
 #if defined(_WIN32) && ! defined(_WIN64)

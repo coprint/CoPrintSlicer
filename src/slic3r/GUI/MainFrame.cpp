@@ -481,6 +481,17 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     Bind(wxEVT_ACTIVATE, [this](wxActivateEvent& event) {
         if (m_plater != nullptr && event.GetActive())
             m_plater->on_activate();
+        if (event.GetActive()) {
+            for (wxWindowList::compatibility_iterator node = wxTopLevelWindows.GetFirst();
+                 node;
+                 node = node->GetNext()) {
+                wxDialog *dlg = dynamic_cast<wxDialog *>(node->GetData());
+                if (dlg != nullptr && dlg->IsShown())
+                    dlg->Raise();
+            }
+            if (!dialogStack.empty() && dialogStack.front() != nullptr)
+                dialogStack.front()->Raise();
+        }
         event.Skip();
     });
 

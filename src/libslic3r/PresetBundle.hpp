@@ -387,12 +387,19 @@ public:
 
     // Load configuration that comes from a model file containing configuration, such as 3MF et al.
     // This method is called by the Plater.
-    void                        load_config_model(const std::string &name, DynamicPrintConfig config, Semver file_version = Semver())
-        { this->load_config_file_config(name, true, std::move(config), file_version); }
+    // coprint_target_printer: optional Co Print printer preset to adopt for foreign projects.
+    void                        load_config_model(const std::string &name, DynamicPrintConfig config, Semver file_version = Semver(), const std::string &coprint_target_printer = {})
+        { this->load_config_file_config(name, true, std::move(config), file_version, false, coprint_target_printer); }
+
+    // True when printer_settings_id or printer_model already identifies a Co Print machine.
+    static bool                 config_uses_coprint_printer(const DynamicPrintConfig &config);
+    // Resolve a loaded Co Print printer preset name from a 3MF/project config, or empty.
+    std::string                 coprint_printer_preset_from_config(const DynamicPrintConfig &config) const;
 
     // CoPrint: remap foreign (BBL/etc.) printer/filament/process presets to Co Print identity
     // after opening an external project, while preserving filament colors and slot count.
-    void                        enforce_coprint_identity();
+    // preferred_printer_preset: when set, use that Co Print printer instead of auto-picking ChromaSet.
+    void                        enforce_coprint_identity(const std::string &preferred_printer_preset = {});
 
     // Load an external config file containing the print, filament and printer presets.
     // Instead of a config file, a G-code may be loaded containing the full set of parameters.
@@ -522,6 +529,7 @@ private:
     // and the external config is just referenced, not stored into user profile directory.
     // If it is not an external config, then the config will be stored into the user profile directory.
     void                        load_config_file_config(const std::string &name_or_path, bool is_external, DynamicPrintConfig &&config, Semver file_version = Semver(), bool selected = false);
+    void                        load_config_file_config(const std::string &name_or_path, bool is_external, DynamicPrintConfig &&config, Semver file_version, bool selected, const std::string &coprint_target_printer);
     /*ConfigSubstitutions         load_config_file_config_bundle(
         const std::string &path, const boost::property_tree::ptree &tree, ForwardCompatibilitySubstitutionRule compatibility_rule);*/
 

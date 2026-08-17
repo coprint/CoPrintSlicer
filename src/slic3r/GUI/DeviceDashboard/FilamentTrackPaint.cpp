@@ -2,6 +2,8 @@
 
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 
+#include <algorithm>
+
 #include <wx/dcgraph.h>
 #include <wx/font.h>
 #include <wx/graphics.h>
@@ -43,17 +45,27 @@ static void draw_centered_bitmap(wxGraphicsContext *gc, const wxBitmap &bitmap, 
     gc->DrawBitmap(bitmap, x, y, bitmap.GetWidth(), bitmap.GetHeight());
 }
 
-void draw_filament_track_rails(wxGraphicsContext *gc, const wxRect &track, wxWindow *dip_window)
+void draw_filament_track_rails(wxGraphicsContext *gc, const wxRect &track, wxWindow *dip_window,
+    bool paired_rails)
 {
     const int extend = dip_window->FromDIP(5);
-    gc->SetPen(wxPen(wxColour(175, 178, 182), dip_window->FromDIP(2)));
-    gc->StrokeLine(track.x, track.y - extend, track.x, track.y + track.height + extend);
-    gc->StrokeLine(track.GetRight(), track.y - extend, track.GetRight(), track.y + track.height + extend);
+    const double pen_w = std::max(1.0, static_cast<double>(dip_window->FromDIP(1)));
+    gc->SetPen(wxPen(wxColour(175, 178, 182), static_cast<int>(pen_w)));
+    const double left_outer  = track.x + pen_w / 2.0;
+    const double right_outer = track.x + track.width - pen_w / 2.0;
+    const double y0 = track.y - extend;
+    const double y1 = track.y + track.height + extend;
+    gc->StrokeLine(left_outer, y0, left_outer, y1);
+    gc->StrokeLine(right_outer, y0, right_outer, y1);
+    if (paired_rails) {
+        gc->StrokeLine(left_outer + pen_w, y0, left_outer + pen_w, y1);
+        gc->StrokeLine(right_outer - pen_w, y0, right_outer - pen_w, y1);
+    }
 }
 
 void draw_filament_track(wxGraphicsContext *gc, const wxRect &track, int tool_1based,
     const wxColour &color, bool has_filament, FilamentTrackCenter center,
-    const wxBitmap &edit_icon, wxWindow *dip_window)
+    const wxBitmap &edit_icon, wxWindow *dip_window, const wxString &material, bool paired_rails)
 {
     if (has_filament && color.IsOk()) {
         const wxColour base = readable_filament_track_colour(color, wxColour(70, 126, 205));
@@ -67,11 +79,22 @@ void draw_filament_track(wxGraphicsContext *gc, const wxRect &track, int tool_1b
         gc->DrawRectangle(track.x, track.y, track.width, track.height);
     } else {
         gc->SetBrush(wxBrush(*wxWHITE));
-        gc->SetPen(wxPen(wxColour(200, 203, 208), dip_window->FromDIP(1)));
+        gc->SetPen(*wxTRANSPARENT_PEN);
         gc->DrawRectangle(track.x, track.y, track.width, track.height);
     }
 
-    draw_filament_track_rails(gc, track, dip_window);
+    draw_filament_track_rails(gc, track, dip_window, paired_rails);
+
+    if (paired_rails && !(has_filament && color.IsOk())) {
+        const double pen_w = std::max(1.0, static_cast<double>(dip_window->FromDIP(1)));
+        gc->SetPen(wxPen(wxColour(175, 178, 182), static_cast<int>(pen_w)));
+        const double x0 = track.x + pen_w / 2.0;
+        const double x1 = track.x + track.width - pen_w / 2.0;
+        const double y0 = track.y + pen_w / 2.0;
+        const double y1 = track.y + track.height - pen_w / 2.0;
+        gc->StrokeLine(x0, y0, x1, y0);
+        gc->StrokeLine(x0, y1, x1, y1);
+    }
 
     switch (center) {
     case FilamentTrackCenter::ToolNumber: {
@@ -79,7 +102,20 @@ void draw_filament_track(wxGraphicsContext *gc, const wxRect &track, int tool_1b
         const wxColour text_colour = has_filament && color.IsOk()
             ? (filament_track_text_is_dark(base) ? *wxWHITE : wxColour(48, 48, 50))
             : wxColour(130, 134, 140);
-        draw_centered_text(gc, wxString::Format("%d", tool_1based), track, text_colour, 22, true, dip_window);
+        const bool compact = track.height < dip_window->FromDIP(70);
+        if (material.IsEmpty()) {
+            draw_centered_text(gc, wxString::Format("%d", tool_1based), track, text_colour,
+                compact ? 12 : 22, true, dip_window);
+        } else {
+            wxRect num_rect = track;
+            num_rect.height = static_cast<int>(track.height * 0.58);
+            wxRect mat_rect = track;
+            mat_rect.y      = track.y + static_cast<int>(track.height * 0.52);
+            mat_rect.height = track.height - (mat_rect.y - track.y);
+            draw_centered_text(gc, wxString::Format("%d", tool_1based), num_rect, text_colour,
+                compact ? 10 : 16, true, dip_window);
+            draw_centered_text(gc, material, mat_rect, text_colour, compact ? 6 : 8, true, dip_window);
+        }
         break;
     }
     case FilamentTrackCenter::EditIcon:
@@ -87,6 +123,9 @@ void draw_filament_track(wxGraphicsContext *gc, const wxRect &track, int tool_1b
         break;
     case FilamentTrackCenter::PlusSign:
         draw_centered_text(gc, "+", track, wxColour(130, 134, 140), 26, false, dip_window);
+        break;
+    case FilamentTrackCenter::SlashSign:
+        draw_centered_text(gc, "/", track, wxColour(130, 134, 140), 22, true, dip_window);
         break;
     }
 }
