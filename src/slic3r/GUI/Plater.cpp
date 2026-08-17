@@ -485,6 +485,7 @@ struct Sidebar::priv
     // BBS printer config
     StaticBox* m_panel_printer_title = nullptr;
     ScalableButton* m_printer_icon = nullptr;
+    ScalableButton* m_printer_connect = nullptr;
     ScalableButton* m_printer_bbl_sync = nullptr;
     ScalableButton* m_printer_setting = nullptr;
     wxStaticText *  m_text_printer_settings = nullptr;
@@ -576,6 +577,12 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
 
     //btn_sync_printer->Show(isBBL);
     m_printer_bbl_sync->Show(isBBL);
+    if (m_printer_connect) {
+        const std::string model = wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+        m_printer_connect->Show(boost::algorithm::icontains(model, "ChromaSet"));
+        if (m_panel_printer_title)
+            m_panel_printer_title->Layout();
+    }
 
     // ORCA show plate type combo box only when its supported
     PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
@@ -1674,6 +1681,14 @@ Sidebar::Sidebar(Plater *parent)
             //wizard_t->run(ConfigWizard::RR_USER, ConfigWizard::SP_CUSTOM);
             });
 
+        p->m_printer_connect = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "monitor_signal_strong");
+        p->m_printer_connect->SetToolTip(_L("Connection"));
+        p->m_printer_connect->Hide();
+        p->m_printer_connect->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
+            PhysicalPrinterDialog dlg(this->GetParent());
+            dlg.ShowModal();
+        });
+
         // ORCA use sync button on titlebar
         p->m_printer_bbl_sync = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "printer_sync_not");
         p->m_printer_bbl_sync->SetToolTip(_L("Synchronize nozzle information and the number of AMS"));
@@ -1694,6 +1709,7 @@ Sidebar::Sidebar(Plater *parent)
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
         h_sizer_title->Add(p->m_text_printer_settings, 0, wxALIGN_CENTER);
         h_sizer_title->AddStretchSpacer();
+        h_sizer_title->Add(p->m_printer_connect, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
         h_sizer_title->Add(p->m_printer_bbl_sync, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing())); // used larger margin to prevent accidental clicks
         h_sizer_title->Add(p->m_printer_setting, 0, wxALIGN_CENTER);
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::TitlebarMargin()));
@@ -2419,6 +2435,11 @@ void Sidebar::update_all_preset_comboboxes()
 
     auto p_mainframe = wxGetApp().mainframe;
     auto cfg = preset_bundle.printers.get_edited_preset().config;
+    const bool is_chromaset = boost::algorithm::icontains(cfg.opt_string("printer_model"), "ChromaSet");
+    if (p->m_printer_connect)
+        p->m_printer_connect->Show(is_chromaset);
+    if (p->m_panel_printer_title)
+        p->m_panel_printer_title->Layout();
 
     if (preset_bundle.use_bbl_network()) {
         //only show sync-ams button for BBL printer
@@ -2872,6 +2893,8 @@ void Sidebar::msw_rescale()
     p->m_panel_filament_title->GetSizer()
         ->SetMinSize(-1, 3 * wxGetApp().em_unit());
     p->m_printer_icon->msw_rescale();
+    if (p->m_printer_connect)
+        p->m_printer_connect->msw_rescale();
     p->m_printer_bbl_sync->msw_rescale();
     p->m_printer_icon->msw_rescale();
     p->m_printer_setting->msw_rescale();
@@ -2979,6 +3002,8 @@ void Sidebar::sys_color_changed()
 #endif
     //p->btn_sync_printer->SetIcon("printer_sync");
     p->m_printer_bbl_sync->msw_rescale();
+    if (p->m_printer_connect)
+        p->m_printer_connect->msw_rescale();
     // for (wxWindow* btn : std::vector<wxWindow*>{ p->btn_reslice, p->btn_export_gcode })
     //    wxGetApp().UpdateDarkUI(btn, true);
     p->m_printer_icon->msw_rescale();
@@ -5829,6 +5854,113 @@ void read_binary_stl(const std::string& filename, std::string& model_id, std::st
     return;
 }
 
+static Vec2d printable_area_size_from_config(const DynamicPrintConfig &cfg)
+{
+    const auto *opt = cfg.option<ConfigOptionPoints>("printable_area");
+    if (opt == nullptr || opt->values.size() < 3)
+        return Vec2d::Zero();
+    BoundingBoxf bb(opt->values);
+    if (!bb.defined)
+        return Vec2d::Zero();
+    return bb.size();
+}
+
+static int plate_dim_from_printable(double printable)
+{
+    return std::max(1, int(printable - Bed3D::Axes::DefaultTipRadius));
+}
+
+// Keep each instance on its source plate and center the group on that plate.
+// One object → plate center. Several objects on one plate keep their gaps and
+// the group as a whole is moved to the plate center so they do not overlap.
+static bool remap_project_instances_to_bed(PartPlateList &plates, Model &model, const Vec2d &source_printable)
+{
+    if (source_printable.x() < 1. || source_printable.y() < 1.)
+        return false;
+
+    const int old_w = plate_dim_from_printable(source_printable.x());
+    const int old_d = plate_dim_from_printable(source_printable.y());
+    int       new_w = 0, new_d = 0, new_h = 0;
+    plates.get_plate_size(new_w, new_d, new_h);
+    if (new_w <= 0 || new_d <= 0)
+        return false;
+    if (std::abs(new_w - old_w) < 1 && std::abs(new_d - old_d) < 1)
+        return false;
+
+    const int plate_count = plates.get_plate_count();
+    if (plate_count <= 0)
+        return false;
+
+    auto find_source_plate = [&](const Vec3d &offset) -> int {
+        int    best      = 0;
+        double best_dist = std::numeric_limits<double>::max();
+        for (int i = 0; i < plate_count; ++i) {
+            const Vec3d origin = plates.compute_origin_using_new_size(i, old_w, old_d);
+            const double dx    = offset.x() - (origin.x() + 0.5 * old_w);
+            const double dy    = offset.y() - (origin.y() + 0.5 * old_d);
+            const double dist  = dx * dx + dy * dy;
+            if (dist < best_dist) {
+                best_dist = dist;
+                best      = i;
+            }
+        }
+        return best;
+    };
+
+    std::vector<std::vector<std::pair<size_t, size_t>>> by_plate(plate_count);
+    for (size_t obj_idx = 0; obj_idx < model.objects.size(); ++obj_idx) {
+        ModelObject *object = model.objects[obj_idx];
+        if (object == nullptr)
+            continue;
+        for (size_t inst_idx = 0; inst_idx < object->instances.size(); ++inst_idx) {
+            ModelInstance *instance = object->instances[inst_idx];
+            if (instance == nullptr)
+                continue;
+            const int plate_idx = find_source_plate(instance->get_offset());
+            if (plate_idx >= 0 && plate_idx < plate_count)
+                by_plate[plate_idx].emplace_back(obj_idx, inst_idx);
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__
+                            << boost::format(": center instances on %1% plates (old bed %2%x%3%, new %4%x%5%)") %
+                                   plate_count % old_w % old_d % new_w % new_d;
+
+    bool moved = false;
+    for (int plate_idx = 0; plate_idx < plate_count; ++plate_idx) {
+        const auto &group = by_plate[plate_idx];
+        if (group.empty())
+            continue;
+        PartPlate *plate = plates.get_plate(plate_idx);
+        if (plate == nullptr)
+            continue;
+
+        BoundingBoxf3 group_bb;
+        for (const auto &[obj_idx, inst_idx] : group)
+            group_bb.merge(model.objects[obj_idx]->instance_bounding_box(inst_idx));
+        if (!group_bb.defined)
+            continue;
+
+        const Vec3d plate_center = plate->get_center_origin();
+        const Vec3d group_center = group_bb.center();
+        const Vec3d delta(plate_center.x() - group_center.x(), plate_center.y() - group_center.y(), 0.);
+        if (delta.x() * delta.x() + delta.y() * delta.y() < 1e-6)
+            continue;
+
+        for (const auto &[obj_idx, inst_idx] : group) {
+            ModelObject   *object   = model.objects[obj_idx];
+            ModelInstance *instance = object->instances[inst_idx];
+            instance->set_offset(instance->get_offset() + delta);
+            object->invalidate_bounding_box();
+        }
+        moved = true;
+    }
+
+    if (moved)
+        plates.reload_all_objects();
+    return moved;
+}
+
 // BBS: backup & restore
 std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_files, LoadStrategy strategy, bool ask_multi)
 {
@@ -5837,6 +5969,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
     bool is_user_cancel = false;
     bool translate_old = false;
     int current_width = 0, current_depth = 0, current_height = 0, project_filament_count = 1;
+    Vec2d source_printable_size = Vec2d::Zero();
 
     if (input_files.empty())
         return std::vector<size_t>();
@@ -6218,6 +6351,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                         this->model.model_info = model.model_info;
                     }
                 }
+
+                source_printable_size = printable_area_size_from_config(config);
 
                 if (load_config) {
                     if (!config.empty()) {
@@ -6851,6 +6986,9 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
         view3D->get_canvas3d()->remove_raycasters_for_picking(SceneRaycaster::EType::Bed);
         partplate_list.reset_size(current_width, current_depth, current_height, true, true);
         partplate_list.register_raycasters_for_picking(*view3D->get_canvas3d());
+    } else if (load_config && load_model && !this->model.objects.empty() &&
+               remap_project_instances_to_bed(partplate_list, this->model, source_printable_size)) {
+        update();
     }
 
     //BBS: add gcode loading logic in the end

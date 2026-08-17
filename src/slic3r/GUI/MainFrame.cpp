@@ -94,6 +94,21 @@ wxDEFINE_EVENT(EVT_BACKUP_POST, wxCommandEvent);
 wxDEFINE_EVENT(EVT_LOAD_URL, wxCommandEvent);
 wxDEFINE_EVENT(EVT_LOAD_PRINTER_URL, LoadPrinterViewEvent);
 
+namespace {
+bool is_chromaset_printer()
+{
+    if (!wxGetApp().preset_bundle)
+        return false;
+    const std::string model = wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+    return boost::algorithm::icontains(model, "ChromaSet");
+}
+
+wxString chromaset_remote_print_label()
+{
+    return _L("Remote print");
+}
+} // namespace
+
 enum class ERescaleTarget
 {
     Mainframe,
@@ -1095,6 +1110,8 @@ void MainFrame::show_option(bool show)
             m_print_btn->Hide();
             m_slice_option_btn->Hide();
             m_print_option_btn->Hide();
+            if (m_print_panel)
+                m_print_panel->Hide();
             Layout();
         }
     } else {
@@ -1103,6 +1120,8 @@ void MainFrame::show_option(bool show)
             m_print_btn->Show();
             m_slice_option_btn->Show();
             m_print_option_btn->Show();
+            if (m_print_panel)
+                m_print_panel->Show();
             Layout();
         }
     }
@@ -1672,12 +1691,12 @@ wxBoxSizer* MainFrame::create_side_tools()
     m_print_select = ePrintPlate;
 
     auto slice_panel = new wxPanel(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxTRANSPARENT_WINDOW);
-    auto print_panel = new wxPanel(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxTRANSPARENT_WINDOW);
+    m_print_panel = new wxPanel(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxTRANSPARENT_WINDOW);
 
     m_slice_btn = new SideButton(slice_panel, _L("Slice plate"), "");
     m_slice_option_btn = new SideButton(slice_panel, "", "sidebutton_dropdown", 0, 14);
-    m_print_btn = new SideButton(print_panel, _L("Print plate"), "");
-    m_print_option_btn = new SideButton(print_panel, "", "sidebutton_dropdown", 0, 14);
+    m_print_btn = new SideButton(m_print_panel, _L("Print plate"), "");
+    m_print_option_btn = new SideButton(m_print_panel, "", "sidebutton_dropdown", 0, 14);
 
     auto slice_sizer = new wxBoxSizer(wxHORIZONTAL);
     slice_sizer->Add(m_slice_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
@@ -1687,7 +1706,7 @@ wxBoxSizer* MainFrame::create_side_tools()
     auto print_sizer = new wxBoxSizer(wxHORIZONTAL);
     print_sizer->Add(m_print_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
     print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
-    print_panel->SetSizer(print_sizer);
+    m_print_panel->SetSizer(print_sizer);
 
     update_side_button_style();
     m_slice_option_btn->Enable();
@@ -1695,7 +1714,7 @@ wxBoxSizer* MainFrame::create_side_tools()
     sizer->Add(FromDIP(15), 0, 0, 0, 0);
     sizer->Add(slice_panel);
     sizer->Add(FromDIP(15), 0, 0, 0, 0);
-    sizer->Add(print_panel);
+    sizer->Add(m_print_panel);
     sizer->Add(FromDIP(19), 0, 0, 0, 0);
 
     sizer->Layout();
@@ -1839,8 +1858,8 @@ wxBoxSizer* MainFrame::create_side_tools()
             SidePopup* p = new SidePopup(this);
 
             if (wxGetApp().preset_bundle
-                && !wxGetApp().preset_bundle->is_bbl_vendor()) {
-                // ThirdParty Buttons
+                && (!wxGetApp().preset_bundle->is_bbl_vendor() || is_chromaset_printer())) {
+                // Third-party and ChromaSet: remote print + export G-code. No Print plate.
                 SideButton* export_gcode_btn = new SideButton(p, _L("Export G-code file"), "");
                 export_gcode_btn->SetCornerRadius(0);
                 export_gcode_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
@@ -1852,12 +1871,13 @@ wxBoxSizer* MainFrame::create_side_tools()
                     p->Dismiss();
                     });
 
-                // upload and print
-                SideButton* send_gcode_btn = new SideButton(p, _L("Print"), "");
+                const bool chromaset = is_chromaset_printer();
+                const wxString print_label = chromaset ? chromaset_remote_print_label() : _L("Print");
+                SideButton* send_gcode_btn = new SideButton(p, print_label, "");
                 send_gcode_btn->SetCornerRadius(0);
-                send_gcode_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
-                    m_print_btn->SetLabel(_L("Print"));
-                    m_print_select = eSendGcode;
+                send_gcode_btn->Bind(wxEVT_BUTTON, [this, p, print_label, chromaset](wxCommandEvent&) {
+                    m_print_btn->SetLabel(print_label);
+                    m_print_select = chromaset ? ePrintPlate : eSendGcode;
                     m_print_enable = get_enable_print_status();
                     m_print_btn->Enable(m_print_enable);
                     this->Layout();
@@ -3802,7 +3822,7 @@ void MainFrame::on_config_changed(DynamicPrintConfig* config) const
 void MainFrame::set_print_button_to_default(PrintSelectType select_type)
 {
     if (select_type == PrintSelectType::ePrintPlate) {
-        m_print_btn->SetLabel(_L("Print plate"));
+        m_print_btn->SetLabel(is_chromaset_printer() ? chromaset_remote_print_label() : _L("Print plate"));
         m_print_select = ePrintPlate;
         if (m_print_enable)
             m_print_enable = get_enable_print_status();

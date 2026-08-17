@@ -404,6 +404,7 @@ public:
     SideButton* m_slice_option_btn{ nullptr };
     SideButton* m_print_btn{ nullptr };
     SideButton* m_print_option_btn{ nullptr };
+    wxPanel*    m_print_panel{ nullptr };
 
     SidePopup*  m_slice_option_pop_up{ nullptr };
 
