@@ -95,12 +95,28 @@ wxBitmap load_forward_icon(wxWindow *parent)
     return create_scaled_bitmap("mall_control_forward", parent, 15);
 }
 
-wxSize temp_slot_size(wxWindow *win)
+wxSize glyph_size(wxWindow *win, const wxString &text)
 {
     wxCoord w = 0;
     wxCoord h = 0;
-    win->GetTextExtent("000", &w, &h);
-    return wxSize(std::max(w, win->FromDIP(22)), std::max(h, win->FromDIP(22)));
+    win->GetTextExtent(text, &w, &h);
+    return wxSize(std::max(1, w), std::max(1, h));
+}
+
+void pin_label(wxStaticText *label)
+{
+    if (label == nullptr)
+        return;
+    const wxString text = label->GetLabelText().IsEmpty() ? wxString::FromUTF8("0") : label->GetLabelText();
+    const wxSize size = glyph_size(label, text);
+    label->SetMinSize(size);
+    label->SetMaxSize(wxSize(-1, size.GetHeight()));
+}
+
+wxSize temp_slot_size(wxWindow *win)
+{
+    const wxSize glyph = glyph_size(win, wxString::FromUTF8("000"));
+    return wxSize(std::max(glyph.GetWidth(), win->FromDIP(22)), glyph.GetHeight());
 }
 
 void pin_icon(wxStaticBitmap *icon, int dip_w, int dip_h)
@@ -123,14 +139,16 @@ TempSlotWidgets make_temp_slot(wxWindow *parent, bool editable)
     TempSlotWidgets slot;
     slot.host = new wxPanel(parent, wxID_ANY);
     slot.host->SetBackgroundColour(DeviceUiStyle::card_background());
-    const wxSize size = temp_slot_size(parent);
-    slot.host->SetMinSize(size);
-    slot.host->SetMaxSize(size);
 
     slot.label = new wxStaticText(slot.host, wxID_ANY, wxString::FromUTF8("--"));
     slot.label->SetForegroundColour(DeviceUiStyle::text_primary());
     slot.label->SetBackgroundColour(DeviceUiStyle::card_background());
     set_status_font(slot.label);
+    pin_label(slot.label);
+
+    const wxSize size = temp_slot_size(slot.label);
+    slot.host->SetMinSize(size);
+    slot.host->SetMaxSize(size);
 
     auto *sizer = new wxBoxSizer(wxVERTICAL);
     sizer->AddStretchSpacer(1);
@@ -162,18 +180,25 @@ wxWindow *make_temp_cell(wxWindow *parent, PrinterStatusPanel::TempView &view,
 {
     auto *cell = new wxPanel(parent, wxID_ANY);
     cell->SetBackgroundColour(DeviceUiStyle::card_background());
-    auto *row = new wxBoxSizer(wxHORIZONTAL);
+    const int row_h = cell->FromDIP(icon_h);
+    cell->SetMinSize(wxSize(-1, row_h));
 
     view.icon = new wxStaticBitmap(cell, wxID_ANY, load_dashboard_icon(cell, icon_name, icon_w, icon_h));
     pin_icon(view.icon, icon_w, icon_h);
 
-    const TempSlotWidgets current_slot = make_temp_slot(cell, false);
-    auto *slash = new wxStaticText(cell, wxID_ANY, wxString::FromUTF8("/"));
+    auto *texts = new wxPanel(cell, wxID_ANY);
+    texts->SetBackgroundColour(DeviceUiStyle::card_background());
+    texts->SetMinSize(wxSize(-1, row_h));
+    texts->SetMaxSize(wxSize(-1, row_h));
+
+    const TempSlotWidgets current_slot = make_temp_slot(texts, false);
+    auto *slash = new wxStaticText(texts, wxID_ANY, wxString::FromUTF8("/"));
     slash->SetForegroundColour(DeviceUiStyle::text_primary());
     slash->SetBackgroundColour(DeviceUiStyle::card_background());
     set_status_font(slash);
+    pin_label(slash);
 
-    auto *target_hit = new wxPanel(cell, wxID_ANY);
+    auto *target_hit = new wxPanel(texts, wxID_ANY);
     target_hit->SetBackgroundColour(DeviceUiStyle::card_background());
     const wxCursor hand(wxCURSOR_HAND);
     target_hit->SetCursor(hand);
@@ -185,6 +210,7 @@ wxWindow *make_temp_cell(wxWindow *parent, PrinterStatusPanel::TempView &view,
     unit->SetBackgroundColour(DeviceUiStyle::card_background());
     unit->SetCursor(hand);
     set_status_font(unit);
+    pin_label(unit);
     auto *target_row = new wxBoxSizer(wxHORIZONTAL);
     target_row->Add(target_slot.host, 0, wxALIGN_CENTER_VERTICAL);
     target_row->Add(unit, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, cell->FromDIP(2));
@@ -197,11 +223,21 @@ wxWindow *make_temp_cell(wxWindow *parent, PrinterStatusPanel::TempView &view,
     view.temp_unit = unit;
     view.temp_target_hit = target_hit;
 
+    auto *inner = new wxBoxSizer(wxHORIZONTAL);
+    inner->Add(current_slot.host, 0, wxALIGN_CENTER_VERTICAL);
+    inner->Add(slash, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, cell->FromDIP(2));
+    inner->Add(target_hit, 0, wxALIGN_CENTER_VERTICAL);
+
+    auto *outer = new wxBoxSizer(wxVERTICAL);
+    outer->AddStretchSpacer(1);
+    outer->Add(inner, 0, wxALIGN_LEFT);
+    outer->AddStretchSpacer(1);
+    texts->SetSizer(outer);
+
+    auto *row = new wxBoxSizer(wxHORIZONTAL);
     row->Add(view.icon, 0, wxALIGN_CENTER_VERTICAL);
     row->AddSpacer(cell->FromDIP(5));
-    row->Add(current_slot.host, 0, wxALIGN_CENTER_VERTICAL);
-    row->Add(slash, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, cell->FromDIP(2));
-    row->Add(target_hit, 0, wxALIGN_CENTER_VERTICAL);
+    row->Add(texts, 0, wxALIGN_CENTER_VERTICAL);
     cell->SetSizer(row);
     return cell;
 }

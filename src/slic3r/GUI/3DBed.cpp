@@ -21,6 +21,7 @@
 #include <iterator>
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/log/trivial.hpp>
 
@@ -34,6 +35,23 @@ static const float GROUND_Z = -0.04f;
 
 namespace Slic3r {
 namespace GUI {
+
+bool is_coprint_quadro_printer()
+{
+    auto bundle = wxGetApp().preset_bundle;
+    if (bundle == nullptr)
+        return false;
+    const auto *opt = bundle->printers.get_edited_preset().config.opt<ConfigOptionString>("printer_model");
+    return opt != nullptr && boost::algorithm::icontains(opt->value, "Quadro");
+}
+
+bool Bed3D::is_quadro_bed() const
+{
+    if (boost::algorithm::icontains(m_model_filename, "Quadro") ||
+        boost::algorithm::icontains(m_texture_filename, "Quadro"))
+        return true;
+    return is_coprint_quadro_printer();
+}
 
 bool init_model_from_poly(GLModel &model, const ExPolygon &poly, float z)
 {
@@ -478,12 +496,23 @@ void Bed3D::render_axes()
 void Bed3D::render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom)
 {
     if (!bottom)
-        // CoPrint: hide the STL from the top view for now — the PNG already has the plate
-        // silhouette (tabs + back slot). The mesh silhouette does not match the artwork.
-        render_texture(bottom, canvas);
+        // Quadro and ChromaSet: STL plate from above. SVG lettering is drawn after the PartPlate grid.
+        render_model(view_matrix, projection_matrix);
     else
-        // CoPrint: the STL bed model is hidden when viewed from below, show grid reference lines instead.
         render_gridlines(view_matrix, projection_matrix);
+
+    if (!bottom && !boost::algorithm::iends_with(m_texture_filename, ".svg"))
+        // Opaque PNG beds stay in this pass so the plate grid can overlay them.
+        render_texture(bottom, canvas);
+}
+
+void Bed3D::render_svg_overlay(GLCanvas3D& canvas, bool bottom)
+{
+    if (bottom)
+        return;
+    if (!boost::algorithm::iends_with(m_texture_filename, ".svg"))
+        return;
+    render_texture(bottom, canvas);
 }
 
 // CoPrint: draws m_texture_filename (the machine's bed_texture) over a quad that covers the
@@ -530,7 +559,8 @@ void Bed3D::render_texture(bool bottom, GLCanvas3D& canvas)
     shader->set_uniform("view_model_matrix", camera.get_view_matrix());
     shader->set_uniform("projection_matrix", camera.get_projection_matrix());
     shader->set_uniform("transparent_background", bottom);
-    shader->set_uniform("svg_source", boost::algorithm::iends_with(m_texture.get_source(), ".svg"));
+    // svg_source paints an opaque grey quad and would hide the plate grid under the artwork.
+    shader->set_uniform("svg_source", false);
 
     glsafe(::glEnable(GL_DEPTH_TEST));
     glsafe(::glDepthMask(GL_FALSE));
@@ -643,13 +673,13 @@ void Bed3D::update_gridlines()
     const BoundingBox bed_bbox = poly.contour.bounding_box();
 
     Polylines axes_lines;
-    for (coord_t x = bed_bbox.min.x(); x <= bed_bbox.max.x(); x += scale_(10.0)) {
+    for (coord_t x = bed_bbox.min.x(); x <= bed_bbox.max.x(); x += scale_(20.0)) {
         Polyline line;
         line.append(Point(x, bed_bbox.min.y()));
         line.append(Point(x, bed_bbox.max.y()));
         axes_lines.push_back(line);
     }
-    for (coord_t y = bed_bbox.min.y(); y <= bed_bbox.max.y(); y += scale_(10.0)) {
+    for (coord_t y = bed_bbox.min.y(); y <= bed_bbox.max.y(); y += scale_(20.0)) {
         Polyline line;
         line.append(Point(bed_bbox.min.x(), y));
         line.append(Point(bed_bbox.max.x(), y));
@@ -667,12 +697,9 @@ void Bed3D::update_gridlines()
         BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": Unable to create bed grid lines\n";
 }
 
-// CoPrint: build the textured quad used by render_texture(). Covers the printable area, extended
-// (if needed) to also include the bed model's world-space bounding box, so that bed artwork with
-// non-printable areas (e.g. handle tabs) baked in beyond the printable rectangle is shown in the
-// right place instead of being squeezed into the printable rectangle itself. When there is no bed
-// model (or it doesn't extend past the printable area, e.g. ChromaSet), this is just the printable
-// rectangle, same as m_triangles.
+// CoPrint: textured quad for bed_texture. ChromaSet covers the printable rectangle.
+// Quadro SVG is a drawing of the whole PEI sheet (printable square + handle tabs), so
+// the quad follows the STL's world XY instead of being squashed into 300×300.
 void Bed3D::update_texture_quad()
 {
     if (m_texture_quad.is_initialized())
@@ -691,23 +718,16 @@ void Bed3D::update_texture_quad()
         max = max.cwiseMax(world).eval();
     }
 
-    // Quadro PEI PNG is 4096x4418: 134px back tab, 4096px square body, 188px front tab.
-    // Pin the square body to printable_area and let the tabs hang outside it. Stretching the
-    // full image over the STL bbox (325mm vs the PNG's 323.6mm) was shifting the artwork ~1.2mm
-    // in -Y, so the origin no longer sat on the printable square's front edge.
-    if (boost::algorithm::iends_with(m_texture_filename, "coprint_pei_sheet_buildplate_texture.png")) {
-        const double print_w = max.x() - min.x();
-        const double src_w = 4096.0;
-        const double src_top = 134.0;
-        const double src_bot = 188.0;
-        min.y() -= src_bot * print_w / src_w;
-        max.y() += src_top * print_w / src_w;
-    } else {
+    if (is_quadro_bed()) {
         BoundingBoxf3 model_bb = m_model.get_bounding_box();
         if (model_bb.defined) {
+            // STL is centered on the body; offset places the square on the printable area and
+            // lets the front/back tabs hang outside (front ~Y<0). Same aspect as the SVG.
             model_bb.translate(m_model_offset);
-            min = min.cwiseMin(Vec2d(model_bb.min.x(), model_bb.min.y())).eval();
-            max = max.cwiseMax(Vec2d(model_bb.max.x(), model_bb.max.y())).eval();
+            min.x() = model_bb.min.x();
+            min.y() = model_bb.min.y();
+            max.x() = model_bb.max.x();
+            max.y() = model_bb.max.y();
         }
     }
 

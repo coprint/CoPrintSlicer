@@ -264,6 +264,7 @@ private:
     wxStaticText*               m_loading_text{ nullptr };
 };
 
+void stop_moonraker_model_file_probes();
 
 } // namespace GUI
 } // namespace Slic3r

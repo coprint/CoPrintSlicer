@@ -33,6 +33,9 @@ class MachineObject;
 
 namespace GUI {
 
+namespace DeviceDashboard {
+struct FilamentSelection;
+}
 
 class CloudTaskManagerPage;
 enum class PrinterWebViewTab {
@@ -127,7 +130,7 @@ private:
     bool send_print_control_command(bool stop_print);
     bool show_filament_material_dialog(bool start_load_after_save, const wxPoint& anchor_screen_pos = wxDefaultPosition);
     void prompt_and_save_filament_selection_then_load();
-    void save_filament_selection_to_moonraker(int ui_tool, const wxString &material, const wxString &color_hex);
+    void save_filament_selection_to_moonraker(int ui_tool, const DeviceDashboard::FilamentSelection &selection);
     void clear_filament_selection_from_moonraker(int ui_tool);
     void refresh_moonraker_status_from_selected_machine();
     void refresh_dashboard_panels(MachineObject *obj);
@@ -219,6 +222,7 @@ private:
     std::array<int, 4> m_filament_assigned_tool_mapping{ 1, 2, 3, 4 };
     std::array<wxColour, 4> m_filament_loaded_tool_colors;
     std::array<wxString, 4> m_filament_loaded_tool_materials;
+    std::array<wxString, 4> m_filament_loaded_tool_brands;
     std::array<bool, 4> m_filament_tool_has_color{};
     // Colors synced from the Plater at upload time — used as fallback when
     // no printer metadata is available (e.g. printer is idle after upload).

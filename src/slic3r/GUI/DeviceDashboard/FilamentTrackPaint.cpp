@@ -102,8 +102,8 @@ void draw_filament_track(wxGraphicsContext *gc, const wxRect &track, int tool_1b
     case FilamentTrackCenter::ToolNumber: {
         const wxColour base = readable_filament_track_colour(color, wxColour(70, 126, 205));
         const wxColour text_colour = has_filament && color.IsOk()
-            ? (filament_track_fill_is_dark(base) ? *wxWHITE : wxColour(48, 48, 50))
-            : wxColour(130, 134, 140);
+            ? (filament_track_fill_is_dark(base) ? *wxWHITE : DeviceUiStyle::text_primary())
+            : DeviceUiStyle::text_primary();
         const bool compact = track.height < DeviceUiStyle::dip(dip_window, 70);
         if (material.IsEmpty()) {
             draw_centered_text(gc, wxString::Format("%d", tool_1based), track, text_colour,
@@ -125,10 +125,10 @@ void draw_filament_track(wxGraphicsContext *gc, const wxRect &track, int tool_1b
         draw_centered_bitmap(gc, edit_icon, track);
         break;
     case FilamentTrackCenter::PlusSign:
-        draw_centered_text(gc, "+", track, wxColour(130, 134, 140), DeviceUiStyle::scaled(26), false, dip_window);
+        draw_centered_text(gc, "+", track, DeviceUiStyle::text_primary(), DeviceUiStyle::scaled(26), false, dip_window);
         break;
     case FilamentTrackCenter::SlashSign:
-        draw_centered_text(gc, "/", track, wxColour(130, 134, 140), DeviceUiStyle::scaled(22), true, dip_window);
+        draw_centered_text(gc, "/", track, DeviceUiStyle::text_primary(), DeviceUiStyle::scaled(22), true, dip_window);
         break;
     }
 }
@@ -152,8 +152,8 @@ void draw_spool_center_mark(wxGraphicsContext *gc, const wxRect &center, int too
     case FilamentTrackCenter::ToolNumber: {
         const wxColour base = readable_filament_track_colour(color, wxColour(70, 126, 205));
         const wxColour text_colour = has_filament && color.IsOk()
-            ? (filament_track_fill_is_dark(base) ? *wxWHITE : wxColour(48, 48, 50))
-            : wxColour(130, 134, 140);
+            ? (filament_track_fill_is_dark(base) ? *wxWHITE : DeviceUiStyle::text_primary())
+            : DeviceUiStyle::text_primary();
         if (material.IsEmpty()) {
             draw_centered_text(gc, wxString::Format("%d", tool_1based), center, text_colour,
                 DeviceUiStyle::scaled(12), true, dip_window);
@@ -174,10 +174,10 @@ void draw_spool_center_mark(wxGraphicsContext *gc, const wxRect &center, int too
         draw_centered_bitmap(gc, edit_icon, center);
         break;
     case FilamentTrackCenter::PlusSign:
-        draw_centered_text(gc, "+", center, wxColour(130, 134, 140), DeviceUiStyle::scaled(26), false, dip_window);
+        draw_centered_text(gc, "+", center, DeviceUiStyle::text_primary(), DeviceUiStyle::scaled(26), false, dip_window);
         break;
     case FilamentTrackCenter::SlashSign:
-        draw_centered_text(gc, "/", center, wxColour(130, 134, 140), DeviceUiStyle::scaled(22), true, dip_window);
+        draw_centered_text(gc, "/", center, DeviceUiStyle::text_primary(), DeviceUiStyle::scaled(22), true, dip_window);
         break;
     }
 }
@@ -234,6 +234,11 @@ void draw_filament_spool(wxGraphicsContext *gc, const wxRect &bounds, int tool_1
     gc->SetBrush(wxBrush(kSpoolRailBorder));
     gc->DrawRectangle(left_border_x, bounds.y, border_w, rail_h);
     gc->DrawRectangle(right_border_x, bounds.y, border_w, rail_h);
+    if (!(has_filament && color.IsOk())) {
+        gc->DrawRectangle(center_rect.x, center_rect.y, center_rect.width, border_w);
+        gc->DrawRectangle(center_rect.x, center_rect.y + center_rect.height - border_w,
+            center_rect.width, border_w);
+    }
     gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
 
     draw_spool_center_mark(gc, center_rect, tool_1based, color, has_filament, center, edit_icon,

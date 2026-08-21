@@ -179,6 +179,8 @@ struct StaticBambuLib
 namespace Slic3r {
 namespace GUI {
 
+void stop_moonraker_model_file_probes();
+
 class MainFrame;
 
 void start_ping_test()
@@ -2631,6 +2633,7 @@ bool GUI_App::OnInit()
 
 int GUI_App::OnExit()
 {
+    stop_moonraker_model_file_probes();
     stop_sync_user_preset();
 
     if (m_device_manager) {

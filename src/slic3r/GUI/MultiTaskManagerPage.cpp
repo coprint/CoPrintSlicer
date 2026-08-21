@@ -9,6 +9,7 @@
 #include "slic3r/Utils/MoonrakerPrinterAgent.hpp"
 #include <wx/listimpl.cpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
+#include <boost/log/core.hpp>
 #include <boost/log/trivial.hpp>
 #include <nlohmann/json.hpp>
 
@@ -35,6 +36,17 @@ namespace {
 constexpr int CLOUD_HISTORY_ITEM_HEIGHT = 96;
 constexpr size_t MOONRAKER_MODEL_FILE_LIMIT = 30;
 std::atomic<unsigned> s_moonraker_model_probe_gen{ 0 };
+std::atomic<bool> s_moonraker_model_probe_stop{ false };
+
+bool moonraker_probe_should_stop()
+{
+    return s_moonraker_model_probe_stop.load(std::memory_order_acquire);
+}
+
+bool moonraker_probe_can_log()
+{
+    return !moonraker_probe_should_stop() && static_cast<bool>(boost::log::core::get());
+}
 
 std::string moonraker_base_url(MachineObject* obj)
 {
@@ -289,18 +301,20 @@ wxImage load_moonraker_thumbnail_image(const std::string& url)
         .perform_sync();
 
     if (body.empty()) {
-        BOOST_LOG_TRIVIAL(info) << "Moonraker thumbnail download: url=" << url
-                                << " status=" << status_code
-                                << " error=" << error_message;
+        if (moonraker_probe_can_log())
+            BOOST_LOG_TRIVIAL(info) << "Moonraker thumbnail download: url=" << url
+                                    << " status=" << status_code
+                                    << " error=" << error_message;
         return wxImage();
     }
 
     wxMemoryInputStream stream(body.data(), body.size());
     wxImage image(stream, wxBITMAP_TYPE_ANY);
-    BOOST_LOG_TRIVIAL(info) << "Moonraker thumbnail download: url=" << url
-                            << " status=" << status_code
-                            << " ok=" << image.IsOk()
-                            << " bytes=" << body.size();
+    if (moonraker_probe_can_log())
+        BOOST_LOG_TRIVIAL(info) << "Moonraker thumbnail download: url=" << url
+                                << " status=" << status_code
+                                << " ok=" << image.IsOk()
+                                << " bytes=" << body.size();
     return image.IsOk() ? image : wxImage();
 }
 
@@ -314,6 +328,9 @@ void probe_moonraker_model_metadata(const std::string& base_url,
     size_t thumbnail_count = 0;
 
     for (size_t i = 0; i < probe_count; ++i) {
+        if (moonraker_probe_should_stop())
+            return;
+
         auto& file = files[i];
         std::string body;
         unsigned status_code = 0;
@@ -377,16 +394,18 @@ void probe_moonraker_model_metadata(const std::string& base_url,
             file.thumbnail_url = base_url + "/server/files/gcodes/" + moonraker_url_encode_path(thumbnail_path);
         }
 
-        BOOST_LOG_TRIVIAL(info) << "Moonraker model metadata probe: file=" << file.path
-                                << " status=" << status_code
-                                << " thumbnail=" << file.thumbnail_url
-                                << " estimated_time=" << file.estimated_time_seconds
-                                << " filament_weight=" << file.filament_weight_grams
-                                << " error=" << error_message;
+        if (moonraker_probe_can_log())
+            BOOST_LOG_TRIVIAL(info) << "Moonraker model metadata probe: file=" << file.path
+                                    << " status=" << status_code
+                                    << " thumbnail=" << file.thumbnail_url
+                                    << " estimated_time=" << file.estimated_time_seconds
+                                    << " filament_weight=" << file.filament_weight_grams
+                                    << " error=" << error_message;
     }
 
-    BOOST_LOG_TRIVIAL(info) << "Moonraker model metadata probe summary: checked=" << probe_count
-                            << " thumbnails=" << thumbnail_count;
+    if (moonraker_probe_can_log())
+        BOOST_LOG_TRIVIAL(info) << "Moonraker model metadata probe summary: checked=" << probe_count
+                                << " thumbnails=" << thumbnail_count;
 }
 
 MoonrakerModelDeleteResult delete_moonraker_model_file_sync(const std::string& base_url,
@@ -910,7 +929,8 @@ void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> 
     const std::string base_url = moonraker_base_url(obj);
     const std::string api_key = moonraker_api_key(obj);
     if (base_url.empty()) {
-        BOOST_LOG_TRIVIAL(warning) << "Moonraker model probe: no selected printer/base URL";
+        if (moonraker_probe_can_log())
+            BOOST_LOG_TRIVIAL(warning) << "Moonraker model probe: no selected printer/base URL";
         MoonrakerModelProbeResult empty;
         empty.error_message = "No printer selected or printer IP is missing";
         if (on_result)
@@ -925,6 +945,9 @@ void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> 
     // is opened/refreshed while a previous request is still in flight.
     const unsigned gen = ++s_moonraker_model_probe_gen;
     std::thread([machine_id, base_url, api_key, printer_agent, gen, on_result = std::move(on_result)]() {
+        if (moonraker_probe_should_stop())
+            return;
+
         auto* moonraker_agent = dynamic_cast<MoonrakerPrinterAgent*>(printer_agent.get());
         const std::string url = base_url + "/server/files/list?root=gcodes";
         MoonrakerModelProbeResult result;
@@ -963,12 +986,14 @@ void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> 
             std::string ws_error;
             if (!moonraker_agent->list_gcode_files(files_json, ws_error, 20000)) {
                 result.error_message = ws_error.empty() ? "WebSocket files.list failed" : ws_error;
-                BOOST_LOG_TRIVIAL(warning) << "Moonraker model probe via websocket failed: " << result.error_message;
+                if (moonraker_probe_can_log())
+                    BOOST_LOG_TRIVIAL(warning) << "Moonraker model probe via websocket failed: " << result.error_message;
                 return false;
             }
             parse_files_array(files_json);
-            BOOST_LOG_TRIVIAL(info) << "Moonraker model probe via websocket: machine=" << machine_id
-                                    << " files=" << result.file_count;
+            if (moonraker_probe_can_log())
+                BOOST_LOG_TRIVIAL(info) << "Moonraker model probe via websocket: machine=" << machine_id
+                                        << " files=" << result.file_count;
             return true;
         };
 
@@ -1013,49 +1038,57 @@ void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> 
                     result.error_message = "Empty Moonraker files/list response";
                 }
 
-                BOOST_LOG_TRIVIAL(info) << "Moonraker model probe via http: machine=" << machine_id
-                                        << " url=" << url
-                                        << " status=" << result.status_code
-                                        << " files=" << result.file_count
-                                        << " error=" << result.error_message;
+                if (moonraker_probe_can_log())
+                    BOOST_LOG_TRIVIAL(info) << "Moonraker model probe via http: machine=" << machine_id
+                                            << " url=" << url
+                                            << " status=" << result.status_code
+                                            << " files=" << result.file_count
+                                            << " error=" << result.error_message;
             } catch (const std::exception& ex) {
                 result.ok = false;
                 result.error_message = ex.what();
-                BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed: " << ex.what();
+                if (moonraker_probe_can_log())
+                    BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed: " << ex.what();
             } catch (...) {
                 result.ok = false;
                 result.error_message = "unknown exception";
-                BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed with unknown exception";
+                if (moonraker_probe_can_log())
+                    BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed with unknown exception";
             }
         };
 
         try {
+            if (moonraker_probe_should_stop())
+                return;
             if (!run_via_websocket()) {
                 run_via_http();
-                if (!result.ok && gen == s_moonraker_model_probe_gen.load()) {
-                    BOOST_LOG_TRIVIAL(warning) << "Moonraker model probe: retrying after HTTP failure"
-                                               << " error=" << result.error_message;
+                if (!moonraker_probe_should_stop() && !result.ok && gen == s_moonraker_model_probe_gen.load()) {
+                    if (moonraker_probe_can_log())
+                        BOOST_LOG_TRIVIAL(warning) << "Moonraker model probe: retrying after HTTP failure"
+                                                   << " error=" << result.error_message;
                     std::this_thread::sleep_for(std::chrono::milliseconds(700));
-                    if (gen == s_moonraker_model_probe_gen.load()) {
+                    if (!moonraker_probe_should_stop() && gen == s_moonraker_model_probe_gen.load()) {
                         if (!run_via_websocket())
                             run_via_http();
                     }
                 }
             }
 
-            if (result.ok && !result.files.empty())
+            if (!moonraker_probe_should_stop() && result.ok && !result.files.empty())
                 probe_moonraker_model_metadata(base_url, api_key, moonraker_agent, result.files);
         } catch (const std::exception& ex) {
             result.ok = false;
             result.error_message = ex.what();
-            BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed: " << ex.what();
+            if (moonraker_probe_can_log())
+                BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed: " << ex.what();
         } catch (...) {
             result.ok = false;
             result.error_message = "unknown exception";
-            BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed with unknown exception";
+            if (moonraker_probe_can_log())
+                BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed with unknown exception";
         }
 
-        if (gen == s_moonraker_model_probe_gen.load() && on_result)
+        if (!moonraker_probe_should_stop() && gen == s_moonraker_model_probe_gen.load() && on_result)
             on_result(std::move(result));
     }).detach();
 }
@@ -1192,6 +1225,12 @@ private:
     wxString m_name;
 };
 } // namespace
+
+void stop_moonraker_model_file_probes()
+{
+    s_moonraker_model_probe_stop.store(true, std::memory_order_release);
+    ++s_moonraker_model_probe_gen;
+}
 
 MultiTaskItem::MultiTaskItem(wxWindow* parent, MachineObject* obj, int type)
     : DeviceItem(parent, obj),

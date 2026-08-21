@@ -980,11 +980,10 @@ void PartPlate::render_grid(bool bottom) {
     const Transform3d& view_matrix = camera.get_view_matrix();
     const Transform3d& projection_matrix = camera.get_projection_matrix();
 
-    // CoPrint: plate grid geometry sits at GROUND_Z_GRIDLINE (-0.26), below the unselected
-    // fill (-0.03). On the selected plate the PEI texture covers it (intentional). On
-    // unselected plates — and from below, where there is no texture — lift the lines
-    // above the fill and skip the depth test so the grid is actually visible.
-    const bool overlay_grid = !m_selected || bottom;
+    // Plate grid geometry sits at GROUND_Z_GRIDLINE (-0.26), below the unselected fill
+    // (-0.03). Overlay so the lines stay visible on every profile's selected top view;
+    // SVG lettering is drawn afterwards (Bed3D::render_svg_overlay) so it sits on top.
+    const bool overlay_grid = true;
     Transform3d grid_view = view_matrix;
     if (overlay_grid) {
         glsafe(::glDisable(GL_DEPTH_TEST));
@@ -3393,10 +3392,8 @@ void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projec
         shader->stop_using();
     }
 
-    // CoPrint: the selected plate already has a grid baked into the PEI texture when viewed
-    // from above — do not overlay PartPlate gridlines there. Unselected plates have no
-    // texture, and the bottom view hides the texture, so draw a reference grid in those cases.
-    const bool draw_grid = show_grid && (!m_selected || bottom);
+    // Keep the plate grid visible from above on every profile (selected plate included).
+    const bool draw_grid = show_grid;
     if (draw_grid)
         render_grid(bottom);
 

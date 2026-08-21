@@ -412,6 +412,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/FilamentTrackPaint.hpp
     GUI/DeviceDashboard/FilamentTrackSlot.cpp
     GUI/DeviceDashboard/FilamentTrackSlot.hpp
+    GUI/DeviceDashboard/FilamentCatalog.cpp
+    GUI/DeviceDashboard/FilamentCatalog.hpp
+    GUI/DeviceDashboard/FilamentSelectDialog.cpp
+    GUI/DeviceDashboard/FilamentSelectDialog.hpp
     GUI/DeviceDashboard/services/DashboardStateAdapter.cpp
     GUI/DeviceDashboard/services/DashboardStateAdapter.hpp
     GUI/DeviceDashboard/panels/CameraPanel.cpp

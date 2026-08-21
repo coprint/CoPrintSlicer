@@ -146,7 +146,7 @@ private:
         font.SetWeight(wxFONTWEIGHT_BOLD);
         font.SetPointSize(std::max(8, s(font.GetPointSize() + 2)));
         dc.SetFont(font);
-        dc.SetTextForeground(wxColour(45, 48, 55));
+        dc.SetTextForeground(DeviceUiStyle::text_primary());
 
         int tw = 0;
         int th = 0;
@@ -472,7 +472,7 @@ private:
             gc->SetBrush(wxBrush(fill));
             gc->SetPen(*wxTRANSPARENT_PEN);
             gc->DrawPath(rounded_path(gc.get(), piece.points, 15.0 * m_square / 300.0));
-            gc->SetFont(label_font, wxColour(18, 25, 35));
+            gc->SetFont(label_font, DeviceUiStyle::text_primary());
             double text_w = 0.0;
             double text_h = 0.0;
             double descent = 0.0;
@@ -508,7 +508,7 @@ void set_button_active(Button* button, bool active, int8_t& cached_active, bool 
     const wxColour pressed_bg = darken(normal_bg, kPressDarken);
     const wxColour normal_border = active ? DeviceUiStyle::accent() : DeviceUiStyle::card_border();
     const wxColour hover_border = active ? DeviceUiStyle::accent() : wxColour(176, 176, 176);
-    const wxColour text = active ? DeviceUiStyle::accent() : DeviceUiStyle::text_primary();
+    const wxColour text = DeviceUiStyle::text_primary();
 
     button->SetBorderColor(StateColor(
         std::pair(DeviceUiStyle::card_border(), (int) StateColor::Disabled),
@@ -516,9 +516,9 @@ void set_button_active(Button* button, bool active, int8_t& cached_active, bool 
         std::pair(hover_border, (int) StateColor::Hovered),
         std::pair(normal_border, (int) StateColor::Normal)));
     button->SetTextColor(StateColor(
-        std::pair(DeviceUiStyle::text_muted(), (int) StateColor::Disabled),
-        std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed),
-        std::pair(active ? DeviceUiStyle::accent() : DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Disabled),
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Pressed),
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
         std::pair(text, (int) StateColor::Normal)));
     button->SetBackgroundColor(StateColor(
         std::pair(wxColour(240, 240, 240), (int) StateColor::Disabled),
@@ -541,8 +541,8 @@ void set_button_enabled(Button* button, bool enabled)
         std::pair(wxColour(176, 176, 176), (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::card_border(), (int) StateColor::Normal)));
     button->SetTextColor(StateColor(
-        std::pair(DeviceUiStyle::text_muted(), (int) StateColor::Disabled),
-        std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed),
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Disabled),
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Pressed),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal)));
     button->SetBackgroundColor(StateColor(
@@ -699,6 +699,10 @@ Button* MovementPanel::make_tool_button(wxWindow* parent, const wxString& label)
     button->SetSize(size);
     button->SetCornerRadius(d(this, 10));
     button->SetBorderWidth(1);
+    button->SetFont(wxFont(wxFontInfo(16)
+        .Family(wxFONTFAMILY_SWISS)
+        .FaceName(wxString::FromUTF8("Bahnschrift"))
+        .Weight(wxFONTWEIGHT_SEMIBOLD)));
     return button;
 }
 

@@ -361,20 +361,20 @@ private:
         if (hovered)
             bg = darken(bg, kHoverDarken);
         const wxColour fg = DeviceUiStyle::text_primary();
-        const wxColour sub = selected ? wxColour(90, 94, 100) : DeviceUiStyle::text_muted();
+        const wxColour sub = DeviceUiStyle::text_primary();
 
         gc->SetBrush(wxBrush(bg));
         gc->SetPen(wxPen(selected ? DeviceUiStyle::accent() : DeviceUiStyle::card_border(), d(this, 1)));
         gc->DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, d(this, 10));
 
-        draw_text(gc, tool_short_label(tool), wxRect(rect.x, rect.y + d(this, 14), rect.width, d(this, 32)), fg, s(17), wxFONTWEIGHT_BOLD);
-        draw_text(gc, tool_material_label(tool), wxRect(rect.x, rect.y + d(this, 48), rect.width, d(this, 22)), sub, s(10), wxFONTWEIGHT_SEMIBOLD);
+        draw_text(gc, tool_short_label(tool), wxRect(rect.x, rect.y + d(this, 14), rect.width, d(this, 32)), fg, 16, wxFONTWEIGHT_SEMIBOLD);
+        draw_text(gc, tool_material_label(tool), wxRect(rect.x, rect.y + d(this, 48), rect.width, d(this, 22)), sub, 10, wxFONTWEIGHT_NORMAL);
     }
 
     void reload_icons()
     {
         m_edit_icon_on_dark = tint_edit_icon(this, s(14), *wxWHITE);
-        m_edit_icon_on_light = tint_edit_icon(this, s(14), wxColour(48, 48, 50));
+        m_edit_icon_on_light = tint_edit_icon(this, s(14), DeviceUiStyle::text_primary());
         m_add_icon_bmp  = create_scaled_bitmap("add_filament", this, s(18));
         m_center_bmp = load_png_size(this, "filament-center", 193, 271);
     }

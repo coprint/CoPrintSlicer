@@ -14,6 +14,8 @@
 namespace Slic3r {
 namespace GUI {
 
+bool is_coprint_quadro_printer();
+
 class GLCanvas3D;
 
 /*
@@ -148,6 +150,9 @@ public:
     // CoPrint: true when Bed3D will draw bed_texture itself (PartPlate must not also draw it).
     bool has_texture() const { return !m_texture_filename.empty(); }
 
+    // CoPrint: Quadro and ChromaSet both draw the STL plate from above; SVG lettering is overlaid after the grid.
+    bool is_quadro_bed() const;
+
     // get the bed shape type
     BuildVolume_Type get_build_volume_type() const { return m_build_volume.type(); }
 
@@ -161,6 +166,8 @@ public:
     Point point_projection(const Point& point) const;
 
     void render(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor, bool show_axes);
+    // SVG bed artwork after PartPlate grid so lettering sits on top of the lines.
+    void render_svg_overlay(GLCanvas3D& canvas, bool bottom);
 
     void on_change_color_mode(bool is_dark);
 
@@ -176,7 +183,7 @@ private:
     void update_gridlines();
     // CoPrint: draw the grid reference lines (used for bottom view, where the bed model/background is hidden).
     void render_gridlines(const Transform3d& view_matrix, const Transform3d& projection_matrix);
-    // CoPrint: rebuild the textured quad to cover the printable area + any bed model overhang (tabs).
+    // CoPrint: rebuild the textured quad. ChromaSet: printable rectangle. Quadro: STL XY (tabs included).
     void update_texture_quad();
     static std::tuple<Type, std::string, std::string> detect_type(const Pointfs& shape);
     void render_internal(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom, float scale_factor,

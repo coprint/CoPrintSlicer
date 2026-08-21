@@ -63,7 +63,7 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     auto* details_sizer = new wxBoxSizer(wxVERTICAL);
 
     auto* printing_label = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("Printing File:"));
-    printing_label->SetForegroundColour(DeviceUiStyle::accent());
+    printing_label->SetForegroundColour(DeviceUiStyle::text_primary());
     m_file_name = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("N/A"),
         wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
     m_file_name->SetForegroundColour(DeviceUiStyle::text_primary());

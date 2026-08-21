@@ -139,7 +139,7 @@ void PresetStepSlider::on_paint(wxPaintEvent &)
     font.SetWeight(wxFONTWEIGHT_NORMAL);
     dc.SetFont(font);
     for (int i = 0; i < count; ++i) {
-        const wxColour colour = (i == m_selection) ? DeviceUiStyle::accent() : DeviceUiStyle::text_muted();
+        const wxColour colour = DeviceUiStyle::text_primary();
         dc.SetTextForeground(colour);
         const wxSize ts = dc.GetTextExtent(m_labels[i]);
         const wxPoint c = knot_center(i);

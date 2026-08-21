@@ -11,12 +11,12 @@ namespace DeviceDashboard {
 
 wxColour DeviceUiStyle::page_background() { return wxColour(238, 238, 239); }
 wxColour DeviceUiStyle::card_background() { return wxColour(255, 255, 255); }
-wxColour DeviceUiStyle::card_header_background() { return wxColour(0xC9, 0xC9, 0xC9); }
+wxColour DeviceUiStyle::card_header_background() { return wxColour(0xF9, 0xF8, 0xF9); }
 wxColour DeviceUiStyle::card_header_border() { return wxColour(0xE1, 0xE1, 0xE1); }
 wxColour DeviceUiStyle::card_border() { return wxColour(199, 199, 199); }
 wxColour DeviceUiStyle::control_background() { return wxColour(245, 245, 245); }
-wxColour DeviceUiStyle::text_primary() { return wxColour(35, 37, 39); }
-wxColour DeviceUiStyle::text_muted() { return wxColour(118, 124, 132); }
+wxColour DeviceUiStyle::text_primary() { return wxColour(0x43, 0x43, 0x43); }
+wxColour DeviceUiStyle::text_muted() { return wxColour(0x43, 0x43, 0x43); }
 wxColour DeviceUiStyle::accent() { return wxColour(44, 182, 125); }
 wxColour DeviceUiStyle::danger() { return wxColour(255, 125, 114); }
 
