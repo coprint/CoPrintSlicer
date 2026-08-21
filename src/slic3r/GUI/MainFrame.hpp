@@ -355,6 +355,7 @@ public:
 
     //SoftFever
     void show_device(bool bBBLPrinter);
+    DeviceDashboard::MoonrakerDeviceController* coprint_device_controller();
 
 private:
     void ensure_printer_web_view_created();

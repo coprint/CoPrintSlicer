@@ -220,7 +220,7 @@ MoonrakerPrinterAgent::~MoonrakerPrinterAgent()
     if (connect_thread.joinable()) {
         connect_thread.join();
     }
-    stop_status_stream();
+    stop_status_stream(true);
 }
 
 AgentInfo MoonrakerPrinterAgent::get_agent_info_static()
@@ -1948,24 +1948,31 @@ bool MoonrakerPrinterAgent::fetch_file_metadata(const std::string& base_url,
 
 void MoonrakerPrinterAgent::start_status_stream(const std::string& dev_id, const std::string& base_url, const std::string& api_key)
 {
-    stop_status_stream();
+    stop_status_stream(false);
     if (base_url.empty()) {
         return;
     }
 
     ws_stop.store(false);
-    ws_thread = std::thread([this, dev_id, base_url, api_key]() { run_status_stream(dev_id, base_url, api_key); });
+    const uint64_t generation = ws_generation.load();
+    ws_thread = std::thread([this, dev_id, base_url, api_key, generation]() {
+        run_status_stream(dev_id, base_url, api_key, generation);
+    });
 }
 
-void MoonrakerPrinterAgent::stop_status_stream()
+void MoonrakerPrinterAgent::stop_status_stream(bool wait)
 {
     ws_stop.store(true);
-    if (ws_thread.joinable()) {
+    ++ws_generation;
+    if (!ws_thread.joinable())
+        return;
+    if (wait)
         ws_thread.join();
-    }
+    else
+        ws_thread.detach();
 }
 
-void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string base_url, std::string api_key)
+void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string base_url, std::string api_key, uint64_t generation)
 {
     WsEndpoint endpoint;
     if (!parse_ws_endpoint(base_url, endpoint)) {
@@ -1983,7 +1990,11 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
     const int max_retries   = 10;
     const int base_delay_ms = 1000;
 
-    while (!ws_stop.load() && retry_count < max_retries) {
+    auto stream_still_current = [this, generation]() {
+        return !ws_stop.load() && ws_generation.load() == generation;
+    };
+
+    while (stream_still_current() && retry_count < max_retries) {
         bool connection_lost = false; // Flag to distinguish clean shutdown from unexpected disconnect
 
         try {
@@ -2093,7 +2104,7 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
             ws.write(net::buffer(subscribe.dump()));
 
             // Read loop
-            while (!ws_stop.load()) {
+            while (stream_still_current()) {
                 // Flush outbound JSON-RPC requests (e.g. Print Models file list).
                 std::vector<std::string> outbound;
                 {
@@ -2170,7 +2181,7 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
             ws.close(websocket::close_code::normal, ec);
 
             // Only reset retry count on clean shutdown (not connection_lost)
-            if (!connection_lost && !ws_stop.load()) {
+            if (!connection_lost && !ws_stop.load() && ws_generation.load() == generation) {
                 retry_count = 0;
             }
 
@@ -2186,14 +2197,17 @@ void MoonrakerPrinterAgent::run_status_stream(std::string dev_id, std::string ba
         }
 
         // Check if we should stop reconnection attempts
-        if (ws_stop.load()) {
+        if (!stream_still_current()) {
             break;
         }
 
-        // Exponential backoff before reconnection
+        // Interruptible backoff so printer switches do not block the UI thread on join().
         int delay_ms = base_delay_ms * (1 << std::min(retry_count, 5));
         BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: Reconnecting in " << delay_ms << "ms (attempt " << (retry_count + 1) << ")";
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        for (int waited = 0; waited < delay_ms && stream_still_current(); waited += 50)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        if (!stream_still_current())
+            break;
         retry_count++;
     }
 

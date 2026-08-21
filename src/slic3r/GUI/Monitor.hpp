@@ -47,6 +47,7 @@
 #include "slic3r/GUI/UpgradePanel.hpp"
 #include "slic3r/GUI/HMSPanel.hpp"
 #include "slic3r/GUI/AmsWidgets.hpp"
+#include "slic3r/GUI/DeviceDashboard/MoonrakerDeviceController.hpp"
 #include "Widgets/SideTools.hpp"
 #include "SelectMachinePop.hpp"
 
@@ -54,6 +55,9 @@ namespace Slic3r {
 namespace GUI {
 
 class MediaFilePanel;
+class PrinterWebView;
+class CoPrintPrinterPicker;
+class CloudTaskManagerPage;
 
 class AddMachinePanel : public wxPanel
 {
@@ -74,6 +78,12 @@ public:
 
 class MonitorPanel : public wxPanel
 {
+public:
+    enum class DeviceUiMode {
+        Bambu,
+        CoPrint
+    };
+
 private:
     Tabbook*		m_tabpanel{ nullptr };
     wxSizer*        m_main_sizer{ nullptr };
@@ -83,6 +93,20 @@ private:
     MediaFilePanel*     m_media_file_panel;
     UpgradePanel*       m_upgrade_panel;
     HMSPanel*           m_hms_panel;
+
+    wxPanel*                              m_coprint_status_panel{nullptr};
+    CloudTaskManagerPage*                 m_coprint_storage_page{nullptr};
+    CloudTaskManagerPage*                 m_coprint_print_models_page{nullptr};
+    wxPanel*                              m_coprint_update_page{nullptr};
+    CoPrintPrinterPicker*                 m_coprint_printer_picker{nullptr};
+    PrinterWebView*                       m_coprint_backend{nullptr};
+    std::unique_ptr<DeviceDashboard::MoonrakerDeviceController> m_coprint_controller;
+    DeviceUiMode                          m_device_ui_mode{DeviceUiMode::Bambu};
+    int                                   m_coprint_status_tab_index{-1};
+    int                                   m_coprint_storage_tab_index{-1};
+    int                                   m_coprint_models_tab_index{-1};
+    int                                   m_coprint_update_tab_index{-1};
+    int                                   m_bbl_hms_tab_index{-1};
 
 	/* side tools */
     SideTools*      m_side_tools{nullptr};
@@ -123,7 +147,11 @@ public:
 	void init_bitmap();
     void init_timer();
     void init_tabpanel();
+    void configure_device_ui(DeviceUiMode mode);
+    void ensure_coprint_backend();
     Tabbook* get_tabpanel() { return m_tabpanel; };
+    DeviceDashboard::MoonrakerDeviceController* coprint_device_controller() { return m_coprint_controller.get(); }
+    PrinterWebView* coprint_backend() { return m_coprint_backend; }
     void set_default();
     wxWindow* create_side_tools();
 

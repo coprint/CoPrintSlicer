@@ -1,5 +1,7 @@
 #include "PopupWindow.hpp"
 
+#include <wx/cursor.h>
+
 static wxWindow *GetTopParent(wxWindow *pWindow)
 {
     wxWindow *pWin = pWindow;
@@ -71,6 +73,10 @@ void PopupWindow::OnMouseEvent2(wxMouseEvent &evt)
             enter.SetEventObject(hovered);
             enter.SetId(static_cast<wxWindow*>(hovered)->GetId());
             hovered->ProcessEventLocally(enter);
+        }
+        if (auto *win = dynamic_cast<wxWindow *>(h)) {
+            const wxCursor cursor = win->GetCursor();
+            wxSetCursor(cursor.IsOk() ? cursor : wxCursor(wxCURSOR_ARROW));
         }
     }
     if (child) {

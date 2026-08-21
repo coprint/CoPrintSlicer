@@ -40,7 +40,7 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Print Status"));
-    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
+    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::card_background());
 
     auto* content_sizer = new wxBoxSizer(wxHORIZONTAL);
 
@@ -59,7 +59,7 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     content_sizer->Add(m_thumbnail_host, 0, wxEXPAND | wxRIGHT, FromDIP(14));
 
     auto* details = new wxPanel(m_frame->content_parent(), wxID_ANY);
-    details->SetBackgroundColour(DeviceUiStyle::page_background());
+    details->SetBackgroundColour(DeviceUiStyle::card_background());
     auto* details_sizer = new wxBoxSizer(wxVERTICAL);
 
     auto* printing_label = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("Printing File:"));
@@ -82,7 +82,7 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     m_progress->SetPadding(FromDIP(3));
     m_progress->SetProgressForedColour(wxColour(132, 162, 188));
     m_progress->SetProgressBackgroundColour(wxColour(126, 158, 184));
-    m_progress->SetBackgroundColour(DeviceUiStyle::page_background());
+    m_progress->SetBackgroundColour(DeviceUiStyle::card_background());
     details_sizer->Add(m_progress, 0, wxEXPAND | wxBOTTOM, FromDIP(10));
 
     auto* lower_row = new wxBoxSizer(wxHORIZONTAL);

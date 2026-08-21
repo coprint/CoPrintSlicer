@@ -19,6 +19,7 @@
 #include "Widgets/WebView.hpp"
 #include "DeviceDashboard/DeviceCommandService.hpp"
 #include "DeviceDashboard/DeviceStateStore.hpp"
+#include "DeviceDashboard/DeviceDashboardPage.hpp"
 class wxStaticBitmap;
 class wxStaticText;
 class wxPopupTransientWindow;
@@ -32,13 +33,6 @@ class MachineObject;
 
 namespace GUI {
 
-namespace DeviceDashboard {
-class CameraPanel;
-class MovementPanel;
-class PrintStatusPanel;
-class PrinterStatusPanel;
-class FilamentPanel;
-} // namespace DeviceDashboard
 
 class CloudTaskManagerPage;
 enum class PrinterWebViewTab {
@@ -62,7 +56,15 @@ public:
     void reload();
     void update_mode();
     void toggle_printers_popup();
+    void toggle_printers_popup_at(wxWindow* anchor);
     void dismiss_printers_popup();
+    void set_embedded_in_monitor(bool embedded);
+    void set_sidebar_visible(bool visible);
+    DeviceDashboard::DeviceDashboardPage* device_dashboard_page() { return m_dashboard_page; }
+    wxPanel* coprint_update_page() const { return m_update_page; }
+    CloudTaskManagerPage* coprint_storage_page() const { return m_storage_page; }
+    void ensure_coprint_storage_page();
+    void set_coprint_storage_mode(bool print_models);
     void prompt_ip_connect();
     void reset_placeholder_selections();
     void rebuild_printers_popup();
@@ -99,8 +101,13 @@ public:
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
     bool get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const;
 
-private:
+    void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
+    void toggle_camera_timelapse();
+    wxPanel* coprint_status_host() const { return m_status_page; }
+    void show_add_printer_dialog();
     wxString sidebar_display_name_for(const MachineObject *machine) const;
+
+private:
     void apply_filament_tool_selection(int tool_index);
     void refresh_filament_preview_from_selected_machine();
     void apply_filament_preview_fallback();
@@ -127,9 +134,12 @@ private:
     void refresh_connected_printer_header(MachineObject *obj);
     void refresh_printer_info_labels(MachineObject *obj);
     void refresh_camera_stream(MachineObject *obj);
-    void show_camera_fullscreen();
-    void toggle_camera_timelapse();
+    void start_camera_stream();
+    void stop_camera_stream();
+    void handle_camera_webview_title(const wxString &title);
     void apply_printer_status_tool_selection(int tool_index);
+    void apply_nozzle_target_temperature(int extruder_index, int temperature);
+    void apply_bed_target_temperature(int temperature);
     void prompt_ps_target_temperature(bool is_bed, int extruder_index);
     void show_toolhead_temperature_dialog(int active_extruder_index);
     void show_bed_temperature_dialog();
@@ -137,14 +147,12 @@ private:
     bool send_toolhead_fan_speed_command(int tool_index, int fan_percent);
     void show_filament_load_wizard();
     void show_filament_busy_dialog(bool is_load);
-    void show_add_printer_dialog();
     void show_printer_card_actions_menu(wxWindow *anchor, MachineObject *machine);
     bool edit_sidebar_printer_name(MachineObject *machine);
     bool confirm_forget_printer();
     void forget_local_printer(MachineObject *machine);
     void ensure_camera_webview_created();
     void ensure_storage_page_created();
-    void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
     void update_sidebar_connect_attempt_state();
     void begin_sidebar_connect_attempt(const std::string &dev_id);
     void clear_sidebar_connect_attempt();
@@ -201,7 +209,8 @@ private:
     wxString m_camera_stream_url;
     wxString m_preview_thumbnail_url;
     wxPopupTransientWindow *m_printers_popup{ nullptr };
-    wxPanel *m_printers_popup_panel{ nullptr };
+    StaticBox *m_printers_popup_panel{ nullptr };
+    int m_printers_popup_max_width{ 0 };
     int m_selected_extruder_index{ 0 };
     PrinterWebViewTab m_selected_tab{ PrinterWebViewTab::Status };
     std::vector<SidebarItem> m_sidebar_items;
@@ -230,8 +239,11 @@ private:
     std::string m_moonraker_status_machine_id;
     wxString m_filament_preview_fetch_key;
     bool m_filament_preview_fetch_in_progress{ false };
+    wxPanel *m_preview_menu_panel{ nullptr };
     wxPanel *m_status_page{ nullptr };
+    DeviceDashboard::DeviceDashboardPage* m_dashboard_page{nullptr};
     CloudTaskManagerPage *m_storage_page{ nullptr };
+    bool m_embedded_in_monitor{false};
     wxImage m_thumbnail_image;
     wxWebRequest m_thumbnail_web_request;
     wxStaticText *m_update_connection_badge{ nullptr };
@@ -250,11 +262,6 @@ private:
     wxStaticText *m_update_status_value{ nullptr };
     wxStaticText *m_update_version_value{ nullptr };
     DeviceDashboard::DeviceStateStore m_dashboard_state_store;
-    DeviceDashboard::CameraPanel*            m_dashboard_camera_panel{nullptr};
-    DeviceDashboard::MovementPanel*          m_dashboard_movement_panel{nullptr};
-    DeviceDashboard::PrintStatusPanel*        m_dashboard_print_status_panel{nullptr};
-    DeviceDashboard::PrinterStatusPanel*      m_dashboard_printer_status_panel{nullptr};
-    DeviceDashboard::FilamentPanel*           m_dashboard_filament_panel{nullptr};
     double m_axis_move_step{ 1.0 };
     int m_zoomFactor{ 100 };
     std::shared_ptr<int> m_lifetime_token{ std::make_shared<int>(1) };

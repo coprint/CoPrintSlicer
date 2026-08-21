@@ -211,6 +211,21 @@ void TabButtonsListCtrl::SetFooterText(const wxString& text)
     m_sizer->Layout();
 }
 
+void TabButtonsListCtrl::showPage(size_t n, bool show)
+{
+    if (n >= m_pageButtons.size())
+        return;
+    TabButton *btn = m_pageButtons[n];
+    btn->Show(show);
+    if (m_buttons_sizer != nullptr) {
+        m_buttons_sizer->Show(btn, show, true);
+        m_buttons_sizer->Layout();
+    }
+    if (m_sizer != nullptr)
+        m_sizer->Layout();
+    Layout();
+}
+
 //#endif // _WIN32
 
 

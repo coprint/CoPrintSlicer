@@ -10198,12 +10198,8 @@ void Plater::priv::on_tab_selection_changing(wxBookCtrlEvent& e)
         }
     } else {
         if (new_sel == MainFrame::tpMonitor && wxGetApp().preset_bundle != nullptr) {
-            auto     cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
-            wxString url = cfg.opt_string("print_host_webui").empty() ? cfg.opt_string("print_host") : cfg.opt_string("print_host_webui");
-            if (main_frame->m_printer_view && url.empty()) {
-                // It's missing_connection page, reload so that we can replay the gif image
-                main_frame->m_printer_view->reload();
-            }
+            if (main_frame->coprint_device_controller())
+                main_frame->coprint_device_controller()->refresh();
         }
     }
 }
@@ -16208,8 +16204,8 @@ void Plater::print_job_finished(wxCommandEvent &evt)
     dev->set_selected_machine(evt.GetString().ToStdString());
 
     // Model has been sent to the printer — sync its colors to the device page now
-    if (p->main_frame && p->main_frame->m_printer_view)
-        p->main_frame->m_printer_view->sync_model_colors_from_plater();
+    if (p->main_frame && p->main_frame->coprint_device_controller())
+        p->main_frame->coprint_device_controller()->sync_model_colors_from_plater();
 
     p->main_frame->request_select_tab(MainFrame::TabPosition::tpMonitor);
     //jump to monitor and select device status panel
@@ -16225,8 +16221,8 @@ void Plater::send_job_finished(wxCommandEvent& evt)
     //dev->set_selected_machine(evt.GetString().ToStdString());
 
     // Model has been sent to the printer — sync its colors to the device page now
-    if (p->main_frame && p->main_frame->m_printer_view)
-        p->main_frame->m_printer_view->sync_model_colors_from_plater();
+    if (p->main_frame && p->main_frame->coprint_device_controller())
+        p->main_frame->coprint_device_controller()->sync_model_colors_from_plater();
 
     send_gcode_finish(evt.GetString());
     p->hide_send_to_printer_dlg();

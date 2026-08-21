@@ -31,6 +31,9 @@
 #include "MediaFilePanel.h"
 #include "Plater.hpp"
 #include "BindDialog.hpp"
+#include "PrinterWebView.hpp"
+#include "CoPrintPrinterPicker.hpp"
+#include "MultiTaskManagerPage.hpp"
 
 #include "DeviceCore/DevManager.h"
 
@@ -173,12 +176,21 @@ void MonitorPanel::init_tabpanel()
     sizer_side_tools->Add(m_side_tools, 1, wxEXPAND, 0);
     m_tabpanel             = new Tabbook(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, sizer_side_tools, wxNB_LEFT | wxTAB_TRAVERSAL | wxNB_NOPAGETHEME);
     m_side_tools->set_table_panel(m_tabpanel);
-    m_tabpanel->SetBackgroundColour(wxColour("#FEFFFF"));
+    m_tabpanel->SetBackgroundColour(wxColour("#EEEEEF"));
     m_tabpanel->Bind(wxEVT_BOOKCTRL_PAGE_CHANGED, [this](wxBookCtrlEvent& e) {
         auto page = m_tabpanel->GetCurrentPage();
         if (page == m_media_file_panel) {
             auto title = m_tabpanel->GetPageText(m_tabpanel->GetSelection());
             m_media_file_panel->SwitchStorage(title == _L("Storage"));
+        } else if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+            if (page == m_coprint_storage_page || page == m_coprint_print_models_page) {
+                if (page == m_coprint_storage_page)
+                    m_coprint_backend->set_coprint_storage_mode(false);
+                else if (page == m_coprint_print_models_page)
+                    m_coprint_backend->set_coprint_storage_mode(true);
+            } else if (page == m_coprint_update_page && m_coprint_backend != nullptr) {
+                m_coprint_backend->refresh_update_page_from_selected_machine();
+            }
         }
         page->SetFocus();
         update_all();
@@ -190,21 +202,132 @@ void MonitorPanel::init_tabpanel()
 
     m_media_file_panel = new MediaFilePanel(m_tabpanel);
     m_tabpanel->AddPage(m_media_file_panel, _L("Storage"), "", false);
-    //m_tabpanel->AddPage(m_media_file_panel, _L("Internal Storage"), "", false);
 
     m_upgrade_panel = new UpgradePanel(m_tabpanel);
     m_tabpanel->AddPage(m_upgrade_panel, _CTX(L_CONTEXT("Update", "Firmware"), "Firmware"), "", false);
 
     m_hms_panel = new HMSPanel(m_tabpanel);
     m_tabpanel->AddPage(m_hms_panel, _L("Assistant(HMS)"),    "", false);
+    m_bbl_hms_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
 
-    std::string network_ver = Slic3r::NetworkAgent::get_version();
-    if (!network_ver.empty()) {
-        m_tabpanel->SetFooterText(wxString::Format(_L("Network plug-in v%s"), network_ver));
-    }
+    m_coprint_status_panel = new wxPanel(m_tabpanel, wxID_ANY);
+    m_coprint_status_panel->SetBackgroundColour(wxColour("#EEEEEF"));
+    m_coprint_status_panel->Hide();
+    m_tabpanel->AddPage(m_coprint_status_panel, _L("Status"), "", false);
+    m_coprint_status_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
+
+    m_coprint_storage_page = new CloudTaskManagerPage(m_tabpanel, CloudTaskManagerPage::MediaPresentation::TimelapseOnly);
+    m_coprint_storage_page->Hide();
+    m_tabpanel->AddPage(m_coprint_storage_page, _L("Timelapse"), "", false);
+    m_coprint_storage_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
+
+    m_coprint_print_models_page = new CloudTaskManagerPage(m_tabpanel, CloudTaskManagerPage::MediaPresentation::ModelOnly);
+    m_coprint_print_models_page->Hide();
+    m_tabpanel->AddPage(m_coprint_print_models_page, _L("Print Models"), "", false);
+    m_coprint_models_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
+
+    m_coprint_update_page = new wxPanel(m_tabpanel, wxID_ANY);
+    m_coprint_update_page->SetBackgroundColour(wxColour("#EEEEEF"));
+    m_coprint_update_page->Hide();
+    m_tabpanel->AddPage(m_coprint_update_page, _CTX(L_CONTEXT("Update", "Firmware"), "Firmware"), "", false);
+    m_coprint_update_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
 
     m_initialized = true;
+    configure_device_ui(DeviceUiMode::CoPrint);
     show_status((int)MonitorStatus::MONITOR_NO_PRINTER);
+}
+
+void MonitorPanel::ensure_coprint_backend()
+{
+    if (m_coprint_backend != nullptr)
+        return;
+
+    m_coprint_backend = new PrinterWebView(this);
+    m_coprint_backend->set_embedded_in_monitor(true);
+    m_coprint_backend->Hide();
+
+    if (wxPanel* status_host = m_coprint_backend->coprint_status_host()) {
+        if (m_coprint_status_panel != nullptr && status_host->GetParent() != m_coprint_status_panel) {
+            wxSizer* host_sizer = m_coprint_status_panel->GetSizer();
+            if (host_sizer == nullptr) {
+                host_sizer = new wxBoxSizer(wxVERTICAL);
+                m_coprint_status_panel->SetSizer(host_sizer);
+            }
+            if (wxSizer* old_sizer = status_host->GetContainingSizer())
+                old_sizer->Detach(status_host);
+            status_host->Reparent(m_coprint_status_panel);
+            status_host->Show();
+            host_sizer->Add(status_host, 1, wxEXPAND);
+            m_coprint_status_panel->Layout();
+        }
+    }
+
+    if (m_coprint_update_page != nullptr && m_coprint_backend->coprint_update_page() != nullptr) {
+        wxSizer* sizer = m_coprint_update_page->GetSizer();
+        if (sizer == nullptr) {
+            sizer = new wxBoxSizer(wxVERTICAL);
+            m_coprint_update_page->SetSizer(sizer);
+        }
+        wxWindow* update_content = m_coprint_backend->coprint_update_page();
+        if (update_content != nullptr && update_content->GetParent() != m_coprint_update_page) {
+            update_content->Reparent(m_coprint_update_page);
+            sizer->Add(update_content, 1, wxEXPAND);
+            m_coprint_update_page->Layout();
+        }
+    }
+
+    m_coprint_controller = std::make_unique<DeviceDashboard::MoonrakerDeviceController>(m_coprint_backend);
+}
+
+void MonitorPanel::configure_device_ui(DeviceUiMode mode)
+{
+    if (!m_initialized)
+        return;
+    if (mode == DeviceUiMode::CoPrint)
+        ensure_coprint_backend();
+
+    m_device_ui_mode = mode;
+    const bool coprint = mode == DeviceUiMode::CoPrint;
+
+    auto show_tab = [this](int index, bool show) {
+        if (index < 0)
+            return;
+        if (wxWindow* page = m_tabpanel->GetPage(index))
+            page->Show(show);
+        m_tabpanel->GetBtnsListCtrl()->showPage(static_cast<size_t>(index), show);
+    };
+
+    show_tab(0, !coprint); // BBL Status
+    show_tab(1, !coprint); // BBL Storage
+    show_tab(2, !coprint); // BBL Update
+    show_tab(m_bbl_hms_tab_index, !coprint);
+
+    show_tab(m_coprint_status_tab_index, coprint);
+    show_tab(m_coprint_storage_tab_index, false); // Timelapse — hidden in CoPrint sidebar
+    show_tab(m_coprint_models_tab_index, coprint);
+    show_tab(m_coprint_update_tab_index, coprint);
+
+    if (m_coprint_printer_picker == nullptr && coprint) {
+        wxWindow* side_parent = m_side_tools->GetParent();
+        if (side_parent != nullptr) {
+            wxSizer* side_sizer = side_parent->GetSizer();
+            if (side_sizer != nullptr) {
+                m_coprint_printer_picker = new CoPrintPrinterPicker(side_parent, m_coprint_backend);
+                side_sizer->Insert(0, m_coprint_printer_picker, 0, wxEXPAND);
+            }
+        }
+    }
+    if (m_coprint_printer_picker != nullptr)
+        m_coprint_printer_picker->Show(coprint);
+
+    if (m_side_tools != nullptr)
+        m_side_tools->Show(!coprint);
+
+    if (coprint && m_coprint_status_tab_index >= 0)
+        m_tabpanel->SetSelection(m_coprint_status_tab_index);
+
+    Layout();
+    update_all();
 }
 
 void MonitorPanel::set_default()
@@ -285,6 +408,15 @@ void MonitorPanel::on_select_printer(wxCommandEvent& event)
     if (!dev->set_selected_machine(event.GetString().ToStdString()))
         return;
 
+    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+        if (m_coprint_printer_picker != nullptr)
+            m_coprint_printer_picker->update_selection();
+        if (m_coprint_controller)
+            m_coprint_controller->refresh();
+        Layout();
+        return;
+    }
+
     set_default();
     update_all();
 
@@ -303,6 +435,12 @@ void MonitorPanel::on_select_printer(wxCommandEvent& event)
 
 void MonitorPanel::on_printer_clicked(wxMouseEvent &event)
 {
+    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+        if (m_coprint_backend != nullptr)
+            m_coprint_backend->toggle_printers_popup_at(m_side_tools);
+        return;
+    }
+
     auto mouse_pos = ClientToScreen(event.GetPosition());
     wxPoint rect = m_side_tools->ClientToScreen(wxPoint(0, 0));
 
@@ -343,7 +481,11 @@ void MonitorPanel::update_all()
         show_status((int)MONITOR_NO_PRINTER);
         m_hms_panel->clear_hms_tag();
         m_tabpanel->GetBtnsListCtrl()->showNewTag(PT_HMS, false);
-        if (m_status_info_panel->IsShown()) {
+        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_controller)
+            m_coprint_controller->refresh();
+        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_printer_picker != nullptr)
+            m_coprint_printer_picker->update_selection();
+        else if (m_status_info_panel->IsShown()) {
             m_status_info_panel->m_media_play_ctrl->SetMachineObject(obj);
             m_status_info_panel->update(obj);
         }
@@ -353,6 +495,28 @@ void MonitorPanel::update_all()
     if (obj->connection_type() != last_conn_type) { last_conn_type = obj->connection_type(); }
 
     m_side_tools->update_status(obj);
+
+    // CoPrint dashboard talks to Moonraker over HTTP, not Bambu push_status.
+    // is_connecting()/is_connected() stay stuck after a picker click (reset()
+    // zeroes m_push_count), so those gates must not skip the Status refresh.
+    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+        if (m_coprint_controller)
+            m_coprint_controller->refresh();
+        if (m_coprint_printer_picker != nullptr)
+            m_coprint_printer_picker->update_selection();
+        auto current_page = m_tabpanel->GetCurrentPage();
+        if (current_page == m_coprint_storage_page)
+            m_coprint_storage_page->update_page();
+        else if (current_page == m_coprint_print_models_page)
+            m_coprint_print_models_page->update_page();
+        if (obj->is_connecting())
+            show_status(MONITOR_CONNECTING);
+        else if (!obj->is_connected())
+            show_status((int) MONITOR_DISCONNECTED);
+        else
+            show_status(MONITOR_NORMAL);
+        return;
+    }
 
     if (obj->is_connecting()) {
         show_status(MONITOR_CONNECTING);
@@ -462,6 +626,18 @@ void MonitorPanel::show_status(int status)
 
     BOOST_LOG_TRIVIAL(info) << "monitor: show_status = " << status;
 
+    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+        if (m_coprint_printer_picker != nullptr) {
+            m_coprint_printer_picker->refresh_list();
+            m_coprint_printer_picker->update_selection();
+        }
+        if ((status & (int)MonitorStatus::MONITOR_NO_PRINTER) != 0) {
+            set_default();
+            m_tabpanel->Layout();
+        }
+        return;
+    }
+
     //Freeze();
     // update panels
     if (m_side_tools) { m_side_tools->show_status(status); };
@@ -533,22 +709,6 @@ void MonitorPanel::jump_to_LiveView()
 
 void MonitorPanel::update_network_version_footer()
 {
-    std::string binary_version = Slic3r::NetworkAgent::get_version();
-    if (binary_version.empty())
-        return;
-
-    std::string configured_version = wxGetApp().app_config->get_network_plugin_version();
-    std::string suffix = extract_suffix(configured_version);
-    std::string configured_base = extract_base_version(configured_version);
-
-    wxString footer_text;
-    if (!suffix.empty() && configured_base == binary_version) {
-        footer_text = wxString::Format(_L("Network plug-in v%s (%s)"), binary_version, suffix);
-    } else {
-        footer_text = wxString::Format(_L("Network plug-in v%s"), binary_version);
-    }
-
-    m_tabpanel->SetFooterText(footer_text);
 }
 
 } // GUI

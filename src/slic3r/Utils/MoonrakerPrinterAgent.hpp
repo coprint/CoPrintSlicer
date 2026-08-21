@@ -145,8 +145,8 @@ private:
     void dispatch_printer_connected(const std::string& dev_id);
     void dispatch_message(const std::string& dev_id, const std::string& payload);
     void start_status_stream(const std::string& dev_id, const std::string& base_url, const std::string& api_key);
-    void stop_status_stream();
-    void run_status_stream(std::string dev_id, std::string base_url, std::string api_key);
+    void stop_status_stream(bool wait = false);
+    void run_status_stream(std::string dev_id, std::string base_url, std::string api_key, uint64_t generation);
     void handle_ws_message(const std::string& dev_id, const std::string& payload);
     void update_status_cache(const nlohmann::json& updates);
     nlohmann::json build_print_payload_locked() const;
@@ -210,6 +210,7 @@ private:
     std::set<std::string>  available_objects;  // Track for feature detection
 
     std::atomic<bool>   ws_stop{false};
+    std::atomic<uint64_t> ws_generation{0};
     std::atomic<bool>   ws_reconnect_requested{false};  // Flag to trigger reconnection
     std::atomic<bool>   ws_connected{false};
     std::atomic<uint64_t> ws_last_emit_ms{0};

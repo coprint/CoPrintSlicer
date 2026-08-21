@@ -1,17 +1,25 @@
 #include "PrinterStatusPanel.hpp"
 
-#include "../DeviceCardFrame.hpp"
 #include "../DeviceUiStyle.hpp"
+#include "../StatusPresetPopups.hpp"
 #include "../../Widgets/StaticBox.hpp"
 #include "../../wxExtensions.hpp"
+#include "libslic3r/Utils.hpp"
+#ifdef __APPLE__
+#include "../../../Utils/MacDarkMode.hpp"
+#endif
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
-#include <array>
-
+#include <wx/filename.h>
+#include <wx/font.h>
+#include <wx/image.h>
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
 #include <wx/stattext.h>
+#include <wx/textctrl.h>
 
 namespace Slic3r {
 namespace GUI {
@@ -19,7 +27,17 @@ namespace DeviceDashboard {
 
 namespace {
 
-bool set_label_if_changed(wxStaticText* label, const wxString& text)
+void set_status_font(wxWindow *win)
+{
+    if (win == nullptr)
+        return;
+    wxFont font = win->GetFont();
+    font.SetPointSize(12);
+    font.SetWeight(wxFONTWEIGHT_NORMAL);
+    win->SetFont(font);
+}
+
+bool set_label_if_changed(wxStaticText *label, const wxString &text)
 {
     if (label == nullptr || label->GetLabelText() == text)
         return false;
@@ -27,203 +45,321 @@ bool set_label_if_changed(wxStaticText* label, const wxString& text)
     return true;
 }
 
-wxBitmap load_dashboard_icon(wxWindow *parent, const std::string &name, int dip)
+wxBitmap load_dashboard_icon(wxWindow *parent, const std::string &name, int dip_w, int dip_h)
 {
-    static const std::string k_fallback = "cp_tool_temperature";
-    for (const std::string &candidate : {name, k_fallback}) {
-        try {
-            wxBitmap bmp = create_scaled_bitmap(candidate, parent, dip);
-            if (bmp.IsOk())
-                return bmp;
-        } catch (const std::exception &) {
-        }
+    wxImage image;
+    const wxString path = wxString::FromUTF8(Slic3r::var(name + ".png").c_str());
+    const bool loaded = wxFileName::FileExists(path) && image.LoadFile(path, wxBITMAP_TYPE_PNG) && image.IsOk()
+        && image.GetWidth() > 0 && image.GetHeight() > 0;
+    if (!loaded) {
+        wxBitmap svg = create_scaled_bitmap(name, parent, std::max(dip_w, dip_h));
+        if (svg.IsOk())
+            return svg;
+        return wxBitmap(parent->FromDIP(dip_w), parent->FromDIP(dip_h));
     }
-    return wxBitmap(parent->FromDIP(dip), parent->FromDIP(dip));
+
+    double scale = 1.0;
+#ifdef __APPLE__
+    scale = std::max(1.0, mac_max_scaling_factor());
+#elif defined(__WXMSW__)
+    scale = std::max(1.0, parent->GetDPIScaleFactor());
+#endif
+
+    const int logical_w = std::max(1, parent->FromDIP(dip_w));
+    const int logical_h = std::max(1, parent->FromDIP(dip_h));
+#ifdef __APPLE__
+    const int dst_w = std::max(1, static_cast<int>(std::lround(logical_w * scale)));
+    const int dst_h = std::max(1, static_cast<int>(std::lround(logical_h * scale)));
+#else
+    const int dst_w = logical_w;
+    const int dst_h = logical_h;
+#endif
+    image.Rescale(dst_w, dst_h, wxIMAGE_QUALITY_HIGH);
+
+#ifdef __APPLE__
+    return wxBitmap(image, -1, scale);
+#else
+    wxBitmap bmp(image);
+#ifdef __WXMSW__
+    bmp.SetScaleFactor(scale);
+#endif
+    return bmp;
+#endif
+}
+
+wxBitmap load_forward_icon(wxWindow *parent)
+{
+    const wxString path = wxString::FromUTF8(Slic3r::var("forwardicon.png").c_str());
+    if (wxFileName::FileExists(path))
+        return load_dashboard_icon(parent, "forwardicon", 15, 15);
+    return create_scaled_bitmap("mall_control_forward", parent, 15);
+}
+
+wxSize temp_slot_size(wxWindow *win)
+{
+    wxCoord w = 0;
+    wxCoord h = 0;
+    win->GetTextExtent("000", &w, &h);
+    return wxSize(std::max(w, win->FromDIP(22)), std::max(h, win->FromDIP(22)));
+}
+
+void pin_icon(wxStaticBitmap *icon, int dip_w, int dip_h)
+{
+    if (icon == nullptr)
+        return;
+    const wxSize size(icon->FromDIP(dip_w), icon->FromDIP(dip_h));
+    icon->SetMinSize(size);
+    icon->SetMaxSize(size);
+}
+
+struct TempSlotWidgets {
+    wxPanel *     host{nullptr};
+    wxStaticText *label{nullptr};
+    wxTextCtrl *  input{nullptr};
+};
+
+TempSlotWidgets make_temp_slot(wxWindow *parent, bool editable)
+{
+    TempSlotWidgets slot;
+    slot.host = new wxPanel(parent, wxID_ANY);
+    slot.host->SetBackgroundColour(DeviceUiStyle::card_background());
+    const wxSize size = temp_slot_size(parent);
+    slot.host->SetMinSize(size);
+    slot.host->SetMaxSize(size);
+
+    slot.label = new wxStaticText(slot.host, wxID_ANY, wxString::FromUTF8("--"));
+    slot.label->SetForegroundColour(DeviceUiStyle::text_primary());
+    slot.label->SetBackgroundColour(DeviceUiStyle::card_background());
+    set_status_font(slot.label);
+
+    auto *sizer = new wxBoxSizer(wxVERTICAL);
+    sizer->AddStretchSpacer(1);
+    sizer->Add(slot.label, 0, wxALIGN_CENTER);
+    sizer->AddStretchSpacer(1);
+    slot.host->SetSizer(sizer);
+
+    if (editable) {
+        slot.input = new wxTextCtrl(slot.host, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+            wxTE_PROCESS_ENTER | wxTE_CENTRE | wxBORDER_NONE);
+        slot.input->SetBackgroundColour(*wxWHITE);
+        slot.input->SetForegroundColour(DeviceUiStyle::text_primary());
+        slot.input->SetMaxLength(3);
+        set_status_font(slot.input);
+        slot.input->Hide();
+        slot.host->Bind(wxEVT_SIZE, [input = slot.input](wxSizeEvent &event) {
+            event.Skip();
+            if (input == nullptr || !input->IsShown())
+                return;
+            const wxSize host_size = event.GetSize();
+            input->SetSize(0, 0, host_size.GetWidth(), host_size.GetHeight());
+        });
+    }
+    return slot;
+}
+
+wxWindow *make_temp_cell(wxWindow *parent, PrinterStatusPanel::TempView &view,
+    const std::string &icon_name, int icon_w, int icon_h)
+{
+    auto *cell = new wxPanel(parent, wxID_ANY);
+    cell->SetBackgroundColour(DeviceUiStyle::card_background());
+    auto *row = new wxBoxSizer(wxHORIZONTAL);
+
+    view.icon = new wxStaticBitmap(cell, wxID_ANY, load_dashboard_icon(cell, icon_name, icon_w, icon_h));
+    pin_icon(view.icon, icon_w, icon_h);
+
+    const TempSlotWidgets current_slot = make_temp_slot(cell, false);
+    auto *slash = new wxStaticText(cell, wxID_ANY, wxString::FromUTF8("/"));
+    slash->SetForegroundColour(DeviceUiStyle::text_primary());
+    slash->SetBackgroundColour(DeviceUiStyle::card_background());
+    set_status_font(slash);
+
+    auto *target_hit = new wxPanel(cell, wxID_ANY);
+    target_hit->SetBackgroundColour(DeviceUiStyle::card_background());
+    const wxCursor hand(wxCURSOR_HAND);
+    target_hit->SetCursor(hand);
+    const TempSlotWidgets target_slot = make_temp_slot(target_hit, true);
+    target_slot.host->SetCursor(hand);
+    target_slot.label->SetCursor(hand);
+    auto *unit = new wxStaticText(target_hit, wxID_ANY, wxString::FromUTF8("\xC2\xB0""C"));
+    unit->SetForegroundColour(DeviceUiStyle::text_primary());
+    unit->SetBackgroundColour(DeviceUiStyle::card_background());
+    unit->SetCursor(hand);
+    set_status_font(unit);
+    auto *target_row = new wxBoxSizer(wxHORIZONTAL);
+    target_row->Add(target_slot.host, 0, wxALIGN_CENTER_VERTICAL);
+    target_row->Add(unit, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, cell->FromDIP(2));
+    target_hit->SetSizer(target_row);
+
+    view.temp_current = current_slot.label;
+    view.temp_slash = slash;
+    view.temp_target = target_slot.label;
+    view.temp_input = target_slot.input;
+    view.temp_unit = unit;
+    view.temp_target_hit = target_hit;
+
+    row->Add(view.icon, 0, wxALIGN_CENTER_VERTICAL);
+    row->AddSpacer(cell->FromDIP(5));
+    row->Add(current_slot.host, 0, wxALIGN_CENTER_VERTICAL);
+    row->Add(slash, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, cell->FromDIP(2));
+    row->Add(target_hit, 0, wxALIGN_CENTER_VERTICAL);
+    cell->SetSizer(row);
+    return cell;
+}
+
+wxWindow *make_action_cell(wxWindow *parent, const std::string &icon_name, int icon_w, int icon_h)
+{
+    auto *cell = new wxPanel(parent, wxID_ANY);
+    cell->SetBackgroundColour(DeviceUiStyle::card_background());
+    auto *row = new wxBoxSizer(wxHORIZONTAL);
+    auto *icon = new wxStaticBitmap(cell, wxID_ANY, load_dashboard_icon(cell, icon_name, icon_w, icon_h));
+    pin_icon(icon, icon_w, icon_h);
+    auto *forward = new wxStaticBitmap(cell, wxID_ANY, load_forward_icon(cell));
+    pin_icon(forward, 15, 15);
+    const wxCursor hand(wxCURSOR_HAND);
+    cell->SetCursor(hand);
+    icon->SetCursor(hand);
+    forward->SetCursor(hand);
+    row->Add(icon, 0, wxALIGN_CENTER_VERTICAL);
+    row->AddSpacer(cell->FromDIP(5));
+    row->Add(forward, 0, wxALIGN_CENTER_VERTICAL);
+    cell->SetSizer(row);
+    return cell;
 }
 
 } // namespace
 
-PrinterStatusPanel::PrinterStatusPanel(wxWindow* parent)
+PrinterStatusPanel::PrinterStatusPanel(wxWindow *parent)
     : wxPanel(parent, wxID_ANY)
 {
-    SetBackgroundColour(DeviceUiStyle::page_background());
+    SetBackgroundColour(DeviceUiStyle::card_background());
 
-    auto* root = new wxBoxSizer(wxVERTICAL);
-    m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Printer Status"));
+    auto *frame = new StaticBox(this, wxID_ANY);
+    frame->SetCornerRadius(FromDIP(8));
+    frame->SetBorderWidth(1);
+    frame->SetBorderColorNormal(wxColour(0xDF, 0xDF, 0xDF));
+    frame->SetBackgroundColorNormal(DeviceUiStyle::card_background());
+    frame->SetBackgroundColour(DeviceUiStyle::card_background());
 
-    auto* content = new wxPanel(m_frame->content_parent(), wxID_ANY);
-    content->SetBackgroundColour(DeviceUiStyle::card_background());
-    auto* grid = new wxBoxSizer(wxHORIZONTAL);
-
-    // Tool kartları: her biri StaticBox — tool seçimi ve sıcaklık diyaloğu için tıklanabilir
+    auto *content = new wxBoxSizer(wxVERTICAL);
+    const int cell_gap = FromDIP(12);
     for (int i = 0; i < MaxDashboardTools; ++i) {
-        if (i > 0)
-            grid->AddSpacer(FromDIP(10));
-
-        auto* card = new StaticBox(content, wxID_ANY);
-        card->SetMinSize(wxSize(-1, FromDIP(110)));
-        card->SetCornerRadius(FromDIP(10));
-        card->SetBorderWidth(1);
-        card->SetBorderColorNormal(i == 0 ? wxColour(44, 182, 125) : wxColour(55, 58, 64));
-        card->SetBackgroundColorNormal(DeviceUiStyle::control_background());
-        card->SetBackgroundColour(DeviceUiStyle::control_background());
-        m_tools[i].card = card;
-
-        auto* card_sizer = new wxBoxSizer(wxVERTICAL);
-
-        // Başlık satırı
-        m_tools[i].title = new wxStaticText(card, wxID_ANY, wxString::Format("Tool %d", i + 1),
-            wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL | wxST_NO_AUTORESIZE);
-        m_tools[i].title->SetForegroundColour(i == 0 ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
-        wxFont title_font = m_tools[i].title->GetFont();
-        title_font.SetWeight(wxFONTWEIGHT_BOLD);
-        m_tools[i].title->SetFont(title_font);
-
-        // Başlık altı ince divider
-        auto* title_divider = new wxPanel(card, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(1)));
-        title_divider->SetBackgroundColour(wxColour(55, 58, 64));
-
-        // Termometre ikonu + sıcaklık
-        auto* temp_row = new wxBoxSizer(wxHORIZONTAL);
-        auto* temp_icon = new wxStaticBitmap(card, wxID_ANY,
-            create_scaled_bitmap("cp_tool_temperature", card, 24));
-        m_tools[i].temperature_icon = temp_icon;
-        temp_icon->SetCursor(wxCursor(wxCURSOR_HAND));
-        m_tools[i].temperature = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("-- / --"));
-        m_tools[i].temperature->SetForegroundColour(i == 0 ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
-        m_tools[i].temperature->SetCursor(wxCursor(wxCURSOR_HAND));
-        temp_row->AddStretchSpacer(1);
-        temp_row->Add(temp_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-        temp_row->Add(m_tools[i].temperature, 0, wxALIGN_CENTER_VERTICAL);
-        temp_row->AddStretchSpacer(1);
-
-        // Fan ikonu + fan yüzdesi
-        auto* fan_row = new wxBoxSizer(wxHORIZONTAL);
-        auto* fan_icon = new wxStaticBitmap(card, wxID_ANY,
-            create_scaled_bitmap("cp_tool_fan", card, 24));
-        m_tools[i].fan_icon = fan_icon;
-        fan_icon->SetCursor(wxCursor(wxCURSOR_HAND));
-        m_tools[i].fan = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("--%"));
-        m_tools[i].fan->SetForegroundColour(DeviceUiStyle::text_muted());
-        m_tools[i].fan->SetCursor(wxCursor(wxCURSOR_HAND));
-        fan_row->AddStretchSpacer(1);
-        fan_row->Add(fan_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-        fan_row->Add(m_tools[i].fan, 0, wxALIGN_CENTER_VERTICAL);
-        fan_row->AddStretchSpacer(1);
-
-        card_sizer->AddSpacer(FromDIP(8));
-        card_sizer->Add(m_tools[i].title, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(6));
-        card_sizer->AddSpacer(FromDIP(5));
-        card_sizer->Add(title_divider, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(6));
-        card_sizer->AddSpacer(FromDIP(6));
-        card_sizer->Add(temp_row, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(4));
-        card_sizer->AddSpacer(FromDIP(4));
-        card_sizer->Add(fan_row,  0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(4));
-        card_sizer->AddSpacer(FromDIP(8));
-        card->SetSizer(card_sizer);
-
-        const auto open_temperature_popup = [this, i](wxMouseEvent& event) {
-            event.Skip(false);
-            if (m_nozzle_temp_handler)
-                m_nozzle_temp_handler(i);
-        };
-        temp_icon->Bind(wxEVT_LEFT_DOWN, open_temperature_popup);
-        m_tools[i].temperature->Bind(wxEVT_LEFT_DOWN, open_temperature_popup);
-
-        const auto open_fan_popup = [this, i](wxMouseEvent& event) {
-            event.Skip(false);
-            if (m_fan_speed_handler)
-                m_fan_speed_handler(i);
-        };
-        fan_icon->Bind(wxEVT_LEFT_DOWN, open_fan_popup);
-        m_tools[i].fan->Bind(wxEVT_LEFT_DOWN, open_fan_popup);
-
-        grid->Add(card, 1, wxEXPAND);
+        wxWindow *cell = make_temp_cell(frame, m_tools[i], "nozzleimg_" + std::to_string(i + 1), 21, 21);
+        bind_temp_edit(m_tools[i], i);
+        content->Add(cell, 0, wxALIGN_LEFT | (i > 0 ? wxTOP : 0), cell_gap);
     }
 
-    // Build Plate kartı
-    {
-        grid->AddSpacer(FromDIP(10));
-        auto* card = new StaticBox(content, wxID_ANY);
-        card->SetMinSize(wxSize(-1, FromDIP(90)));
-        card->SetCornerRadius(FromDIP(10));
-        card->SetBorderWidth(1);
-        card->SetBorderColorNormal(wxColour(55, 58, 64));
-        card->SetBackgroundColorNormal(DeviceUiStyle::control_background());
-        card->SetBackgroundColour(DeviceUiStyle::control_background());
-        card->SetCursor(wxCursor(wxCURSOR_HAND));
+    wxWindow *bed_cell = make_temp_cell(frame, m_bed, "cp_bed_heating", 21, 21);
+    bind_temp_edit(m_bed, -1);
+    m_fan_cell = make_action_cell(frame, "cp_tool_fan", 21, 21);
+    m_speed_cell = make_action_cell(frame, "speedimg", 21, 21);
+    content->Add(bed_cell, 0, wxALIGN_LEFT | wxTOP, cell_gap);
+    content->Add(m_fan_cell, 0, wxALIGN_LEFT | wxTOP, cell_gap);
+    content->Add(m_speed_cell, 0, wxALIGN_LEFT | wxTOP, cell_gap);
 
-        auto* card_sizer = new wxBoxSizer(wxVERTICAL);
-        auto* bed_title = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("Build Plate"),
-            wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL | wxST_NO_AUTORESIZE);
-        bed_title->SetForegroundColour(DeviceUiStyle::text_muted());
-        wxFont bt_font = bed_title->GetFont();
-        bt_font.SetWeight(wxFONTWEIGHT_BOLD);
-        bed_title->SetFont(bt_font);
+    auto *padded = new wxBoxSizer(wxVERTICAL);
+    padded->AddSpacer(FromDIP(22));
+    padded->Add(content, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(9));
+    padded->AddSpacer(FromDIP(22));
+    frame->SetSizer(padded);
 
-        auto* bed_title_divider = new wxPanel(card, wxID_ANY, wxDefaultPosition, wxSize(-1, FromDIP(1)));
-        bed_title_divider->SetBackgroundColour(wxColour(55, 58, 64));
-
-        auto* bed_temp_row = new wxBoxSizer(wxHORIZONTAL);
-        auto* bed_icon = new wxStaticBitmap(card, wxID_ANY,
-            load_dashboard_icon(card, "cp_bed_heating", 24));
-        m_bed_temperature_icon = bed_icon;
-        bed_icon->SetCursor(wxCursor(wxCURSOR_HAND));
-        m_bed_temperature = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("-- / --"));
-        m_bed_temperature->SetForegroundColour(DeviceUiStyle::text_muted());
-        m_bed_temperature->SetCursor(wxCursor(wxCURSOR_HAND));
-        bed_temp_row->AddStretchSpacer(1);
-        bed_temp_row->Add(bed_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
-        bed_temp_row->Add(m_bed_temperature, 0, wxALIGN_CENTER_VERTICAL);
-        bed_temp_row->AddStretchSpacer(1);
-
-        card_sizer->AddSpacer(FromDIP(8));
-        card_sizer->Add(bed_title,    0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(6));
-        card_sizer->AddSpacer(FromDIP(5));
-        card_sizer->Add(bed_title_divider, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(6));
-        card_sizer->AddStretchSpacer(1);
-        card_sizer->Add(bed_temp_row, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(4));
-        card_sizer->AddStretchSpacer(1);
-        card->SetSizer(card_sizer);
-
-        card->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
-            if (m_bed_temp_handler) m_bed_temp_handler();
-        });
-        bed_icon->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
-            if (m_bed_temp_handler) m_bed_temp_handler();
-        });
-        m_bed_temperature->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
-            if (m_bed_temp_handler) m_bed_temp_handler();
-        });
-
-        grid->Add(card, 1, wxEXPAND);
-    }
-
-    content->SetSizer(grid);
-    m_frame->set_content(content);
-    root->Add(m_frame, 1, wxEXPAND);
+    auto *root = new wxBoxSizer(wxVERTICAL);
+    root->Add(frame, 0, wxALIGN_LEFT);
     SetSizer(root);
+
+    const auto bind_action = [](wxWindow *cell, std::function<void()> fn) {
+        cell->Bind(wxEVT_LEFT_DOWN, [fn](wxMouseEvent &) { fn(); });
+        for (wxWindow *child : cell->GetChildren())
+            child->Bind(wxEVT_LEFT_DOWN, [fn](wxMouseEvent &) { fn(); });
+    };
+    bind_action(m_fan_cell, [this]() { open_fan_popup(); });
+    bind_action(m_speed_cell, [this]() { open_speed_popup(); });
+
+    m_speed_popup = new PrintSpeedPopup(this);
+    m_speed_popup->set_change_handler([this](int percent) {
+        m_print_speed_percent = percent;
+        if (m_print_speed_handler)
+            m_print_speed_handler(percent);
+    });
+    m_fan_popup = new FanSpeedPopup(this);
+    m_fan_popup->set_change_handler([this](int tool, int percent) {
+        if (tool >= 0 && tool < MaxDashboardTools)
+            m_fan_percent[tool] = percent;
+        if (m_fan_speed_handler)
+            m_fan_speed_handler(tool, percent);
+    });
 }
 
-void PrinterStatusPanel::apply_state(const std::array<ToolState, MaxDashboardTools>& tools, const BedState& bed)
+void PrinterStatusPanel::bind_temp_edit(TempView &view, int tool_index)
+{
+    if (view.temp_target == nullptr || view.temp_input == nullptr)
+        return;
+
+    const auto bind_click = [this, tool_index](wxWindow *win) {
+        if (win == nullptr)
+            return;
+        win->Bind(wxEVT_LEFT_DOWN, [this, tool_index](wxMouseEvent &) { begin_target_edit(tool_index); });
+    };
+    bind_click(view.temp_target_hit);
+    bind_click(view.temp_target);
+    bind_click(view.temp_unit);
+    bind_click(view.temp_input->GetParent());
+
+    view.temp_input->Bind(wxEVT_TEXT_ENTER, [this, tool_index](wxCommandEvent &) { end_target_edit(tool_index, true); });
+    view.temp_input->Bind(wxEVT_KILL_FOCUS, [this, tool_index](wxFocusEvent &event) {
+        event.Skip();
+        end_target_edit(tool_index, true);
+    });
+    view.temp_input->Bind(wxEVT_KEY_DOWN, [this, tool_index](wxKeyEvent &event) {
+        if (event.GetKeyCode() == WXK_ESCAPE) {
+            end_target_edit(tool_index, false);
+            return;
+        }
+        event.Skip();
+    });
+}
+
+void PrinterStatusPanel::open_fan_popup()
+{
+    if (m_fan_popup == nullptr)
+        return;
+    m_fan_popup->set_percents(m_fan_percent);
+    m_fan_popup->popup_at(m_fan_cell);
+}
+
+void PrinterStatusPanel::open_speed_popup()
+{
+    if (m_speed_popup == nullptr)
+        return;
+    m_speed_popup->set_percent(m_print_speed_percent);
+    m_speed_popup->popup_at(m_speed_cell);
+}
+
+void PrinterStatusPanel::apply_state(const std::array<ToolState, MaxDashboardTools> &tools, const BedState &bed,
+    int print_speed_percent)
 {
     bool layout_needed = false;
     int active_tool = -1;
+    m_print_speed_percent = print_speed_percent;
 
     for (int i = 0; i < MaxDashboardTools; ++i) {
-        const ToolState& tool = tools[i];
+        const ToolState &tool = tools[i];
         if (tool.active)
             active_tool = i;
-        layout_needed |= set_label_if_changed(m_tools[i].title, tool.label.IsEmpty() ? wxString::Format("Tool %d", i + 1) : tool.label);
-        layout_needed |= set_label_if_changed(m_tools[i].temperature, temperature_text(tool.nozzle));
-        layout_needed |= set_label_if_changed(m_tools[i].fan, tool.fan.available ? wxString::Format("%d%%", tool.fan.percent) : wxString::FromUTF8("--%"));
+        m_tools[i].temp_available = tool.nozzle.available;
+        m_tools[i].temp_last_target = static_cast<int>(tool.nozzle.target);
+        m_fan_percent[i] = tool.fan.available ? tool.fan.percent : 0;
+        layout_needed |= set_label_if_changed(m_tools[i].temp_current, temp_slot_text(tool.nozzle.available, tool.nozzle.current));
+        if (!m_tools[i].temp_editing)
+            layout_needed |= set_label_if_changed(m_tools[i].temp_target, temp_slot_text(tool.nozzle.available, tool.nozzle.target));
     }
 
-    layout_needed |= set_label_if_changed(m_bed_temperature, temperature_text(bed.temperature));
+    m_bed.temp_available = bed.temperature.available;
+    m_bed.temp_last_target = static_cast<int>(bed.temperature.target);
+    layout_needed |= set_label_if_changed(m_bed.temp_current, temp_slot_text(bed.temperature.available, bed.temperature.current));
+    if (!m_bed.temp_editing)
+        layout_needed |= set_label_if_changed(m_bed.temp_target, temp_slot_text(bed.temperature.available, bed.temperature.target));
 
     if (layout_needed) {
-        // Freeze/Thaw: tüm label güncellemeleri bittikten sonra
-        // tek seferde çiz — ara siyahlaşmayı önler
         Freeze();
         Layout();
         Thaw();
@@ -237,45 +373,78 @@ void PrinterStatusPanel::set_active_tool(int tool_index)
 {
     if (tool_index < 0 || tool_index >= MaxDashboardTools)
         tool_index = 0;
-    if (m_active_tool == tool_index)
-        return;
-
     m_active_tool = tool_index;
-
-    for (int i = 0; i < MaxDashboardTools; ++i) {
-        const bool active = i == m_active_tool;
-        if (m_tools[i].card != nullptr) {
-            m_tools[i].card->SetBorderColorNormal(active ? wxColour(44, 182, 125) : wxColour(55, 58, 64));
-            m_tools[i].card->Refresh();
-        }
-        if (m_tools[i].title != nullptr) {
-            m_tools[i].title->SetForegroundColour(active ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
-            m_tools[i].title->Refresh();
-        }
-        if (m_tools[i].temperature != nullptr) {
-            m_tools[i].temperature->SetForegroundColour(active ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
-            m_tools[i].temperature->Refresh();
-        }
-        if (m_tools[i].fan != nullptr) {
-            m_tools[i].fan->SetForegroundColour(active ? DeviceUiStyle::text_primary() : DeviceUiStyle::text_muted());
-            m_tools[i].fan->Refresh();
-        }
-    }
 }
 
-void PrinterStatusPanel::set_tool_select_handler(ToolSelectHandler handler)  { m_tool_select_handler = std::move(handler); }
-void PrinterStatusPanel::set_nozzle_temp_handler(NozzleTempHandler handler)  { m_nozzle_temp_handler = std::move(handler); }
-void PrinterStatusPanel::set_fan_speed_handler(FanSpeedHandler handler)      { m_fan_speed_handler   = std::move(handler); }
-void PrinterStatusPanel::set_bed_temp_handler(BedTempHandler handler)        { m_bed_temp_handler    = std::move(handler); }
+void PrinterStatusPanel::set_tool_select_handler(ToolSelectHandler handler) { m_tool_select_handler = std::move(handler); }
+void PrinterStatusPanel::set_nozzle_temp_handler(NozzleTempHandler handler) { m_nozzle_temp_handler = std::move(handler); }
+void PrinterStatusPanel::set_fan_speed_handler(FanSpeedHandler handler)     { m_fan_speed_handler = std::move(handler); }
+void PrinterStatusPanel::set_bed_temp_handler(BedTempHandler handler)       { m_bed_temp_handler = std::move(handler); }
+void PrinterStatusPanel::set_print_speed_handler(PrintSpeedHandler handler) { m_print_speed_handler = std::move(handler); }
 
-wxString PrinterStatusPanel::temperature_text(const TemperatureReading& reading)
+wxString PrinterStatusPanel::temp_slot_text(bool available, double value)
 {
-    if (!reading.available)
-        return wxString::FromUTF8("-- / --");
-    return wxString::Format("%d / %d %s",
-        static_cast<int>(reading.current),
-        static_cast<int>(reading.target),
-        wxString::FromUTF8("\xC2\xB0""C"));
+    if (!available)
+        return wxString::FromUTF8("--");
+    return wxString::Format("%d", static_cast<int>(value));
+}
+
+void PrinterStatusPanel::cancel_all_temp_edits()
+{
+    for (int i = 0; i < MaxDashboardTools; ++i)
+        end_target_edit(i, false);
+    end_target_edit(-1, false);
+}
+
+void PrinterStatusPanel::begin_target_edit(int tool_index)
+{
+    cancel_all_temp_edits();
+
+    TempView *view = tool_index < 0 ? &m_bed : (tool_index < MaxDashboardTools ? &m_tools[tool_index] : nullptr);
+    if (view == nullptr || view->temp_target == nullptr || view->temp_input == nullptr)
+        return;
+
+    view->temp_editing = true;
+    view->temp_input->ChangeValue(view->temp_available ? wxString::Format("%d", view->temp_last_target) : wxString());
+    view->temp_target->Hide();
+    view->temp_input->Show();
+    if (wxWindow *host = view->temp_input->GetParent()) {
+        const wxSize host_size = host->GetClientSize();
+        view->temp_input->SetSize(0, 0, host_size.GetWidth(), host_size.GetHeight());
+        host->Layout();
+    }
+    Layout();
+    view->temp_input->SetFocus();
+    view->temp_input->SelectAll();
+}
+
+void PrinterStatusPanel::end_target_edit(int tool_index, bool commit)
+{
+    TempView *view = tool_index < 0 ? &m_bed : (tool_index < MaxDashboardTools ? &m_tools[tool_index] : nullptr);
+    if (view == nullptr || view->temp_target == nullptr || view->temp_input == nullptr || !view->temp_editing)
+        return;
+
+    wxString raw = view->temp_input->GetValue();
+    view->temp_editing = false;
+    view->temp_input->Hide();
+    view->temp_target->Show();
+    if (wxWindow *host = view->temp_target->GetParent())
+        host->Layout();
+    Layout();
+
+    if (!commit)
+        return;
+    raw.Trim(true);
+    raw.Trim(false);
+    long value = 0;
+    if (!raw.ToLong(&value) || static_cast<int>(value) == view->temp_last_target)
+        return;
+    if (tool_index < 0) {
+        if (m_bed_temp_handler)
+            m_bed_temp_handler(static_cast<int>(value));
+    } else if (m_nozzle_temp_handler) {
+        m_nozzle_temp_handler(tool_index, static_cast<int>(value));
+    }
 }
 
 } // namespace DeviceDashboard

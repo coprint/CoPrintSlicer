@@ -476,10 +476,10 @@ PrinterToolInfo query_printer_tool(MachineObject *obj, int tool_0based)
         }
 
         if (MainFrame *frame = wxGetApp().mainframe) {
-            if (PrinterWebView *printer_view = frame->m_printer_view) {
+            if (auto *controller = frame->coprint_device_controller()) {
                 wxColour cached;
                 wxString material;
-                if (printer_view->get_loaded_tool_filament(tool_0based, &cached, &material) && cached.IsOk()) {
+                if (controller->get_loaded_tool_filament(tool_0based, &cached, &material) && cached.IsOk()) {
                     info.color        = cached;
                     info.has_filament = true;
                     if (!material.empty())
@@ -505,19 +505,19 @@ static void sync_printer_tool_colours(MachineObject *obj)
     if (obj == nullptr)
         return;
     if (MainFrame *frame = wxGetApp().mainframe) {
-        if (PrinterWebView *printer_view = frame->m_printer_view)
-            printer_view->sync_loaded_tool_filaments(obj);
+        if (auto *controller = frame->coprint_device_controller())
+            controller->sync_loaded_tool_filaments(obj);
     }
 }
 
 bool printer_view_has_loaded_filaments()
 {
     MainFrame *frame = wxGetApp().mainframe;
-    if (frame == nullptr || frame->m_printer_view == nullptr)
+    if (frame == nullptr || frame->coprint_device_controller() == nullptr)
         return false;
     for (int i = 0; i < 4; ++i) {
         wxColour cached;
-        if (frame->m_printer_view->get_loaded_tool_filament(i, &cached, nullptr) && cached.IsOk())
+        if (frame->coprint_device_controller()->get_loaded_tool_filament(i, &cached, nullptr) && cached.IsOk())
             return true;
     }
     return false;
@@ -1732,8 +1732,8 @@ void StartPrintDialog::sync_filaments_then_map(bool remap)
 
     MachineObject *obj = selected_machine();
     if (MainFrame *frame = wxGetApp().mainframe) {
-        if (PrinterWebView *printer_view = frame->m_printer_view) {
-            printer_view->sync_loaded_tool_filaments(obj, after);
+        if (auto *controller = frame->coprint_device_controller()) {
+            controller->sync_loaded_tool_filaments(obj, after);
             return;
         }
     }

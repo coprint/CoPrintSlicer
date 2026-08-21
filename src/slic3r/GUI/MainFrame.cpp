@@ -1,6 +1,9 @@
 #include "MainFrame.hpp"
 
+#include "DeviceDashboard/MoonrakerDeviceController.hpp"
+
 #include <wx/panel.h>
+#include <wx/dcclient.h>
 #include <wx/notebook.h>
 #include <wx/listbook.h>
 #include <wx/simplebook.h>
@@ -1257,71 +1260,54 @@ void MainFrame::init_tabpanel() {
     }
 }
 
-// SoftFever
+// SoftFever: Device tab is always MonitorPanel. Toggle BBL-only auxiliary tabs and CoPrint UI mode.
 void MainFrame::show_device(bool bBBLPrinter) {
-    auto idx = -1;
+    if (m_monitor != nullptr) {
+        m_monitor->configure_device_ui(bBBLPrinter ? MonitorPanel::DeviceUiMode::Bambu
+                                                 : MonitorPanel::DeviceUiMode::CoPrint);
+    }
+
     if (bBBLPrinter) {
-        if (m_tabpanel->FindPage(m_monitor) != wxNOT_FOUND)
-            return;
-        // Remove printer view
-        if (m_printer_view != nullptr && (idx = m_tabpanel->FindPage(m_printer_view)) != wxNOT_FOUND) {
-            m_printer_view->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-
-        // Create/insert monitor page
-        if (!m_monitor) {
-            m_monitor = new MonitorPanel(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
-            m_monitor->SetBackgroundColour(*wxWHITE);
-        }
-        m_monitor->Show(false);
-        m_tabpanel->InsertPage(tpMonitor, m_monitor, _L("Device"), std::string("tab_monitor_active"), std::string("tab_monitor_active"));
-
         if (wxGetApp().is_enable_multi_machine()) {
             if (!m_multi_machine) {
                 m_multi_machine = new MultiMachinePage(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
                 m_multi_machine->SetBackgroundColour(*wxWHITE);
             }
-            // TODO: change the bitmap
-            m_multi_machine->Show(false);
-            m_tabpanel->InsertPage(tpMultiDevice, m_multi_machine, _L("Multi-device"), std::string("tab_multi_active"),
-                                   std::string("tab_multi_active"), false);
+            if (m_tabpanel->FindPage(m_multi_machine) == wxNOT_FOUND) {
+                m_multi_machine->Show(false);
+                m_tabpanel->InsertPage(tpMultiDevice, m_multi_machine, _L("Multi-device"),
+                                       std::string("tab_multi_active"), std::string("tab_multi_active"), false);
+            }
         }
         if (!m_calibration) {
             m_calibration = new CalibrationPanel(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
             m_calibration->SetBackgroundColour(*wxWHITE);
         }
-        m_calibration->Show(false);
-        // Calibration is always the last page, so don't use InsertPage here. Otherwise, if multi_machine page is not enabled,
-        // the calibration tab won't be properly added as well, due to the TabPosition::tpCalibration no longer matches the real tab position.
-        m_tabpanel->AddPage(m_calibration, _L("Calibration"), std::string("tab_calibration_active"),
-                               std::string("tab_calibration_active"), false);
-
+        if (m_tabpanel->FindPage(m_calibration) == wxNOT_FOUND) {
+            m_calibration->Show(false);
+            m_tabpanel->AddPage(m_calibration, _L("Calibration"), std::string("tab_calibration_active"),
+                                std::string("tab_calibration_active"), false);
+        }
 #ifdef _MSW_DARK_MODE
         wxGetApp().UpdateDarkUIWin(this);
-#endif // _MSW_DARK_MODE
-
-    } else {
-        if (m_printer_view != nullptr && m_tabpanel->FindPage(m_printer_view) != wxNOT_FOUND)
-            return;
-
-        if ((idx = m_tabpanel->FindPage(m_calibration)) != wxNOT_FOUND) {
-            m_calibration->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-        if ((idx = m_tabpanel->FindPage(m_multi_machine)) != wxNOT_FOUND) {
-            m_multi_machine->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-        if ((idx = m_tabpanel->FindPage(m_monitor)) != wxNOT_FOUND) {
-            m_monitor->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-        ensure_printer_web_view_created();
-        m_printer_view->Show(false);
-        m_tabpanel->InsertPage(tpMonitor, m_printer_view, _L("Device"), std::string("tab_monitor_active"),
-                               std::string("tab_monitor_active"));
+#endif
+        return;
     }
+
+    int idx = -1;
+    if ((idx = m_tabpanel->FindPage(m_calibration)) != wxNOT_FOUND) {
+        m_calibration->Show(false);
+        m_tabpanel->RemovePage(idx);
+    }
+    if (m_multi_machine != nullptr && (idx = m_tabpanel->FindPage(m_multi_machine)) != wxNOT_FOUND) {
+        m_multi_machine->Show(false);
+        m_tabpanel->RemovePage(idx);
+    }
+}
+
+DeviceDashboard::MoonrakerDeviceController* MainFrame::coprint_device_controller()
+{
+    return m_monitor != nullptr ? m_monitor->coprint_device_controller() : nullptr;
 }
 
 void MainFrame::ensure_printer_web_view_created()
@@ -1681,6 +1667,24 @@ bool MainFrame::can_reslice() const
     return (m_plater != nullptr) && !m_plater->model().objects.empty();
 }
 
+namespace {
+void paint_header_gap_panel(wxPanel *panel)
+{
+    panel->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    panel->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    panel->Bind(wxEVT_PAINT, [panel](wxPaintEvent &) {
+        wxPaintDC dc(panel);
+        wxWindow *host = panel->GetParent();
+        wxColour  bg   = panel->GetBackgroundColour();
+        if (host && host->GetBackgroundColour().IsOk())
+            bg = host->GetBackgroundColour();
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(bg.IsOk() ? bg : wxColour(59, 68, 70)));
+        dc.DrawRectangle(wxPoint(0, 0), panel->GetClientSize());
+    });
+}
+} // namespace
+
 wxBoxSizer* MainFrame::create_side_tools()
 {
     enable_multi_machine = wxGetApp().is_enable_multi_machine();
@@ -1690,8 +1694,10 @@ wxBoxSizer* MainFrame::create_side_tools()
     m_slice_select = eSlicePlate;
     m_print_select = ePrintPlate;
 
-    auto slice_panel = new wxPanel(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxTRANSPARENT_WINDOW);
-    m_print_panel = new wxPanel(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxTRANSPARENT_WINDOW);
+    auto slice_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    m_print_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    paint_header_gap_panel(slice_panel);
+    paint_header_gap_panel(m_print_panel);
 
     m_slice_btn = new SideButton(slice_panel, _L("Slice plate"), "");
     m_slice_option_btn = new SideButton(slice_panel, "", "sidebutton_dropdown", 0, 14);

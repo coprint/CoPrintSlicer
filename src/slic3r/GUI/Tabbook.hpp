@@ -33,6 +33,7 @@ public:
     const wxSize& GetPaddingSize(size_t n);
     void SetPaddingSize(const wxSize& size);
     void SetFooterText(const wxString& text);
+    void showPage(size_t n, bool show);
     TabButton*                      pageButton;
 
 private:

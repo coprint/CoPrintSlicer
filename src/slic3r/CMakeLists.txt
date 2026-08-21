@@ -399,6 +399,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/DeviceCardFrame.hpp
     GUI/DeviceDashboard/DeviceDashboardPage.cpp
     GUI/DeviceDashboard/DeviceDashboardPage.hpp
+    GUI/DeviceDashboard/MoonrakerDeviceController.cpp
+    GUI/DeviceDashboard/MoonrakerDeviceController.hpp
+    GUI/CoPrintPrinterPicker.cpp
+    GUI/CoPrintPrinterPicker.hpp
     GUI/DeviceDashboard/DeviceDashboardState.hpp
     GUI/DeviceDashboard/DeviceStateStore.cpp
     GUI/DeviceDashboard/DeviceStateStore.hpp
@@ -420,6 +424,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/panels/PrintStatusPanel.hpp
     GUI/DeviceDashboard/panels/PrinterStatusPanel.cpp
     GUI/DeviceDashboard/panels/PrinterStatusPanel.hpp
+    GUI/DeviceDashboard/PresetStepSlider.cpp
+    GUI/DeviceDashboard/PresetStepSlider.hpp
+    GUI/DeviceDashboard/StatusPresetPopups.cpp
+    GUI/DeviceDashboard/StatusPresetPopups.hpp
     GUI/StartPrint/StartPrintDialog.cpp
     GUI/StartPrint/StartPrintDialog.hpp
     GUI/PrinterWebView.cpp

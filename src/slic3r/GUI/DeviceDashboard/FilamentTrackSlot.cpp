@@ -21,7 +21,7 @@ FilamentTrackSlot::FilamentTrackSlot(wxWindow *parent, int tool_1based, const wx
     , m_material(material)
 {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
-    SetBackgroundColour(DeviceUiStyle::page_background());
+    SetBackgroundColour(DeviceUiStyle::card_background());
     SetCursor(wxCursor(center == FilamentTrackCenter::SlashSign ? wxCURSOR_ARROW : wxCURSOR_HAND));
     Bind(wxEVT_PAINT, &FilamentTrackSlot::on_paint, this);
 }

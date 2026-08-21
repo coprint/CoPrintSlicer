@@ -178,8 +178,9 @@ void TabButton::render(wxDC &dc)
     }
 
     if (showimg.IsOk()) {
-        pt.x = size.x - showimg.GetWidth() - paddingSize.y - offset_left;
-        pt.y = (size.y - showimg.GetHeight()) / 2;
+        const wxSize bmp_size = show_new_tag ? newtag_img.GetBmpSize() : icon.GetBmpSize();
+        pt.x = size.x - bmp_size.x - FromDIP(paddingSize.y) - offset_left;
+        pt.y = (size.y - bmp_size.y) / 2;
         dc.DrawBitmap(showimg, pt);
     }
 

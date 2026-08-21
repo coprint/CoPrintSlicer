@@ -483,12 +483,12 @@ bool confirm_moonraker_model_action(wxWindow* parent,
                                     const wxString& body_text,
                                     const wxString& confirm_label)
 {
-    const wxColour dialog_bg("#1C1E22");
-    const wxColour card_bg("#23272D");
-    const wxColour border("#3A3F47");
+    const wxColour dialog_bg(*wxWHITE);
+    const wxColour card_bg(*wxWHITE);
+    const wxColour border("#C7C7C7");
     const wxColour accent("#00A886");
-    const wxColour muted_text("#AEB6C1");
-    const wxColour main_text("#F1F3F4");
+    const wxColour muted_text("#767C84");
+    const wxColour main_text("#232527");
 
     wxDialog dlg(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxFRAME_SHAPED);
     dlg.SetBackgroundColour(dialog_bg);
@@ -585,7 +585,7 @@ bool confirm_moonraker_model_action(wxWindow* parent,
             dc.DrawText(label, rect.x + (rect.width - text_w) / 2, rect.y + (rect.height - text_h) / 2);
         };
 
-        draw_button(cancel_rect, _L("Cancel"), wxColour("#2B3037"), wxColour("#59616B"), main_text);
+        draw_button(cancel_rect, _L("Cancel"), *wxWHITE, wxColour("#C7C7C7"), main_text);
         draw_button(delete_rect, confirm_label, accent, accent, wxColour("#FFFFFF"));
     });
 
@@ -769,13 +769,13 @@ private:
         const int pad = FromDIP(12);
         const int details_h = FromDIP(76);
         const int preview_h = std::max(FromDIP(120), size.y - details_h);
-        const wxColour parent_bg("#1C1E22");
-        const wxColour border_colour = m_hover ? wxColour("#00B894") : wxColour("#D8DEE6");
-        const wxColour card_bg("#23272D");
-        const wxColour preview_bg("#2B3037");
-        const wxColour details_bg("#202329");
-        const wxColour title_colour("#F4F7FA");
-        const wxColour meta_colour("#AEB7C2");
+        const wxColour parent_bg("#EEEEEF");
+        const wxColour border_colour = m_hover ? wxColour("#00B894") : wxColour("#C7C7C7");
+        const wxColour card_bg(*wxWHITE);
+        const wxColour preview_bg("#F5F5F5");
+        const wxColour details_bg(*wxWHITE);
+        const wxColour title_colour("#232527");
+        const wxColour meta_colour("#767C84");
 
         dc.SetBackground(wxBrush(parent_bg));
         dc.Clear();
@@ -1197,7 +1197,7 @@ MultiTaskItem::MultiTaskItem(wxWindow* parent, MachineObject* obj, int type)
     : DeviceItem(parent, obj),
     m_task_type(type)
 {
-    SetBackgroundColour(m_task_type == 1 ? wxColour("#1C1E22") : *wxWHITE);
+    SetBackgroundColour(m_task_type == 1 ? wxColour("#EEEEEF") : *wxWHITE);
     const int item_height = m_task_type == 1 ? CLOUD_HISTORY_ITEM_HEIGHT : DEVICE_ITEM_MAX_HEIGHT;
     SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(item_height)));
     SetMaxSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(item_height)));
@@ -1542,11 +1542,11 @@ void MultiTaskItem::doRender(wxDC& dc)
 {
     wxSize size = GetSize();
     if (m_task_type == 1) {
-        const wxColour bg("#1C1E22");
-        const wxColour card_bg(m_hover ? "#252A31" : "#202329");
-        const wxColour border(m_hover ? "#35AD27" : "#343A43");
-        const wxColour text("#F1F3F4");
-        const wxColour muted("#A7ADB5");
+        const wxColour bg("#EEEEEF");
+        const wxColour card_bg(m_hover ? "#F7F7F7" : "#FFFFFF");
+        const wxColour border(m_hover ? "#35AD27" : "#C7C7C7");
+        const wxColour text("#232527");
+        const wxColour muted("#767C84");
         const wxColour accent("#35AD27");
         const int radius = FromDIP(8);
         const wxRect card_rect(FromDIP(10), FromDIP(6), size.x - FromDIP(20), size.y - FromDIP(12));
@@ -1559,8 +1559,8 @@ void MultiTaskItem::doRender(wxDC& dc)
         dc.DrawRoundedRectangle(card_rect.x, card_rect.y, card_rect.width, card_rect.height, radius);
 
         const wxRect thumb_rect(card_rect.x + FromDIP(12), card_rect.y + FromDIP(12), FromDIP(72), FromDIP(60));
-        dc.SetPen(wxPen(wxColour("#3A3F47")));
-        dc.SetBrush(wxBrush(wxColour("#111318")));
+        dc.SetPen(wxPen(wxColour("#C7C7C7")));
+        dc.SetBrush(wxBrush(wxColour("#F5F5F5")));
         dc.DrawRoundedRectangle(thumb_rect.x, thumb_rect.y, thumb_rect.width, thumb_rect.height, FromDIP(6));
         if (m_thumbnail_image.IsOk()) {
             wxImage thumb = m_thumbnail_image.Copy();
@@ -1586,10 +1586,10 @@ void MultiTaskItem::doRender(wxDC& dc)
         DrawTextWithEllipsis(dc, m_history_duration, FromDIP(170), text_left, card_rect.y + FromDIP(60));
         DrawTextWithEllipsis(dc, m_history_date, FromDIP(230), text_left + FromDIP(180), card_rect.y + FromDIP(60));
 
-        const wxColour status_bg = m_history_status == _L("Completed") ? wxColour("#163A2B") :
-                                   m_history_status == _L("Printing") ? wxColour("#17324A") :
-                                   m_history_status == _L("Canceled") ? wxColour("#3A3330") :
-                                                                        wxColour("#3A2225");
+        const wxColour status_bg = m_history_status == _L("Completed") ? wxColour("#E8F6EC") :
+                                   m_history_status == _L("Printing") ? wxColour("#E8F2FA") :
+                                   m_history_status == _L("Canceled") ? wxColour("#F7F0E8") :
+                                                                        wxColour("#F8E8E8");
         const wxColour status_fg = m_history_status == _L("Completed") ? accent :
                                    m_history_status == _L("Printing") ? wxColour("#7CB7FF") :
                                    m_history_status == _L("Canceled") ? wxColour("#F0B15B") :
@@ -2195,14 +2195,14 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
 #ifdef __WINDOWS__
     SetDoubleBuffered(true);
 #endif //__WINDOWS__
-    const wxColour cprint_page_bg("#1C1E22");
-    const wxColour cprint_panel_bg("#1C1E22");
-    const wxColour cprint_table_head("#23272D");
-    const wxColour cprint_table_head_pressed("#2B3037");
-    const wxColour cprint_control_bg("#2A2E35");
-    const wxColour cprint_control_pressed("#343A43");
-    const wxColour cprint_text("#F1F3F4");
-    const wxColour cprint_muted("#A7ADB5");
+    const wxColour cprint_page_bg("#EEEEEF");
+    const wxColour cprint_panel_bg("#EEEEEF");
+    const wxColour cprint_table_head("#F5F5F5");
+    const wxColour cprint_table_head_pressed("#EEEEEE");
+    const wxColour cprint_control_bg("#F5F5F5");
+    const wxColour cprint_control_pressed("#E8E8E8");
+    const wxColour cprint_text("#232527");
+    const wxColour cprint_muted("#767C84");
 
     SetBackgroundColour(cprint_page_bg);
     m_sort.set_role(SortItem::SR_SEND_TIME, true);
@@ -2223,7 +2223,9 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
         std::pair<wxColour, int>(cprint_control_bg, StateColor::Hovered),
         std::pair<wxColour, int>(cprint_control_bg, StateColor::Normal)
     );
-    StateColor header_text = StateColor::darkModeColorFor("#F1F3F4");
+    StateColor header_text = StateColor(
+        std::pair<wxColour, int>(wxColour("#232527"), StateColor::Normal)
+    );
 
     m_table_head_panel = new wxPanel(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
     m_table_head_panel->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), -1));
@@ -2873,12 +2875,12 @@ void CloudTaskManagerPage::update_media_mode_tabs()
     if (!m_timelapse_tab || !m_model_tab)
         return;
 
-    const wxColour selected_bg("#F1F3F4");
+    const wxColour selected_bg("#F5F5F5");
     const wxColour selected_hover("#FFFFFF");
-    const wxColour inactive_bg("#23272D");
-    const wxColour inactive_hover("#2B3037");
-    const wxColour selected_text("#111418");
-    const wxColour inactive_text("#F1F3F4");
+    const wxColour inactive_bg(*wxWHITE);
+    const wxColour inactive_hover("#F7F7F7");
+    const wxColour selected_text("#232527");
+    const wxColour inactive_text("#767C84");
 
     StateColor active_bg(
         std::pair<wxColour, int>(selected_hover, StateColor::Pressed),
@@ -2892,9 +2894,9 @@ void CloudTaskManagerPage::update_media_mode_tabs()
     );
 
     m_timelapse_tab->SetBackgroundColor(m_media_timelapse_mode ? active_bg : normal_bg);
-    m_timelapse_tab->SetTextColor(StateColor::darkModeColorFor(m_media_timelapse_mode ? selected_text : inactive_text));
+    m_timelapse_tab->SetTextColor(StateColor(std::pair<wxColour, int>(m_media_timelapse_mode ? selected_text : inactive_text, StateColor::Normal)));
     m_model_tab->SetBackgroundColor(m_media_timelapse_mode ? normal_bg : active_bg);
-    m_model_tab->SetTextColor(StateColor::darkModeColorFor(m_media_timelapse_mode ? inactive_text : selected_text));
+    m_model_tab->SetTextColor(StateColor(std::pair<wxColour, int>(m_media_timelapse_mode ? inactive_text : selected_text, StateColor::Normal)));
 
     if (!m_table_head_panel || !m_tip_text || !m_loading_text || !m_task_list || !m_flipping_panel || !m_ctrl_btn_panel) {
         m_timelapse_tab->Refresh();
@@ -2944,10 +2946,10 @@ void CloudTaskManagerPage::update_timelapse_filter_tabs()
     if (!m_timelapse_all_files || !m_timelapse_year || !m_timelapse_month)
         return;
 
-    const wxColour active_bg("#2B3037");
-    const wxColour active_hover("#343A43");
-    const wxColour inactive_bg("#1C1E22");
-    const wxColour inactive_hover("#23272D");
+    const wxColour active_bg("#F5F5F5");
+    const wxColour active_hover("#EEEEEE");
+    const wxColour inactive_bg(*wxWHITE);
+    const wxColour inactive_hover("#F7F7F7");
     StateColor active(
         std::pair<wxColour, int>(active_hover, StateColor::Pressed),
         std::pair<wxColour, int>(active_hover, StateColor::Hovered),
@@ -2958,8 +2960,8 @@ void CloudTaskManagerPage::update_timelapse_filter_tabs()
         std::pair<wxColour, int>(inactive_hover, StateColor::Hovered),
         std::pair<wxColour, int>(inactive_bg, StateColor::Normal)
     );
-    StateColor active_text = StateColor::darkModeColorFor("#F1F3F4");
-    StateColor inactive_text = StateColor::darkModeColorFor("#A7ADB5");
+    StateColor active_text = StateColor(std::pair<wxColour, int>(wxColour("#232527"), StateColor::Normal));
+    StateColor inactive_text = StateColor(std::pair<wxColour, int>(wxColour("#767C84"), StateColor::Normal));
 
     auto apply = [&](Button* btn, bool selected) {
         btn->SetBackgroundColor(selected ? active : inactive);
