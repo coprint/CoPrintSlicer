@@ -123,9 +123,15 @@ public:
 
             const int thumb_w = FromDIP(4);
             const int thumb_x = (GetClientSize().GetWidth() - thumb_w) / 2;
+            const int track_h = GetClientSize().GetHeight();
+            const double radius = thumb_w / 2.0;
             dc.SetPen(*wxTRANSPARENT_PEN);
+            if (track_h > 0) {
+                dc.SetBrush(wxBrush(wxColour("#E4E6E8")));
+                dc.DrawRoundedRectangle(thumb_x, 0, thumb_w, track_h, radius);
+            }
             dc.SetBrush(wxBrush(wxColour("#7A8088")));
-            dc.DrawRoundedRectangle(thumb_x, m_thumb_y, thumb_w, m_thumb_height, thumb_w / 2.0);
+            dc.DrawRoundedRectangle(thumb_x, m_thumb_y, thumb_w, m_thumb_height, radius);
         });
     }
 
@@ -2188,20 +2194,14 @@ void PrinterWebView::show_printer_card_actions_menu(wxWindow *anchor, MachineObj
     if (anchor == nullptr || machine == nullptr)
         return;
 
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    const auto local_machines = dev_manager ? dev_manager->get_local_machinelist() : std::map<std::string, MachineObject*>();
-    const bool can_remove = local_machines.find(machine->get_dev_id()) != local_machines.end();
-
     wxMenu menu;
-    menu.Append(1, _L("Edit printer"));
-    if (can_remove) {
-        auto *forget_item = new wxMenuItem(&menu, 2, _L("Forget printer"));
-        forget_item->SetBitmap(create_scaled_bitmap("device_sidebar_bin", this, 16));
-        menu.Append(forget_item);
-    }
+    menu.Append(1, _L("Edit name"));
+    auto *forget_item = new wxMenuItem(&menu, 2, _L("Forget printer"));
+    forget_item->SetBitmap(create_scaled_bitmap("device_sidebar_bin", this, 16));
+    menu.Append(forget_item);
 
-    const wxPoint screen_pos = anchor->ClientToScreen(wxPoint(0, anchor->GetSize().GetHeight()));
-    const int sel = GetPopupMenuSelectionFromUser(menu, screen_pos);
+    const wxPoint pos = anchor->ScreenToClient(wxGetMousePosition());
+    const int sel = anchor->GetPopupMenuSelectionFromUser(menu, pos);
     if (sel == 1) {
         if (edit_sidebar_printer_name(machine)) {
             rebuild_printers_popup();
@@ -2209,7 +2209,7 @@ void PrinterWebView::show_printer_card_actions_menu(wxWindow *anchor, MachineObj
             refresh_layer_info_from_selected_machine();
             Layout();
         }
-    } else if (sel == 2 && can_remove) {
+    } else if (sel == 2) {
         if (confirm_forget_printer())
             forget_local_printer(machine);
     }
@@ -2395,26 +2395,19 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
         return value;
     };
 
-    auto same_printer = [&](const std::string &key, const std::string &entry_dev_id, const std::string &entry_dev_ip) {
-        if ((!dev_id.empty() && (key == dev_id || entry_dev_id == dev_id || entry_dev_ip == dev_id)) ||
-            (!dev_ip.empty() && (key == dev_ip || entry_dev_id == dev_ip || entry_dev_ip == dev_ip)))
+    auto same_target = [&](const std::string &key, const std::string &entry_dev_id, const std::string &entry_dev_ip) {
+        if (!dev_id.empty() && (key == dev_id || entry_dev_id == dev_id))
             return true;
-
-        const std::string target_host = !dev_ip.empty() ? normalize_host(dev_ip) : normalize_host(dev_id);
-        if (target_host.empty())
-            return false;
-
-        return normalize_host(key) == target_host ||
-               normalize_host(entry_dev_id) == target_host ||
-               normalize_host(entry_dev_ip) == target_host;
+        if (!dev_ip.empty() && (key == dev_ip || entry_dev_ip == dev_ip || entry_dev_id == dev_ip))
+            return true;
+        return false;
     };
 
     MachineObject *selected_machine = dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr;
-    if (selected_machine != nullptr &&
-        same_printer(selected_machine->get_dev_id(), selected_machine->get_dev_id(), selected_machine->get_dev_ip())) {
+    if (selected_machine == machine ||
+        (selected_machine != nullptr && same_target(selected_machine->get_dev_id(), selected_machine->get_dev_id(), selected_machine->get_dev_ip()))) {
         selected_machine->disconnect();
         selected_machine->set_online_state(false);
-        selected_machine->reset();
         m_has_active_printer_connection = false;
         if (dev_manager != nullptr)
             dev_manager->set_selected_machine("");
@@ -2422,14 +2415,13 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
 
     std::vector<std::string> keys_to_erase;
     auto add_key = [&keys_to_erase](const std::string &key) {
+        if (key.empty())
+            return;
         if (std::find(keys_to_erase.begin(), keys_to_erase.end(), key) == keys_to_erase.end())
             keys_to_erase.push_back(key);
     };
-    // Always try to drop the legacy empty-key corrupt entry.
-    add_key(std::string());
     add_key(dev_id);
     add_key(dev_ip);
-    const std::string forgotten_name = machine->get_dev_name();
 
     if (wxGetApp().app_config != nullptr) {
         const std::string forgotten_host = normalize_host(!dev_ip.empty() ? dev_ip : dev_id);
@@ -2445,11 +2437,7 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
         const auto saved_machines = wxGetApp().app_config->get_local_machines();
         for (const auto &entry : saved_machines) {
             const BBLocalMachine &local = entry.second;
-            if (same_printer(entry.first, local.dev_id, local.dev_ip) ||
-                entry.first.empty() ||
-                (local.dev_id.empty() && local.dev_ip.empty()) ||
-                (!forgotten_name.empty() && local.dev_name == forgotten_name &&
-                 (local.dev_id.empty() || local.dev_ip.empty()))) {
+            if (same_target(entry.first, local.dev_id, local.dev_ip)) {
                 add_key(entry.first);
                 add_key(local.dev_id);
                 add_key(local.dev_ip);
@@ -2457,24 +2445,12 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
         }
     }
 
-    std::vector<MachineObject *> objects_to_delete;
     if (dev_manager != nullptr) {
         const auto local_machines = dev_manager->get_local_machinelist();
         for (const auto &entry : local_machines) {
-            MachineObject *local = entry.second;
-            if (local == nullptr)
-                continue;
-            if (same_printer(entry.first, local->get_dev_id(), local->get_dev_ip()) ||
-                entry.first.empty() ||
-                (local->get_dev_id().empty() && local->get_dev_ip().empty()) ||
-                local == machine ||
-                (!forgotten_name.empty() && local->get_dev_name() == forgotten_name &&
-                 (local->get_dev_id().empty() || local->get_dev_ip().empty()))) {
+            if (entry.second == machine ||
+                (entry.second != nullptr && same_target(entry.first, entry.second->get_dev_id(), entry.second->get_dev_ip()))) {
                 add_key(entry.first);
-                add_key(local->get_dev_id());
-                add_key(local->get_dev_ip());
-                if (std::find(objects_to_delete.begin(), objects_to_delete.end(), local) == objects_to_delete.end())
-                    objects_to_delete.push_back(local);
             }
         }
     }
@@ -2489,12 +2465,8 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
     if (wxGetApp().app_config != nullptr)
         wxGetApp().app_config->save();
 
-    for (MachineObject *obj : objects_to_delete) {
-        if (obj != nullptr) {
-            obj->disconnect();
-            delete obj;
-        }
-    }
+    machine->disconnect();
+    delete machine;
 
     // Destroying sidebar cards while the trash button is still handling the click
     // can abort the refresh; rebuild after the event unwinds.

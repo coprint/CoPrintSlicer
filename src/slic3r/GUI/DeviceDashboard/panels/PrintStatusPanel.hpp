@@ -10,7 +10,6 @@
 
 class wxStaticBitmap;
 class wxStaticText;
-class Button;
 class ProgressBar;
 
 namespace Slic3r {
@@ -36,19 +35,20 @@ public:
 private:
     static wxString time_text(int seconds);
     wxBitmap make_thumbnail_placeholder();
+    void set_print_actions_enabled(bool enabled);
 
     DeviceCardFrame* m_frame{nullptr};
-    wxPanel* m_thumbnail_host{nullptr};
     wxStaticBitmap* m_thumbnail{nullptr};
     wxStaticText* m_file_name{nullptr};
     wxStaticText* m_elapsed_time{nullptr};
     wxStaticText* m_layer_info{nullptr};
     wxStaticText* m_remaining_time{nullptr};
     ProgressBar* m_progress{nullptr};
-    Button* m_pause_button{nullptr};
-    Button* m_stop_button{nullptr};
+    wxStaticBitmap* m_pause_icon{nullptr};
+    wxStaticBitmap* m_stop_icon{nullptr};
     ActionHandler m_pause_handler;
     ActionHandler m_stop_handler;
+    bool m_print_actions_enabled{true};
 };
 
 } // namespace DeviceDashboard

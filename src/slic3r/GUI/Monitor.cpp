@@ -183,6 +183,8 @@ void MonitorPanel::init_tabpanel()
             auto title = m_tabpanel->GetPageText(m_tabpanel->GetSelection());
             m_media_file_panel->SwitchStorage(title == _L("Storage"));
         } else if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+            if (m_coprint_printer_picker != nullptr)
+                m_coprint_printer_picker->set_status_page_active(page == m_coprint_status_panel);
             if (page == m_coprint_storage_page || page == m_coprint_print_models_page) {
                 if (page == m_coprint_storage_page)
                     m_coprint_backend->set_coprint_storage_mode(false);
@@ -302,7 +304,11 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
     show_tab(2, !coprint); // BBL Update
     show_tab(m_bbl_hms_tab_index, !coprint);
 
-    show_tab(m_coprint_status_tab_index, coprint);
+    // Status is opened from the Printers accordion; hide only the tab button.
+    if (m_coprint_status_tab_index >= 0)
+        m_tabpanel->GetBtnsListCtrl()->showPage(static_cast<size_t>(m_coprint_status_tab_index), false);
+    if (!coprint)
+        show_tab(m_coprint_status_tab_index, false);
     show_tab(m_coprint_storage_tab_index, false); // Timelapse — hidden in CoPrint sidebar
     show_tab(m_coprint_models_tab_index, coprint);
     show_tab(m_coprint_update_tab_index, coprint);
@@ -313,6 +319,7 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
             wxSizer* side_sizer = side_parent->GetSizer();
             if (side_sizer != nullptr) {
                 m_coprint_printer_picker = new CoPrintPrinterPicker(side_parent, m_coprint_backend);
+                m_coprint_printer_picker->set_open_status_handler([this]() { show_coprint_status_page(); });
                 side_sizer->Insert(0, m_coprint_printer_picker, 0, wxEXPAND);
             }
         }
@@ -323,11 +330,26 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
     if (m_side_tools != nullptr)
         m_side_tools->Show(!coprint);
 
-    if (coprint && m_coprint_status_tab_index >= 0)
+    if (coprint && m_coprint_status_tab_index >= 0) {
         m_tabpanel->SetSelection(m_coprint_status_tab_index);
+        if (m_coprint_printer_picker != nullptr)
+            m_coprint_printer_picker->set_status_page_active(true);
+    }
 
     Layout();
     update_all();
+}
+
+void MonitorPanel::show_coprint_status_page()
+{
+    if (m_tabpanel == nullptr || m_coprint_status_tab_index < 0)
+        return;
+    m_tabpanel->SetSelection(m_coprint_status_tab_index);
+    if (m_coprint_backend != nullptr)
+        m_coprint_backend->refresh_layer_info_from_selected_machine();
+    if (m_coprint_printer_picker != nullptr)
+        m_coprint_printer_picker->set_status_page_active(true);
+    Layout();
 }
 
 void MonitorPanel::set_default()

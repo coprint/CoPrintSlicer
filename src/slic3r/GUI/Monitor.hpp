@@ -149,6 +149,7 @@ public:
     void init_tabpanel();
     void configure_device_ui(DeviceUiMode mode);
     void ensure_coprint_backend();
+    void show_coprint_status_page();
     Tabbook* get_tabpanel() { return m_tabpanel; };
     DeviceDashboard::MoonrakerDeviceController* coprint_device_controller() { return m_coprint_controller.get(); }
     PrinterWebView* coprint_backend() { return m_coprint_backend; }

@@ -88,7 +88,6 @@ DeviceDashboardPage::DeviceDashboardPage(wxWindow* parent)
         command.kind = DeviceCommandKind::StopPrint;
         forward_command(command);
     });
-
     bind_size_handler();
 }
 

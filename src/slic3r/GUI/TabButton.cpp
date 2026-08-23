@@ -21,7 +21,7 @@ const static wxColour TAB_BUTTON_SEL   = wxColour("#BFE1DE"); // ORCA
 
 TabButton::TabButton()
     : paddingSize(18, 16) // ORCA reduce / match left margin buttons on sidebars
-    , text_color(*wxBLACK)
+    , text_color(wxColour("#434343"))
 {
     background_color = StateColor(
         std::make_pair(TAB_BUTTON_SEL, (int) StateColor::Checked),
@@ -184,6 +184,14 @@ void TabButton::render(wxDC &dc)
         dc.DrawBitmap(showimg, pt);
     }
 
+    const bool hovered = (states & (int) StateColor::Hovered) != 0;
+    const bool selected = background_color.colorForStates(states) == TAB_BUTTON_SEL;
+    if (!hovered && !selected) {
+        const int line_h = FromDIP(1) > 0 ? FromDIP(1) : 1;
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour("#E1E1E1")));
+        dc.DrawRectangle(0, size.y - line_h, size.x, line_h);
+    }
 }
 
 void TabButton::messureSize()

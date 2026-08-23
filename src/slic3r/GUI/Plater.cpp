@@ -2455,7 +2455,9 @@ void Sidebar::update_all_preset_comboboxes()
             p->m_bpButton_ams_filament->Hide();
 
         auto print_btn_type = MainFrame::PrintSelectType::eExportGcode;
-        if (preset_bundle.use_device_print_flow()) {
+        if (is_chromaset) {
+            print_btn_type = MainFrame::PrintSelectType::eSendGcode;
+        } else if (preset_bundle.use_device_print_flow()) {
             // Sidebar printer preset is for slicing only; Moonraker target is picked in Start Print dialog.
             print_btn_type = MainFrame::PrintSelectType::ePrintPlate;
         } else {
@@ -10263,10 +10265,6 @@ void Plater::priv::on_action_send_gcode(SimpleEvent& event)
 {
     if (q != nullptr) {
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received export gcode event\n" ;
-    }
-    if (wxGetApp().preset_bundle->use_device_print_flow()) {
-        on_action_print_plate(event);
-        return;
     }
     q->send_gcode_legacy();
 }

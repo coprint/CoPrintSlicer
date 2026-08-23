@@ -98,12 +98,31 @@ wxDEFINE_EVENT(EVT_LOAD_URL, wxCommandEvent);
 wxDEFINE_EVENT(EVT_LOAD_PRINTER_URL, LoadPrinterViewEvent);
 
 namespace {
-bool is_chromaset_printer()
+std::string current_printer_model()
 {
     if (!wxGetApp().preset_bundle)
-        return false;
-    const std::string model = wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
-    return boost::algorithm::icontains(model, "ChromaSet");
+        return {};
+    return wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+}
+
+bool is_chromaset_printer()
+{
+    return boost::algorithm::icontains(current_printer_model(), "ChromaSet");
+}
+
+bool is_quadro_printer()
+{
+    return boost::algorithm::icontains(current_printer_model(), "Quadro");
+}
+
+bool show_print_plate_action()
+{
+    return !is_chromaset_printer();
+}
+
+bool show_remote_print_action()
+{
+    return !is_quadro_printer();
 }
 
 wxString chromaset_remote_print_label()
@@ -1865,7 +1884,38 @@ wxBoxSizer* MainFrame::create_side_tools()
 
             if (wxGetApp().preset_bundle
                 && (!wxGetApp().preset_bundle->is_bbl_vendor() || is_chromaset_printer())) {
-                // Third-party and ChromaSet: remote print + export G-code. No Print plate.
+                // Third-party and ChromaSet: Start Print + Orca remote print + export G-code.
+                // Only create menu items that belong to this printer; unused children of
+                // SidePopup still paint at (0,0) and stay clickable under the main button.
+                if (show_print_plate_action()) {
+                    SideButton* print_plate_btn = new SideButton(p, _L("Print plate"), "");
+                    print_plate_btn->SetCornerRadius(0);
+                    print_plate_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
+                        m_print_btn->SetLabel(_L("Print plate"));
+                        m_print_select = ePrintPlate;
+                        m_print_enable = get_enable_print_status();
+                        m_print_btn->Enable(m_print_enable);
+                        this->Layout();
+                        p->Dismiss();
+                    });
+                    p->append_button(print_plate_btn);
+                }
+
+                if (show_remote_print_action()) {
+                    const wxString remote_label = chromaset_remote_print_label();
+                    SideButton* remote_print_btn = new SideButton(p, remote_label, "");
+                    remote_print_btn->SetCornerRadius(0);
+                    remote_print_btn->Bind(wxEVT_BUTTON, [this, p, remote_label](wxCommandEvent&) {
+                        m_print_btn->SetLabel(remote_label);
+                        m_print_select = eSendGcode;
+                        m_print_enable = get_enable_print_status();
+                        m_print_btn->Enable(m_print_enable);
+                        this->Layout();
+                        p->Dismiss();
+                    });
+                    p->append_button(remote_print_btn);
+                }
+
                 SideButton* export_gcode_btn = new SideButton(p, _L("Export G-code file"), "");
                 export_gcode_btn->SetCornerRadius(0);
                 export_gcode_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
@@ -1876,21 +1926,6 @@ wxBoxSizer* MainFrame::create_side_tools()
                     this->Layout();
                     p->Dismiss();
                     });
-
-                const bool chromaset = is_chromaset_printer();
-                const wxString print_label = chromaset ? chromaset_remote_print_label() : _L("Print");
-                SideButton* send_gcode_btn = new SideButton(p, print_label, "");
-                send_gcode_btn->SetCornerRadius(0);
-                send_gcode_btn->Bind(wxEVT_BUTTON, [this, p, print_label, chromaset](wxCommandEvent&) {
-                    m_print_btn->SetLabel(print_label);
-                    m_print_select = chromaset ? ePrintPlate : eSendGcode;
-                    m_print_enable = get_enable_print_status();
-                    m_print_btn->Enable(m_print_enable);
-                    this->Layout();
-                    p->Dismiss();
-                    });
-
-                p->append_button(send_gcode_btn);
                 p->append_button(export_gcode_btn);
             }
             else {
@@ -1915,6 +1950,21 @@ wxBoxSizer* MainFrame::create_side_tools()
                     this->Layout();
                     p->Dismiss();
                     });
+
+                SideButton* remote_print_btn = nullptr;
+                if (show_remote_print_action()) {
+                    const wxString remote_label = chromaset_remote_print_label();
+                    remote_print_btn = new SideButton(p, remote_label, "");
+                    remote_print_btn->SetCornerRadius(0);
+                    remote_print_btn->Bind(wxEVT_BUTTON, [this, p, remote_label](wxCommandEvent&) {
+                        m_print_btn->SetLabel(remote_label);
+                        m_print_select = eSendGcode;
+                        m_print_enable = get_enable_print_status();
+                        m_print_btn->Enable(m_print_enable);
+                        this->Layout();
+                        p->Dismiss();
+                    });
+                }
 
                 SideButton* print_all_btn = new SideButton(p, _L("Print all"), "");
                 print_all_btn->SetCornerRadius(0);
@@ -1983,13 +2033,22 @@ wxBoxSizer* MainFrame::create_side_tools()
                     }
                 }
 
-                p->append_button(print_plate_btn);
-                if (support_print_all) {
+                if (show_print_plate_action())
+                    p->append_button(print_plate_btn);
+                else
+                    print_plate_btn->Hide();
+                if (remote_print_btn)
+                    p->append_button(remote_print_btn);
+                if (support_print_all)
                     p->append_button(print_all_btn);
-                }
+                else
+                    print_all_btn->Hide();
                 if (support_send) {
                     p->append_button(send_to_printer_btn);
                     p->append_button(send_to_printer_all_btn);
+                } else {
+                    send_to_printer_btn->Hide();
+                    send_to_printer_all_btn->Hide();
                 }
                 if (enable_multi_machine) {
                     SideButton* print_multi_machine_btn = new SideButton(p, _L("Send to Multi-device"), "");
@@ -3828,14 +3887,14 @@ void MainFrame::on_config_changed(DynamicPrintConfig* config) const
 void MainFrame::set_print_button_to_default(PrintSelectType select_type)
 {
     if (select_type == PrintSelectType::ePrintPlate) {
-        m_print_btn->SetLabel(is_chromaset_printer() ? chromaset_remote_print_label() : _L("Print plate"));
+        m_print_btn->SetLabel(_L("Print plate"));
         m_print_select = ePrintPlate;
         if (m_print_enable)
             m_print_enable = get_enable_print_status();
         m_print_btn->Enable(m_print_enable);
         this->Layout();
     } else if (select_type == PrintSelectType::eSendGcode) {
-        m_print_btn->SetLabel(_L("Print"));
+        m_print_btn->SetLabel(chromaset_remote_print_label());
         m_print_select = eSendGcode;
         if (m_print_enable)
             m_print_enable = get_enable_print_status() && can_send_gcode();

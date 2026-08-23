@@ -154,8 +154,14 @@ void ProgressBar::SetMinSize(const wxSize &size)
 
 void ProgressBar::paintEvent(wxPaintEvent &evt)
 {
+#ifdef __WXMSW__
     wxAutoBufferedPaintDC dc(this);
     render(dc);
+#else
+    wxPaintDC dc(this);
+    wxGCDC gcdc(dc);
+    doRender(gcdc);
+#endif
 }
 
 void ProgressBar::render(wxDC &dc)
@@ -249,7 +255,7 @@ void ProgressBar::doRender(wxDC &dc)
         auto text = wxString::Format("%d%%", step);
         dc.SetFont(GetFont());
         auto textSize = dc.GetMultiLineTextExtent(text);
-        dc.SetTextForeground(wxColour(200, 205, 215));
+        dc.SetTextForeground(wxColour("#7891A3"));
         auto pt = wxPoint();
         pt.x = size.x - textSize.x - FromDIP(8);
         pt.y = (size.y - textSize.y) / 2;

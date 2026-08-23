@@ -109,6 +109,8 @@ public:
     wxPanel* coprint_status_host() const { return m_status_page; }
     void show_add_printer_dialog();
     wxString sidebar_display_name_for(const MachineObject *machine) const;
+    bool edit_sidebar_printer_name(MachineObject *machine);
+    void show_printer_card_actions_menu(wxWindow *anchor, MachineObject *machine);
 
 private:
     void apply_filament_tool_selection(int tool_index);
@@ -150,8 +152,6 @@ private:
     bool send_toolhead_fan_speed_command(int tool_index, int fan_percent);
     void show_filament_load_wizard();
     void show_filament_busy_dialog(bool is_load);
-    void show_printer_card_actions_menu(wxWindow *anchor, MachineObject *machine);
-    bool edit_sidebar_printer_name(MachineObject *machine);
     bool confirm_forget_printer();
     void forget_local_printer(MachineObject *machine);
     void ensure_camera_webview_created();

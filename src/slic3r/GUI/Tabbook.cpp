@@ -22,7 +22,7 @@ static const wxFont& TAB_BUTTON_FONT_SEL = Label::Head_14;
 
 
 static const int BUTTON_DEF_HEIGHT = 46;
-static const int BUTTON_DEF_WIDTH  = 220;
+static const int BUTTON_DEF_WIDTH  = 254;
 
 
 TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools) :
@@ -133,7 +133,7 @@ bool TabButtonsListCtrl::InsertPage(size_t n, const wxString &text, bool bSelect
     btn->SetMinSize({BUTTON_DEF_WIDTH * em / 10, BUTTON_DEF_HEIGHT * em / 10});
 
     btn->SetBackgroundColor(TAB_BUTTON_BG);
-    btn->SetTextColor(*wxBLACK);
+    btn->SetTextColor(wxColour("#434343"));
     btn->Bind(wxEVT_BUTTON, [this, btn](wxCommandEvent& event) {
         if (auto it = std::find(m_pageButtons.begin(), m_pageButtons.end(), btn); it != m_pageButtons.end()) {
             auto sel = it - m_pageButtons.begin();
