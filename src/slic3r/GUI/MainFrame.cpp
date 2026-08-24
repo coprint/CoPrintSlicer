@@ -57,6 +57,7 @@
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
+#include "Widgets/Label.hpp"
 #include "GUI_Factories.hpp"
 #include "GUI_ObjectList.hpp"
 #include "NotificationManager.hpp"
@@ -1147,6 +1148,20 @@ void MainFrame::show_option(bool show)
             Layout();
         }
     }
+    update_device_refresh_button();
+}
+
+void MainFrame::update_device_refresh_button()
+{
+    if (m_device_refresh_panel == nullptr)
+        return;
+    const bool on_device = m_tabpanel != nullptr && m_tabpanel->GetSelection() == tpMonitor;
+    if (m_device_refresh_panel->IsShown() == on_device)
+        return;
+    m_device_refresh_panel->Show(on_device);
+    if (wxWindow *parent = m_device_refresh_panel->GetParent())
+        parent->Layout();
+    Layout();
 }
 
 void MainFrame::init_tabpanel() {
@@ -1174,6 +1189,7 @@ void MainFrame::init_tabpanel() {
         int sel = m_tabpanel->GetSelection();
         //wxString page_text = m_tabpanel->GetPageText(sel);
         m_last_selected_tab = m_tabpanel->GetSelection();
+        update_device_refresh_button();
         if (panel == m_plater) {
             if (sel == tp3DEditor) {
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLVIEWTOOLBAR_3D));
@@ -1715,13 +1731,16 @@ wxBoxSizer* MainFrame::create_side_tools()
 
     auto slice_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
     m_print_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    m_device_refresh_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
     paint_header_gap_panel(slice_panel);
     paint_header_gap_panel(m_print_panel);
+    paint_header_gap_panel(m_device_refresh_panel);
 
     m_slice_btn = new SideButton(slice_panel, _L("Slice plate"), "");
     m_slice_option_btn = new SideButton(slice_panel, "", "sidebutton_dropdown", 0, 14);
     m_print_btn = new SideButton(m_print_panel, _L("Print plate"), "");
     m_print_option_btn = new SideButton(m_print_panel, "", "sidebutton_dropdown", 0, 14);
+    m_device_refresh_btn = new SideButton(m_device_refresh_panel, _L("Refresh"), "");
 
     auto slice_sizer = new wxBoxSizer(wxHORIZONTAL);
     slice_sizer->Add(m_slice_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
@@ -1733,13 +1752,21 @@ wxBoxSizer* MainFrame::create_side_tools()
     print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
     m_print_panel->SetSizer(print_sizer);
 
+    auto refresh_sizer = new wxBoxSizer(wxHORIZONTAL);
+    refresh_sizer->Add(m_device_refresh_btn, 0, wxALIGN_CENTER_VERTICAL, 0);
+    m_device_refresh_panel->SetSizer(refresh_sizer);
+    m_device_refresh_panel->Hide();
+
     update_side_button_style();
     m_slice_option_btn->Enable();
     m_print_option_btn->Enable();
+    m_device_refresh_btn->Enable();
     sizer->Add(FromDIP(15), 0, 0, 0, 0);
     sizer->Add(slice_panel);
     sizer->Add(FromDIP(15), 0, 0, 0, 0);
     sizer->Add(m_print_panel);
+    sizer->Add(FromDIP(15), 0, 0, 0, 0);
+    sizer->Add(m_device_refresh_panel);
     sizer->Add(FromDIP(19), 0, 0, 0, 0);
 
     sizer->Layout();
@@ -1842,6 +1869,11 @@ wxBoxSizer* MainFrame::create_side_tools()
             /* else if (m_print_select == ePrintMultiMachine)
                  wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_MULTI_MACHINE));*/
         });
+
+    m_device_refresh_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        if (m_monitor != nullptr)
+            m_monitor->force_refresh_device();
+    });
 
     m_slice_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
         {
@@ -2282,6 +2314,18 @@ void MainFrame::update_side_button_style()
     m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
     m_print_option_btn->SetIconOffset(FromDIP(2));
     m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
+
+    if (m_device_refresh_btn != nullptr) {
+        m_device_refresh_btn->SetFont(Label::Body_14);
+        m_device_refresh_btn->SetLayoutStyle(1);
+        m_device_refresh_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center, 0);
+        m_device_refresh_btn->SetCornerRadius(FromDIP(8));
+        m_device_refresh_btn->SetExtraSize(wxSize(0, 0));
+        const wxSize refresh_size(FromDIP(100), FromDIP(24));
+        m_device_refresh_btn->SetMinSize(refresh_size);
+        m_device_refresh_btn->SetMaxSize(refresh_size);
+        m_device_refresh_btn->SetSize(refresh_size);
+    }
 }
 
 void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
@@ -2350,6 +2394,8 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
     m_print_btn->Rescale();
     m_slice_option_btn->Rescale();
     m_print_option_btn->Rescale();
+    if (m_device_refresh_btn != nullptr)
+        m_device_refresh_btn->Rescale();
 
     // update Plater
     wxGetApp().plater()->msw_rescale();
@@ -3765,6 +3811,7 @@ void MainFrame::jump_to_monitor(std::string dev_id)
     if(!m_monitor)
         return;
     m_tabpanel->SetSelection(tpMonitor);
+    update_device_refresh_button();
     if (!dev_id.empty()) {
         ((MonitorPanel*)m_monitor)->select_machine(dev_id);
     }
@@ -3812,6 +3859,7 @@ void MainFrame::select_tab(size_t tab/* = size_t(-1)*/)
     };
 
     select(false);
+    update_device_refresh_button();
 }
 
 void MainFrame::request_select_tab(TabPosition pos)

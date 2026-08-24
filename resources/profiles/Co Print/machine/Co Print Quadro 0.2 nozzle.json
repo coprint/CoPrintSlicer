@@ -14,7 +14,7 @@
     "before_layer_change_gcode": "",
     "best_object_pos": "0.5,0.5",
     "change_extrusion_role_gcode": "",
-    "change_filament_gcode": "FILAMENT_CHANGE LAYER_NUM=[layer_num] NEXT_EXTRUDER=[next_extruder]",
+    "change_filament_gcode": "",
     "cooling_tube_length": "0",
     "cooling_tube_retraction": "0",
     "default_bed_type": "",
@@ -362,7 +362,7 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.2",
+    "version": "2.4.0.3",
     "wipe": [
         "0",
         "0",

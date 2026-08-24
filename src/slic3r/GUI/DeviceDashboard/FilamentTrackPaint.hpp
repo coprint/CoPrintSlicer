@@ -20,6 +20,9 @@ enum class FilamentTrackCenter {
 wxColour readable_filament_track_colour(const wxColour &colour, const wxColour &fallback);
 bool filament_track_fill_is_dark(const wxColour &fill);
 
+// Edit pencil on the spool: true 14 DIP (not DeviceUiStyle::scaled / 0.8).
+inline constexpr int kFilamentEditIconDip = 14;
+
 void draw_filament_track_rails(wxGraphicsContext *gc, const wxRect &track, wxWindow *dip_window,
     bool paired_rails = false);
 

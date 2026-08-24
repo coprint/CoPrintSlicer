@@ -80,36 +80,57 @@ wxBitmap load_png_size(wxWindow* parent, const std::string& name, int dip_w, int
 
 wxBitmap tint_edit_icon(wxWindow* win, int dip, const wxColour& fg)
 {
-    wxBitmap bitmap = create_scaled_bitmap("ams_editable", win, dip);
-    if (!bitmap.IsOk())
-        return bitmap;
+    double scale = 1.0;
+#ifdef __APPLE__
+    scale = std::max(1.0, mac_max_scaling_factor());
+#elif defined(__WXMSW__)
+    scale = std::max(1.0, win->GetDPIScaleFactor());
+#endif
 
-    wxImage image = bitmap.ConvertToImage();
-    if (!image.IsOk() || image.GetWidth() <= 0 || image.GetHeight() <= 0)
-        return bitmap;
+    auto make_tinted = [&](int raster_dip) -> wxImage {
+        wxBitmap bitmap = create_scaled_bitmap("ams_editable", win, raster_dip);
+        if (!bitmap.IsOk())
+            return wxImage();
+        wxImage image = bitmap.ConvertToImage();
+        if (!image.IsOk() || image.GetWidth() <= 0 || image.GetHeight() <= 0)
+            return wxImage();
+        unsigned char* data = image.GetData();
+        if (data == nullptr)
+            return wxImage();
+        const unsigned char* alpha = image.HasAlpha() ? image.GetAlpha() : nullptr;
+        const int pixels = image.GetWidth() * image.GetHeight();
+        for (int i = 0; i < pixels; ++i) {
+            if (alpha != nullptr && alpha[i] == 0)
+                continue;
+            const int offset = i * 3;
+            data[offset + 0] = fg.Red();
+            data[offset + 1] = fg.Green();
+            data[offset + 2] = fg.Blue();
+        }
+        return image;
+    };
 
-    unsigned char* data = image.GetData();
-    if (data == nullptr)
-        return bitmap;
+    wxImage image = make_tinted(dip);
+    if (!image.IsOk())
+        return wxBitmap();
 
-    const unsigned char* alpha = image.HasAlpha() ? image.GetAlpha() : nullptr;
-    const int pixels = image.GetWidth() * image.GetHeight();
-    for (int i = 0; i < pixels; ++i) {
-        if (alpha != nullptr && alpha[i] == 0)
-            continue;
-        const int offset = i * 3;
-        data[offset + 0] = fg.Red();
-        data[offset + 1] = fg.Green();
-        data[offset + 2] = fg.Blue();
+    // ConvertToImage can drop Retina backing. Never upscale that 1x raster (looks pixelated);
+    // rasterize the SVG again at a larger DIP so 12 DIP still has 2x pixels.
+    const int want_h = std::max(1, static_cast<int>(std::lround(win->FromDIP(dip) * scale)));
+    if (image.GetHeight() + 1 < want_h) {
+        const int hi_dip = std::max(dip + 1, static_cast<int>(std::lround(dip * scale)));
+        wxImage hi = make_tinted(hi_dip);
+        if (hi.IsOk())
+            image = std::move(hi);
     }
 
-    const double scale = bitmap.GetScaleFactor();
+    const double out_scale = (image.GetHeight() + 1 >= want_h) ? scale : 1.0;
 #ifdef __APPLE__
-    return wxBitmap(image, -1, scale > 0.01 ? scale : 1.0);
+    return wxBitmap(image, -1, out_scale);
 #else
     wxBitmap tinted(image);
-    if (scale > 0.01)
-        tinted.SetScaleFactor(scale);
+    if (out_scale > 1.01)
+        tinted.SetScaleFactor(out_scale);
     return tinted;
 #endif
 }
@@ -373,8 +394,8 @@ private:
 
     void reload_icons()
     {
-        m_edit_icon_on_dark = tint_edit_icon(this, s(14), *wxWHITE);
-        m_edit_icon_on_light = tint_edit_icon(this, s(14), DeviceUiStyle::text_primary());
+        m_edit_icon_on_dark = tint_edit_icon(this, kFilamentEditIconDip, *wxWHITE);
+        m_edit_icon_on_light = tint_edit_icon(this, kFilamentEditIconDip, DeviceUiStyle::text_primary());
         m_add_icon_bmp  = create_scaled_bitmap("add_filament", this, s(18));
         m_center_bmp = load_png_size(this, "filament-center", 193, 271);
     }
@@ -430,16 +451,21 @@ void style_action_button(Button* button)
     button->SetSize(size);
     button->SetCornerRadius(d(button, 8));
     button->SetBorderWidth(0);
-    button->SetBackgroundColor(StateColor(
+    StateColor bg(
         std::pair(wxColour(232, 232, 232), (int) StateColor::Disabled),
         std::pair(wxColour(224, 224, 224), (int) StateColor::Pressed),
         std::pair(wxColour(238, 238, 238), (int) StateColor::Hovered),
-        std::pair(wxColour(245, 245, 245), (int) StateColor::Normal)));
-    button->SetTextColor(StateColor(
+        std::pair(wxColour(245, 245, 245), (int) StateColor::Normal));
+    bg.setTakeFocusedAsHovered(false);
+    StateColor fg(
         std::pair(DeviceUiStyle::text_muted(), (int) StateColor::Disabled),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Pressed),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
-        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal)));
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal));
+    fg.setTakeFocusedAsHovered(false);
+    button->SetBackgroundColor(bg);
+    button->SetTextColor(fg);
+    button->SetCanFocus(false);
 }
 
 FilamentPanel::FilamentPanel(wxWindow* parent)

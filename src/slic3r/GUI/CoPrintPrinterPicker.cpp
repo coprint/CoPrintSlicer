@@ -384,8 +384,15 @@ CoPrintPrinterPicker::CoPrintPrinterPicker(wxWindow* parent, PrinterWebView* bac
     m_submenu->SetBackgroundColour(kHeaderBg);
     m_submenu_sizer = new wxBoxSizer(wxVERTICAL);
     m_submenu->SetSizer(m_submenu_sizer);
-    m_submenu->Hide();
+    m_submenu->Show(m_expanded);
     sizer->Add(m_submenu, 0, wxEXPAND);
+
+    m_submenu_border = new wxPanel(this, wxID_ANY);
+    m_submenu_border->SetMinSize(wxSize(-1, FromDIP(1)));
+    m_submenu_border->SetMaxSize(wxSize(-1, FromDIP(1)));
+    m_submenu_border->SetBackgroundColour(kHeaderIdleLine);
+    m_submenu_border->Show(m_expanded);
+    sizer->Add(m_submenu_border, 0, wxEXPAND);
 
     build_add_printer();
     sizer->Add(m_add_panel, 0, wxEXPAND);
@@ -393,6 +400,8 @@ CoPrintPrinterPicker::CoPrintPrinterPicker(wxWindow* parent, PrinterWebView* bac
 
     rebuild_list();
     apply_header_style();
+    if (m_chevron != nullptr)
+        m_chevron->SetBitmap(m_expanded && m_arrow_down.IsOk() ? m_arrow_down : m_arrow_right);
 }
 
 void CoPrintPrinterPicker::set_open_status_handler(std::function<void()> handler)
@@ -718,6 +727,8 @@ void CoPrintPrinterPicker::show_add_printer()
         m_header->Hide();
     if (m_submenu != nullptr)
         m_submenu->Hide();
+    if (m_submenu_border != nullptr)
+        m_submenu_border->Hide();
     if (m_add_panel != nullptr)
         m_add_panel->Show();
     rebuild_auto_list(true);
@@ -740,6 +751,8 @@ void CoPrintPrinterPicker::hide_add_printer()
         m_header->Show();
     if (m_submenu != nullptr)
         m_submenu->Show(m_expanded);
+    if (m_submenu_border != nullptr)
+        m_submenu_border->Show(m_expanded);
     rebuild_list();
     relayout_parents();
 }
@@ -1027,7 +1040,7 @@ void CoPrintPrinterPicker::paint_header()
         dc.SetPen(wxPen(kHeaderHoverBorder, line_h));
         dc.SetBrush(*wxTRANSPARENT_BRUSH);
         dc.DrawRectangle(0, 0, size.x, size.y);
-    } else if (!m_header_hovered && !m_status_page_active) {
+    } else if (!m_expanded && !m_header_hovered && !m_status_page_active) {
         dc.SetPen(*wxTRANSPARENT_PEN);
         dc.SetBrush(wxBrush(kHeaderIdleLine));
         dc.DrawRectangle(0, size.y - line_h, size.x, line_h);
@@ -1046,8 +1059,12 @@ void CoPrintPrinterPicker::set_expanded(bool expanded)
     m_expanded = expanded;
     if (m_submenu != nullptr)
         m_submenu->Show(m_expanded);
+    if (m_submenu_border != nullptr)
+        m_submenu_border->Show(m_expanded && !m_add_mode);
     if (m_chevron != nullptr)
         m_chevron->SetBitmap(m_expanded && m_arrow_down.IsOk() ? m_arrow_down : m_arrow_right);
+    if (m_header != nullptr)
+        m_header->Refresh();
     relayout_parents();
 }
 
@@ -1106,14 +1123,19 @@ MachineObject* CoPrintPrinterPicker::live_machine(const std::string& dev_id) con
     return nullptr;
 }
 
-void CoPrintPrinterPicker::refresh_list()
+void CoPrintPrinterPicker::refresh_list(bool force)
 {
     if (m_add_mode)
-        rebuild_auto_list(false);
-    const std::string signature = list_signature();
-    if (signature == m_list_signature)
+        rebuild_auto_list(force);
+    if (!force) {
+        const std::string signature = list_signature();
+        if (signature == m_list_signature)
+            return;
+        schedule_rebuild_list();
         return;
-    schedule_rebuild_list();
+    }
+    m_list_signature.clear();
+    rebuild_list();
 }
 
 void CoPrintPrinterPicker::update_selection()

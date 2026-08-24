@@ -185,12 +185,9 @@ void MonitorPanel::init_tabpanel()
         } else if (m_device_ui_mode == DeviceUiMode::CoPrint) {
             if (m_coprint_printer_picker != nullptr)
                 m_coprint_printer_picker->set_status_page_active(page == m_coprint_status_panel);
-            if (page == m_coprint_storage_page || page == m_coprint_print_models_page) {
-                if (page == m_coprint_storage_page)
-                    m_coprint_backend->set_coprint_storage_mode(false);
-                else if (page == m_coprint_print_models_page)
-                    m_coprint_backend->set_coprint_storage_mode(true);
-            } else if (page == m_coprint_update_page && m_coprint_backend != nullptr) {
+            if (page == m_coprint_print_models_page)
+                m_coprint_print_models_page->reload_media_models();
+            else if (page == m_coprint_update_page && m_coprint_backend != nullptr) {
                 m_coprint_backend->refresh_update_page_from_selected_machine();
             }
         }
@@ -206,7 +203,7 @@ void MonitorPanel::init_tabpanel()
     m_tabpanel->AddPage(m_media_file_panel, _L("Storage"), "", false);
 
     m_upgrade_panel = new UpgradePanel(m_tabpanel);
-    m_tabpanel->AddPage(m_upgrade_panel, _CTX(L_CONTEXT("Update", "Firmware"), "Firmware"), "", false);
+    m_tabpanel->AddPage(m_upgrade_panel, _L("System"), "", false);
 
     m_hms_panel = new HMSPanel(m_tabpanel);
     m_tabpanel->AddPage(m_hms_panel, _L("Assistant(HMS)"),    "", false);
@@ -225,13 +222,13 @@ void MonitorPanel::init_tabpanel()
 
     m_coprint_print_models_page = new CloudTaskManagerPage(m_tabpanel, CloudTaskManagerPage::MediaPresentation::ModelOnly);
     m_coprint_print_models_page->Hide();
-    m_tabpanel->AddPage(m_coprint_print_models_page, _L("Print Models"), "", false);
+    m_tabpanel->AddPage(m_coprint_print_models_page, _L("Media"), "", false);
     m_coprint_models_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
 
     m_coprint_update_page = new wxPanel(m_tabpanel, wxID_ANY);
     m_coprint_update_page->SetBackgroundColour(wxColour("#EEEEEF"));
     m_coprint_update_page->Hide();
-    m_tabpanel->AddPage(m_coprint_update_page, _CTX(L_CONTEXT("Update", "Firmware"), "Firmware"), "", false);
+    m_tabpanel->AddPage(m_coprint_update_page, _L("System"), "", false);
     m_coprint_update_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
 
     m_initialized = true;
@@ -334,6 +331,14 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
         m_tabpanel->SetSelection(m_coprint_status_tab_index);
         if (m_coprint_printer_picker != nullptr)
             m_coprint_printer_picker->set_status_page_active(true);
+    }
+
+    if (coprint) {
+        if (auto* dev = wxGetApp().getDeviceManager()) {
+            if (dev->get_selected_machine() == nullptr)
+                dev->load_last_machine();
+        }
+        refresh_coprint_printer_names();
     }
 
     Layout();
@@ -489,6 +494,42 @@ void MonitorPanel::on_size(wxSizeEvent &event)
     //Refresh();
 }
 
+void MonitorPanel::refresh_coprint_printer_names()
+{
+    if (m_device_ui_mode != DeviceUiMode::CoPrint || m_coprint_backend == nullptr)
+        return;
+
+    m_coprint_backend->refresh_coprint_device_names([this]() {
+        if (m_coprint_printer_picker == nullptr)
+            return;
+        m_coprint_printer_picker->refresh_list(true);
+        m_coprint_printer_picker->update_selection();
+    });
+}
+
+void MonitorPanel::force_refresh_device()
+{
+    if (!m_initialized)
+        return;
+
+    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+        if (m_coprint_backend != nullptr)
+            m_coprint_backend->invalidate_device_cache_and_refresh();
+        if (m_coprint_print_models_page != nullptr)
+            m_coprint_print_models_page->invalidate_media_cache_and_reload();
+        if (m_coprint_storage_page != nullptr)
+            m_coprint_storage_page->invalidate_media_cache_and_reload();
+        if (m_coprint_printer_picker != nullptr) {
+            m_coprint_printer_picker->refresh_list(true);
+            m_coprint_printer_picker->update_selection();
+        }
+        refresh_coprint_printer_names();
+        return;
+    }
+
+    update_all();
+}
+
 void MonitorPanel::update_all()
 {
     if (!m_initialized)
@@ -503,7 +544,8 @@ void MonitorPanel::update_all()
         show_status((int)MONITOR_NO_PRINTER);
         m_hms_panel->clear_hms_tag();
         m_tabpanel->GetBtnsListCtrl()->showNewTag(PT_HMS, false);
-        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_controller)
+        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_controller &&
+            m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_status_panel)
             m_coprint_controller->refresh();
         if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_printer_picker != nullptr)
             m_coprint_printer_picker->update_selection();
@@ -522,15 +564,20 @@ void MonitorPanel::update_all()
     // is_connecting()/is_connected() stay stuck after a picker click (reset()
     // zeroes m_push_count), so those gates must not skip the Status refresh.
     if (m_device_ui_mode == DeviceUiMode::CoPrint) {
-        if (m_coprint_controller)
+        auto current_page = m_tabpanel->GetCurrentPage();
+        // Media/System tab switches must not layout the Device dashboard.
+        // That re-entered wxSizer::Layout until CalcMin crashed, and cancelled
+        // in-flight wxWebRequest objects on the NSURLSession thread.
+        if (current_page == m_coprint_status_panel && m_coprint_controller)
             m_coprint_controller->refresh();
         if (m_coprint_printer_picker != nullptr)
             m_coprint_printer_picker->update_selection();
-        auto current_page = m_tabpanel->GetCurrentPage();
         if (current_page == m_coprint_storage_page)
             m_coprint_storage_page->update_page();
-        else if (current_page == m_coprint_print_models_page)
+        else if (current_page == m_coprint_print_models_page) {
             m_coprint_print_models_page->update_page();
+            m_coprint_print_models_page->ensure_media_models_for_selected_machine();
+        }
         if (obj->is_connecting())
             show_status(MONITOR_CONNECTING);
         else if (!obj->is_connected())
@@ -608,20 +655,24 @@ bool MonitorPanel::Show(bool show)
         start_update();
         update_network_version_footer();
 
+        if (dev) {
+            obj = dev->get_selected_machine();
+            if (obj == nullptr)
+                dev->load_last_machine();
+            obj = dev->get_selected_machine();
+            if (obj != nullptr)
+                obj->reset_update_time();
+        }
+
         m_refresh_timer->Stop();
         m_refresh_timer->SetOwner(this);
         m_refresh_timer->Start(REFRESH_INTERVAL);
         if (update_flag) { update_all(); }
-
-        if (dev) {
-            //set a default machine when obj is null
-            obj = dev->get_selected_machine();
-            if (obj == nullptr) {
-                dev->load_last_machine();
-            } else {
-                obj->reset_update_time();
-            }
-        }
+        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_controller &&
+            m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_status_panel)
+            m_coprint_controller->refresh();
+        if (m_device_ui_mode == DeviceUiMode::CoPrint)
+            refresh_coprint_printer_names();
     } else {
         stop_update();
         m_refresh_timer->Stop();

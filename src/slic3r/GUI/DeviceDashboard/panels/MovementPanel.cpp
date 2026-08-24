@@ -35,6 +35,12 @@ wxColour darken(const wxColour& colour, int amount)
     return wxColour(ch(colour.Red()), ch(colour.Green()), ch(colour.Blue()), colour.Alpha());
 }
 
+StateColor mouse_hover_color(StateColor color)
+{
+    color.setTakeFocusedAsHovered(false);
+    return color;
+}
+
 wxGraphicsPath z_shape_path(wxGraphicsContext* gc, double x, double y, double w, double h, bool plus)
 {
     auto map = [&](double px, double py) {
@@ -510,21 +516,21 @@ void set_button_active(Button* button, bool active, int8_t& cached_active, bool 
     const wxColour hover_border = active ? DeviceUiStyle::accent() : wxColour(176, 176, 176);
     const wxColour text = DeviceUiStyle::text_primary();
 
-    button->SetBorderColor(StateColor(
+    button->SetBorderColor(mouse_hover_color(StateColor(
         std::pair(DeviceUiStyle::card_border(), (int) StateColor::Disabled),
         std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed),
         std::pair(hover_border, (int) StateColor::Hovered),
-        std::pair(normal_border, (int) StateColor::Normal)));
-    button->SetTextColor(StateColor(
+        std::pair(normal_border, (int) StateColor::Normal))));
+    button->SetTextColor(mouse_hover_color(StateColor(
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Disabled),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Pressed),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
-        std::pair(text, (int) StateColor::Normal)));
-    button->SetBackgroundColor(StateColor(
+        std::pair(text, (int) StateColor::Normal))));
+    button->SetBackgroundColor(mouse_hover_color(StateColor(
         std::pair(wxColour(240, 240, 240), (int) StateColor::Disabled),
         std::pair(pressed_bg, (int) StateColor::Pressed),
         std::pair(hover_bg, (int) StateColor::Hovered),
-        std::pair(normal_bg, (int) StateColor::Normal)));
+        std::pair(normal_bg, (int) StateColor::Normal))));
 }
 
 void set_button_enabled(Button* button, bool enabled)
@@ -535,21 +541,21 @@ void set_button_enabled(Button* button, bool enabled)
     button->Enable(enabled);
     button->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
     const wxColour normal_bg = DeviceUiStyle::control_background();
-    button->SetBorderColor(StateColor(
+    button->SetBorderColor(mouse_hover_color(StateColor(
         std::pair(DeviceUiStyle::card_border(), (int) StateColor::Disabled),
         std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed),
         std::pair(wxColour(176, 176, 176), (int) StateColor::Hovered),
-        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Normal)));
-    button->SetTextColor(StateColor(
+        std::pair(DeviceUiStyle::card_border(), (int) StateColor::Normal))));
+    button->SetTextColor(mouse_hover_color(StateColor(
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Disabled),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Pressed),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
-        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal)));
-    button->SetBackgroundColor(StateColor(
+        std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal))));
+    button->SetBackgroundColor(mouse_hover_color(StateColor(
         std::pair(wxColour(240, 240, 240), (int) StateColor::Disabled),
         std::pair(darken(normal_bg, kPressDarken), (int) StateColor::Pressed),
         std::pair(darken(normal_bg, kHoverDarken), (int) StateColor::Hovered),
-        std::pair(normal_bg, (int) StateColor::Normal)));
+        std::pair(normal_bg, (int) StateColor::Normal))));
 }
 
 } // namespace
@@ -608,11 +614,11 @@ MovementPanel::MovementPanel(wxWindow* parent)
     center_btn->SetMaxSize(wxSize(xy_area->center_size(), xy_area->center_size()));
     center_btn->SetCornerRadius(FromDIP(7));
     center_btn->SetBorderWidth(0);
-    center_btn->SetBackgroundColor(StateColor(
+    center_btn->SetBackgroundColor(mouse_hover_color(StateColor(
         std::pair(home_bg, (int) StateColor::Disabled),
         std::pair(darken(home_bg, kPressDarken), (int) StateColor::Pressed),
         std::pair(darken(home_bg, kHoverDarken), (int) StateColor::Hovered),
-        std::pair(home_bg, (int) StateColor::Normal)));
+        std::pair(home_bg, (int) StateColor::Normal))));
     // Window erase is a square; keep it the card colour so the rounded fill is visible.
     center_btn->SetBackgroundColour(DeviceUiStyle::card_background());
     center_btn->SetCursor(wxCursor(wxCURSOR_HAND));
@@ -703,6 +709,7 @@ Button* MovementPanel::make_tool_button(wxWindow* parent, const wxString& label)
         .Family(wxFONTFAMILY_SWISS)
         .FaceName(wxString::FromUTF8("Bahnschrift"))
         .Weight(wxFONTWEIGHT_SEMIBOLD)));
+    button->SetCanFocus(false);
     return button;
 }
 
@@ -712,6 +719,7 @@ Button* MovementPanel::make_option_button(wxWindow* parent, const wxString& labe
     button->SetMinSize(wxSize(d(this, 73), d(this, 45)));
     button->SetCornerRadius(d(this, 8));
     button->SetBorderWidth(1);
+    button->SetCanFocus(false);
     return button;
 }
 

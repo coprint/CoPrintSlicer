@@ -142,6 +142,42 @@ void send_tool_map_sync(MachineObject *obj, int model_slot_index, int physical_t
         .perform_sync();
 }
 
+bool start_printer_storage_print(const std::string &base_url, const std::string &api_key,
+                                 const std::string &path, std::string &error_message)
+{
+    if (path.empty() || base_url.empty()) {
+        error_message = "Missing printer URL or file path";
+        return false;
+    }
+
+    nlohmann::json payload;
+    payload["filename"] = path;
+
+    bool ok = false;
+    unsigned status = 0;
+    auto http = Http::post(base_url + "/printer/print/start");
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.header("Content-Type", "application/json")
+        .set_post_body(payload.dump())
+        .timeout_connect(5)
+        .timeout_max(15)
+        .on_complete([&](std::string, unsigned code) {
+            status = code;
+            ok = code >= 200 && code < 300;
+        })
+        .on_error([&](std::string, std::string error, unsigned code) {
+            error_message = std::move(error);
+            status = code;
+            ok = false;
+        })
+        .perform_sync();
+
+    if (!ok && error_message.empty())
+        error_message = "HTTP " + std::to_string(status);
+    return ok;
+}
+
 std::vector<FilamentInfo> filament_rows_from_project()
 {
     std::vector<FilamentInfo> rows;
@@ -1220,6 +1256,8 @@ void StartPrintDialog::bind_events()
 
 void StartPrintDialog::on_task_name_edit(wxCommandEvent &event)
 {
+    if (m_storage_mode)
+        return;
     (void) event;
     m_is_rename_mode = true;
     m_task_name_input->GetTextCtrl()->SetValue(m_current_task_name);
@@ -1307,6 +1345,19 @@ void StartPrintDialog::on_task_name_enter()
 void StartPrintDialog::prepare(int print_plate_idx)
 {
     m_print_plate_idx = print_plate_idx;
+    m_storage_mode = false;
+    m_storage_file_path.clear();
+    m_locked_machine_id.clear();
+    m_storage_request = {};
+}
+
+void StartPrintDialog::prepare_from_storage(PrinterStoragePrintRequest request)
+{
+    m_storage_mode = true;
+    m_print_plate_idx = 0;
+    m_storage_request = std::move(request);
+    m_storage_file_path = m_storage_request.file_path;
+    m_locked_machine_id = m_storage_request.machine_id;
 }
 
 void StartPrintDialog::on_dpi_changed(const wxRect &suggested_rect)
@@ -1338,22 +1389,33 @@ int StartPrintDialog::ShowModal()
 {
     reset_print_options();
 
-    if (m_plater) {
-        PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
-        if (plate && pick_plate_thumbnail(plate) == nullptr)
-            m_plater->update_all_plate_thumbnails(false);
+    if (m_storage_mode) {
+        apply_storage_preview();
+        apply_storage_locks();
+    } else {
+        apply_storage_locks();
+        if (m_plater) {
+            PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
+            if (plate && pick_plate_thumbnail(plate) == nullptr)
+                m_plater->update_all_plate_thumbnails(false);
+        }
+        refresh_from_plate();
     }
-    refresh_from_plate();
     refresh_printer_list();
     m_user_mapped_tools = false;
     m_filament_sync_done = false;
     if (printer_view_has_loaded_filaments()) {
         m_filament_sync_done = true;
-        assign_tools_by_color();
+        if (m_storage_mode)
+            fill_storage_filament_slots();
+        else
+            assign_tools_by_color();
         update_printer_status();
     }
     update_start_button_state();
-    sync_filaments_then_map(true);
+    sync_filaments_then_map(!m_storage_mode);
+    if (m_storage_mode)
+        fill_storage_filament_slots();
     Layout();
     Fit();
     CenterOnParent();
@@ -1371,6 +1433,156 @@ void StartPrintDialog::reset_print_options()
         m_flow_calibration->SetValue(false);
     if (m_timelapse)
         m_timelapse->SetValue(false);
+}
+
+void StartPrintDialog::apply_storage_locks()
+{
+    if (m_printer_combo != nullptr)
+        m_printer_combo->Enable(!m_storage_mode);
+    if (m_refresh_button != nullptr)
+        m_refresh_button->Show(!m_storage_mode);
+    if (m_task_name_edit_button != nullptr)
+        m_task_name_edit_button->Show(!m_storage_mode);
+    if (m_task_name_normal_panel != nullptr)
+        m_task_name_normal_panel->Layout();
+    if (m_printer_combo != nullptr && m_printer_combo->GetParent() != nullptr)
+        m_printer_combo->GetParent()->Layout();
+}
+
+void StartPrintDialog::apply_storage_preview()
+{
+    m_current_task_name = m_storage_request.display_name;
+    if (m_current_task_name.empty())
+        m_current_task_name = _L("Untitled");
+    if (m_task_name_label != nullptr)
+        m_task_name_label->SetLabel(m_current_task_name);
+    if (m_task_name_switch_panel != nullptr)
+        m_task_name_switch_panel->SetSelection(0);
+    m_is_rename_mode = false;
+
+    if (m_time_label != nullptr)
+        m_time_label->SetLabel(m_storage_request.time_text.IsEmpty() ? _L("—") : m_storage_request.time_text);
+    if (m_weight_label != nullptr)
+        m_weight_label->SetLabel(m_storage_request.weight_text.IsEmpty() ? _L("—") : m_storage_request.weight_text);
+    if (m_target_printer_label != nullptr)
+        m_target_printer_label->SetLabel(m_storage_request.printer_label.IsEmpty() ? _L("Unknown") : m_storage_request.printer_label);
+
+    wxWindow *thumb_host = m_thumbnail_panel ? m_thumbnail_panel->GetParent() : nullptr;
+    if (m_thumbnail_panel != nullptr && m_storage_request.thumbnail.IsOk()) {
+        wxImage image = m_storage_request.thumbnail.Copy();
+        const int size = (thumb_host != nullptr ? thumb_host : m_thumbnail_panel)->FromDIP(90);
+        if (image.GetWidth() != size || image.GetHeight() != size)
+            image.Rescale(size, size, wxIMAGE_QUALITY_HIGH);
+        m_thumbnail_panel->set_thumbnail(image);
+        m_thumbnail_panel->SetMinSize(wxSize(size, size));
+        m_thumbnail_panel->SetMaxSize(wxSize(size, size));
+        m_thumbnail_panel->Show(true);
+        if (m_thumbnail_placeholder != nullptr)
+            m_thumbnail_placeholder->Show(false);
+        m_thumbnail_panel->Refresh();
+        if (thumb_host != nullptr) {
+            thumb_host->Layout();
+            thumb_host->Refresh();
+        }
+    } else {
+        apply_plate_thumbnail(thumb_host, m_thumbnail_panel, m_thumbnail_placeholder, nullptr, 90);
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        if (m_filament_slots[i] != nullptr)
+            m_filament_slots[i]->set_visible(false);
+    }
+}
+
+void StartPrintDialog::fill_storage_filament_slots()
+{
+    if (!m_storage_request.filaments.empty()) {
+        for (int i = 0; i < 4; ++i) {
+            if (m_filament_slots[i] == nullptr)
+                continue;
+            if (i >= static_cast<int>(m_storage_request.filaments.size())) {
+                m_filament_slots[i]->set_visible(false);
+                continue;
+            }
+            const PrinterStorageFilament &slot = m_storage_request.filaments[i];
+            m_filament_slots[i]->set_model_slot_index(i);
+            m_filament_slots[i]->set_model_filament(slot.type.empty() ? "PLA" : slot.type, slot.color);
+            m_filament_slots[i]->set_mapped_tool(i + 1);
+            m_filament_slots[i]->set_visible(true);
+            m_filament_slots[i]->set_interactive(true);
+        }
+        if (m_filament_slots[0] != nullptr && m_filament_slots[0]->GetParent() != nullptr)
+            m_filament_slots[0]->GetParent()->Layout();
+        refresh_filament_printer_sides();
+        if (!m_user_mapped_tools)
+            assign_tools_by_color();
+        return;
+    }
+
+    MachineObject *obj = selected_machine();
+    for (int i = 0; i < 4; ++i) {
+        if (m_filament_slots[i] == nullptr)
+            continue;
+        const PrinterToolInfo info = query_printer_tool(obj, i);
+        if (!info.has_filament) {
+            m_filament_slots[i]->set_visible(false);
+            continue;
+        }
+        const std::string type = info.material.utf8_string();
+        m_filament_slots[i]->set_model_slot_index(i);
+        m_filament_slots[i]->set_model_filament(type.empty() ? "PLA" : type, info.color);
+        m_filament_slots[i]->set_mapped_tool(i + 1);
+        m_filament_slots[i]->set_visible(true);
+        m_filament_slots[i]->set_interactive(true);
+    }
+    if (m_filament_slots[0] != nullptr && m_filament_slots[0]->GetParent() != nullptr)
+        m_filament_slots[0]->GetParent()->Layout();
+    refresh_filament_printer_sides();
+}
+
+void StartPrintDialog::start_storage_print()
+{
+    MachineObject *obj = selected_machine();
+    if (obj == nullptr || !obj->is_online() || obj->is_in_printing()) {
+        show_error(this, _L("Selected printer is not ready."));
+        return;
+    }
+    if (m_storage_file_path.empty()) {
+        show_error(this, _L("Print file is missing."));
+        return;
+    }
+    if (has_unloaded_mapping()) {
+        show_error(this, _L("Empty filament (EF). Map each color to a loaded tool before starting."));
+        return;
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
+            continue;
+        send_tool_map_sync(obj, m_filament_slots[i]->model_slot_index(), m_filament_slots[i]->get_mapped_tool());
+    }
+
+    m_start_button->Enable(false);
+    m_cancel_button->Enable(false);
+
+    const std::string path = m_storage_file_path;
+    const std::string base = moonraker_base_url(obj);
+    std::string api_key = obj->get_access_code();
+    if (api_key.empty())
+        api_key = obj->get_user_access_code();
+    std::thread([base, api_key, path, weak_dlg = wxWeakRef<StartPrintDialog>(this)]() {
+        std::string error;
+        const bool ok = start_printer_storage_print(base, api_key, path, error);
+        wxGetApp().CallAfter([weak_dlg, ok, error]() {
+            StartPrintDialog *dlg = weak_dlg.get();
+            if (dlg == nullptr)
+                return;
+            if (!ok)
+                show_error(dlg, error.empty() ? _L("Failed to start print. Check the printer connection and try again.")
+                                              : wxString::FromUTF8(error));
+            dlg->EndModal(ok ? wxID_OK : wxID_CANCEL);
+        });
+    }).detach();
 }
 
 void StartPrintDialog::refresh_from_plate()
@@ -1503,6 +1715,8 @@ void StartPrintDialog::refresh_printer_list()
             for (const auto &it : machines) {
                 if (it.second == nullptr)
                     continue;
+                if (m_storage_mode && !m_locked_machine_id.empty() && it.first != m_locked_machine_id)
+                    continue;
                 const auto already_added = std::find_if(entries.begin(), entries.end(), [&](const auto &entry) {
                     return entry.first == it.first;
                 });
@@ -1546,7 +1760,7 @@ void StartPrintDialog::refresh_printer_list()
     if (selected_index != wxNOT_FOUND && selected_index < static_cast<int>(m_printer_ids.size()))
         m_printer_combo->SetSelection(selected_index);
 
-    if (dev_manager && selected_index != wxNOT_FOUND && selected_index < static_cast<int>(m_printer_ids.size()))
+    if (dev_manager && selected_index != wxNOT_FOUND && selected_index < static_cast<int>(m_printer_ids.size()) && !m_storage_mode)
         dev_manager->set_selected_machine(m_printer_ids[selected_index]);
 }
 
@@ -1632,18 +1846,20 @@ void StartPrintDialog::update_filament_mapping_hint()
         return;
     }
 
-    PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
-    if (!plate_ready_for_device_print(plate)) {
-        m_filament_hint->SetLabel(plate && plate->is_slice_result_valid()
-            ? _L("G-code file is missing. Please slice again.")
-            : _L("Slice the plate before starting a print."));
-        m_filament_hint->SetForegroundColour(Ui::danger());
-        return;
-    }
-    if (plate && !plate->is_slice_result_ready_for_print()) {
-        m_filament_hint->SetLabel(_L("There are slicing warnings. Review them before printing."));
-        m_filament_hint->SetForegroundColour(ui_warning());
-        return;
+    if (!m_storage_mode) {
+        PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
+        if (!plate_ready_for_device_print(plate)) {
+            m_filament_hint->SetLabel(plate && plate->is_slice_result_valid()
+                ? _L("G-code file is missing. Please slice again.")
+                : _L("Slice the plate before starting a print."));
+            m_filament_hint->SetForegroundColour(Ui::danger());
+            return;
+        }
+        if (plate && !plate->is_slice_result_ready_for_print()) {
+            m_filament_hint->SetLabel(_L("There are slicing warnings. Review them before printing."));
+            m_filament_hint->SetForegroundColour(ui_warning());
+            return;
+        }
     }
     if (has_unloaded_mapping()) {
         m_filament_hint->SetLabel(_L("Empty filament (EF). Map each color to a loaded tool before starting."));
@@ -1723,7 +1939,9 @@ void StartPrintDialog::sync_filaments_then_map(bool remap)
         if (dlg == nullptr)
             return;
         dlg->m_filament_sync_done = true;
-        if (remap && !dlg->m_user_mapped_tools)
+        if (dlg->m_storage_mode)
+            dlg->fill_storage_filament_slots();
+        else if (remap && !dlg->m_user_mapped_tools)
             dlg->assign_tools_by_color();
         dlg->refresh_filament_printer_sides();
         dlg->update_printer_status();
@@ -1828,7 +2046,7 @@ void StartPrintDialog::update_start_button_state()
     MachineObject *obj = selected_machine();
     if (m_start_button == nullptr)
         return;
-    const bool slice_ready = plate_ready_for_device_print(plate);
+    const bool slice_ready = m_storage_mode ? !m_storage_file_path.empty() : plate_ready_for_device_print(plate);
     const bool printer_connected = obj && obj->is_online();
     const bool printer_ready = printer_connected && !obj->is_in_printing();
     const bool mapping_ready = m_filament_sync_done && !has_unloaded_mapping();
@@ -1856,6 +2074,8 @@ void StartPrintDialog::on_refresh_printers(wxCommandEvent &)
 
 void StartPrintDialog::on_printer_changed(wxCommandEvent &)
 {
+    if (m_storage_mode)
+        return;
     auto *dev_manager = wxGetApp().getDeviceManager();
     const int selection = m_printer_combo->GetSelection();
     if (dev_manager && selection >= 0 && selection < static_cast<int>(m_printer_ids.size()))
@@ -1872,6 +2092,11 @@ void StartPrintDialog::on_cancel(wxCommandEvent &)
 
 void StartPrintDialog::on_start_print(wxCommandEvent &)
 {
+    if (m_storage_mode) {
+        start_storage_print();
+        return;
+    }
+
     PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
     if (!plate_ready_for_device_print(plate)) {
         show_error(this, _L("Slice the plate before starting a print."));

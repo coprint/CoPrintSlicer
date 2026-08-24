@@ -21,6 +21,7 @@ public:
 
     void set_percent(int percent);
     void set_change_handler(ChangeHandler handler);
+    void set_enabled(bool enabled);
     void popup_at(wxWindow *anchor);
 
 protected:

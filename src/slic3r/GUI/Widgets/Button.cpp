@@ -436,10 +436,14 @@ void Button::mouseReleased(wxMouseEvent& event)
         pressedDown = false;
         if (HasCapture())
             ReleaseMouse();
+        const wxPoint pos = event.GetPosition();
+        const wxRect bounds({0, 0}, GetSize());
         state_handler.set_state(0, StateHandler::Pressed);
-        wxRect hit_rect({0, 0}, GetSize());
+        if (!bounds.Contains(pos))
+            state_handler.set_state(0, StateHandler::Hovered);
+        wxRect hit_rect = bounds;
         hit_rect.Inflate(FromDIP(8));
-        if (hit_rect.Contains(event.GetPosition()))
+        if (hit_rect.Contains(pos))
             sendButtonEvent();
     }
 }

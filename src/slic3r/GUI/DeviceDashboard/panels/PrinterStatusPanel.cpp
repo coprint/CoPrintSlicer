@@ -13,6 +13,7 @@
 #include <cmath>
 #include <utility>
 
+#include <wx/cursor.h>
 #include <wx/filename.h>
 #include <wx/font.h>
 #include <wx/image.h>
@@ -115,8 +116,12 @@ void pin_label(wxStaticText *label)
 
 wxSize temp_slot_size(wxWindow *win)
 {
-    const wxSize glyph = glyph_size(win, wxString::FromUTF8("000"));
-    return wxSize(std::max(glyph.GetWidth(), win->FromDIP(22)), glyph.GetHeight());
+    // Size for three digits so values like 29 / 220 are not clipped. GetTextExtent
+    // can under-report before the control is shown, so keep a DIP floor.
+    const wxSize glyph = glyph_size(win, wxString::FromUTF8("888"));
+    const int width = std::max(glyph.GetWidth(), win->FromDIP(36)) + win->FromDIP(4);
+    const int height = std::max(glyph.GetHeight(), win->FromDIP(18));
+    return wxSize(width, height);
 }
 
 void pin_icon(wxStaticBitmap *icon, int dip_w, int dip_h)
@@ -140,13 +145,15 @@ TempSlotWidgets make_temp_slot(wxWindow *parent, bool editable)
     slot.host = new wxPanel(parent, wxID_ANY);
     slot.host->SetBackgroundColour(DeviceUiStyle::card_background());
 
-    slot.label = new wxStaticText(slot.host, wxID_ANY, wxString::FromUTF8("--"));
+    slot.label = new wxStaticText(slot.host, wxID_ANY, wxString::FromUTF8("--"),
+        wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
     slot.label->SetForegroundColour(DeviceUiStyle::text_primary());
     slot.label->SetBackgroundColour(DeviceUiStyle::card_background());
     set_status_font(slot.label);
-    pin_label(slot.label);
 
     const wxSize size = temp_slot_size(slot.label);
+    slot.label->SetMinSize(size);
+    slot.label->SetMaxSize(size);
     slot.host->SetMinSize(size);
     slot.host->SetMaxSize(size);
 
@@ -180,16 +187,12 @@ wxWindow *make_temp_cell(wxWindow *parent, PrinterStatusPanel::TempView &view,
 {
     auto *cell = new wxPanel(parent, wxID_ANY);
     cell->SetBackgroundColour(DeviceUiStyle::card_background());
-    const int row_h = cell->FromDIP(icon_h);
-    cell->SetMinSize(wxSize(-1, row_h));
 
     view.icon = new wxStaticBitmap(cell, wxID_ANY, load_dashboard_icon(cell, icon_name, icon_w, icon_h));
     pin_icon(view.icon, icon_w, icon_h);
 
     auto *texts = new wxPanel(cell, wxID_ANY);
     texts->SetBackgroundColour(DeviceUiStyle::card_background());
-    texts->SetMinSize(wxSize(-1, row_h));
-    texts->SetMaxSize(wxSize(-1, row_h));
 
     const TempSlotWidgets current_slot = make_temp_slot(texts, false);
     auto *slash = new wxStaticText(texts, wxID_ANY, wxString::FromUTF8("/"));
@@ -239,6 +242,8 @@ wxWindow *make_temp_cell(wxWindow *parent, PrinterStatusPanel::TempView &view,
     row->AddSpacer(cell->FromDIP(5));
     row->Add(texts, 0, wxALIGN_CENTER_VERTICAL);
     cell->SetSizer(row);
+    const int row_h = std::max(cell->FromDIP(icon_h), current_slot.host->GetMinSize().GetHeight());
+    cell->SetMinSize(wxSize(-1, row_h));
     return cell;
 }
 
@@ -312,6 +317,8 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow *parent)
 
     m_speed_popup = new PrintSpeedPopup(this);
     m_speed_popup->set_change_handler([this](int percent) {
+        if (!m_speed_enabled)
+            return;
         m_print_speed_percent = percent;
         if (m_print_speed_handler)
             m_print_speed_handler(percent);
@@ -323,6 +330,7 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow *parent)
         if (m_fan_speed_handler)
             m_fan_speed_handler(tool, percent);
     });
+    set_speed_enabled(false);
 }
 
 void PrinterStatusPanel::bind_temp_edit(TempView &view, int tool_index)
@@ -366,16 +374,27 @@ void PrinterStatusPanel::open_speed_popup()
 {
     if (m_speed_popup == nullptr)
         return;
+    m_speed_popup->set_enabled(m_speed_enabled);
     m_speed_popup->set_percent(m_print_speed_percent);
     m_speed_popup->popup_at(m_speed_cell);
 }
 
+void PrinterStatusPanel::set_speed_enabled(bool enabled)
+{
+    if (m_speed_enabled == enabled)
+        return;
+    m_speed_enabled = enabled;
+    if (m_speed_popup != nullptr)
+        m_speed_popup->set_enabled(enabled);
+}
+
 void PrinterStatusPanel::apply_state(const std::array<ToolState, MaxDashboardTools> &tools, const BedState &bed,
-    int print_speed_percent)
+    int print_speed_percent, bool speed_enabled)
 {
     bool layout_needed = false;
     int active_tool = -1;
     m_print_speed_percent = print_speed_percent;
+    set_speed_enabled(speed_enabled);
 
     for (int i = 0; i < MaxDashboardTools; ++i) {
         const ToolState &tool = tools[i];

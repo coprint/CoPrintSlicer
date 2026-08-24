@@ -38,13 +38,18 @@ static void draw_centered_text(wxGraphicsContext *gc, const wxString &text, cons
         rect.y + std::max(0.0, (rect.height - th) / 2.0));
 }
 
-static void draw_centered_bitmap(wxGraphicsContext *gc, const wxBitmap &bitmap, const wxRect &rect)
+static void draw_centered_bitmap(wxGraphicsContext *gc, const wxBitmap &bitmap, const wxRect &rect,
+    wxWindow *dip_window)
 {
-    if (!bitmap.IsOk())
+    if (!bitmap.IsOk() || dip_window == nullptr)
         return;
-    const int x = rect.x + std::max(0, (rect.width - bitmap.GetWidth()) / 2);
-    const int y = rect.y + std::max(0, (rect.height - bitmap.GetHeight()) / 2);
-    gc->DrawBitmap(bitmap, x, y, bitmap.GetWidth(), bitmap.GetHeight());
+    const double dest_h = std::max(1.0, static_cast<double>(dip_window->FromDIP(kFilamentEditIconDip)));
+    const double src_w = std::max(1.0, static_cast<double>(bitmap.GetWidth()));
+    const double src_h = std::max(1.0, static_cast<double>(bitmap.GetHeight()));
+    const double dest_w = dest_h * (src_w / src_h);
+    const double x = rect.x + std::max(0.0, (rect.width - dest_w) / 2.0);
+    const double y = rect.y + std::max(0.0, (rect.height - dest_h) / 2.0);
+    gc->DrawBitmap(bitmap, x, y, dest_w, dest_h);
 }
 
 void draw_filament_track_rails(wxGraphicsContext *gc, const wxRect &track, wxWindow *dip_window,
@@ -122,7 +127,7 @@ void draw_filament_track(wxGraphicsContext *gc, const wxRect &track, int tool_1b
         break;
     }
     case FilamentTrackCenter::EditIcon:
-        draw_centered_bitmap(gc, edit_icon, track);
+        draw_centered_bitmap(gc, edit_icon, track, dip_window);
         break;
     case FilamentTrackCenter::PlusSign:
         draw_centered_text(gc, "+", track, DeviceUiStyle::text_primary(), DeviceUiStyle::scaled(26), false, dip_window);
@@ -171,7 +176,7 @@ void draw_spool_center_mark(wxGraphicsContext *gc, const wxRect &center, int too
         break;
     }
     case FilamentTrackCenter::EditIcon:
-        draw_centered_bitmap(gc, edit_icon, center);
+        draw_centered_bitmap(gc, edit_icon, center, dip_window);
         break;
     case FilamentTrackCenter::PlusSign:
         draw_centered_text(gc, "+", center, DeviceUiStyle::text_primary(), DeviceUiStyle::scaled(26), false, dip_window);
@@ -212,13 +217,7 @@ void draw_filament_spool(wxGraphicsContext *gc, const wxRect &bounds, int tool_1
 
     gc->SetPen(*wxTRANSPARENT_PEN);
     if (has_filament && color.IsOk()) {
-        const wxColour base = readable_filament_track_colour(color, wxColour(70, 126, 205));
-        wxGraphicsGradientStops stops(
-            StateColor::LightenDarkenColor(base, 10),
-            StateColor::LightenDarkenColor(base, -14));
-        stops.Add(base, 0.5f);
-        gc->SetBrush(gc->CreateLinearGradientBrush(
-            center_rect.x, center_rect.y, center_rect.x + center_rect.width, center_rect.y, stops));
+        gc->SetBrush(wxBrush(readable_filament_track_colour(color, wxColour(70, 126, 205))));
         gc->DrawRectangle(center_rect.x, center_rect.y, center_rect.width, center_rect.height);
     } else {
         gc->SetBrush(wxBrush(*wxWHITE));

@@ -7,12 +7,14 @@
 #include "panels/MovementPanel.hpp"
 #include "panels/PrinterStatusPanel.hpp"
 #include "panels/PrintStatusPanel.hpp"
+#include "../I18N.hpp"
 
 #include <algorithm>
 #include <utility>
 
 #include <wx/sizer.h>
 #include <wx/scrolwin.h>
+#include <wx/stattext.h>
 
 namespace Slic3r {
 namespace GUI {
@@ -25,7 +27,6 @@ DeviceDashboardPage::DeviceDashboardPage(wxWindow* parent)
     SetScrollRate(FromDIP(10), FromDIP(10));
     EnableScrolling(true, true);
 
-    auto* root = new wxBoxSizer(wxVERTICAL);
     m_content_panel = new wxPanel(this, wxID_ANY);
     m_content_panel->SetBackgroundColour(DeviceUiStyle::page_background());
 
@@ -63,7 +64,26 @@ DeviceDashboardPage::DeviceDashboardPage(wxWindow* parent)
     content_columns->Add(right_column, 0, wxALIGN_TOP);
 
     m_content_panel->SetSizer(content_columns);
+
+    m_connecting_overlay = new wxPanel(this, wxID_ANY);
+    m_connecting_overlay->SetBackgroundColour(wxColour(238, 238, 239));
+    auto* overlay_sizer = new wxBoxSizer(wxVERTICAL);
+    overlay_sizer->AddStretchSpacer(1);
+    m_connecting_label = new wxStaticText(m_connecting_overlay, wxID_ANY, _L("Connecting..."));
+    m_connecting_label->SetForegroundColour(DeviceUiStyle::text_primary());
+    m_connecting_label->SetBackgroundColour(wxColour(238, 238, 239));
+    wxFont connecting_font = m_connecting_label->GetFont();
+    connecting_font.SetPointSize(std::max(16, connecting_font.GetPointSize() + 3));
+    connecting_font.SetWeight(wxFONTWEIGHT_BOLD);
+    m_connecting_label->SetFont(connecting_font);
+    overlay_sizer->Add(m_connecting_label, 0, wxALIGN_CENTER_HORIZONTAL);
+    overlay_sizer->AddStretchSpacer(1);
+    m_connecting_overlay->SetSizer(overlay_sizer);
+    m_connecting_overlay->Hide();
+
+    auto* root = new wxBoxSizer(wxVERTICAL);
     root->Add(m_content_panel, 1, wxEXPAND | wxALL, FromDIP(10));
+    root->Add(m_connecting_overlay, 1, wxEXPAND | wxALL, FromDIP(10));
     SetSizer(root);
 
     auto forward_command = [this](const DeviceCommand& command) {
@@ -95,15 +115,26 @@ void DeviceDashboardPage::bind_size_handler()
 {
     Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
         event.Skip();
-        refresh_scroll();
+        if (m_refreshing_scroll || m_pending_scroll_refresh)
+            return;
+        m_pending_scroll_refresh = true;
+        CallAfter([this] {
+            m_pending_scroll_refresh = false;
+            refresh_scroll();
+        });
     });
 }
 
 void DeviceDashboardPage::refresh_scroll()
 {
-    if (m_refreshing_scroll || GetSizer() == nullptr)
+    if (m_refreshing_scroll || GetSizer() == nullptr || !IsShownOnScreen())
         return;
     m_refreshing_scroll = true;
+    if (m_connecting_overlay != nullptr && m_connecting_overlay->IsShown()) {
+        Layout();
+        m_refreshing_scroll = false;
+        return;
+    }
     Layout();
     if (m_camera_panel != nullptr && m_print_status_panel != nullptr) {
         const wxSize client = GetClientSize();
@@ -132,11 +163,32 @@ void DeviceDashboardPage::apply_state(const DeviceDashboardState& state)
     if (m_movement_panel != nullptr)
         m_movement_panel->apply_state(state.movement);
     if (m_printer_status_panel != nullptr)
-        m_printer_status_panel->apply_state(state.tools, state.bed, state.movement.print_speed_percent);
+        m_printer_status_panel->apply_state(state.tools, state.bed, state.movement.print_speed_percent,
+            state.print_job.has_active_job);
     if (m_filament_panel != nullptr)
         m_filament_panel->apply_state(state.filament);
 
     refresh_scroll();
+}
+
+void DeviceDashboardPage::set_connecting_visible(bool visible, const wxString &message)
+{
+    if (m_connecting_overlay == nullptr || m_content_panel == nullptr)
+        return;
+    if (visible && m_connecting_label != nullptr && !message.empty() &&
+        m_connecting_label->GetLabelText() != message)
+        m_connecting_label->SetLabelText(message);
+    if (m_connecting_overlay->IsShown() == visible && m_content_panel->IsShown() != visible)
+        return;
+    m_connecting_overlay->Show(visible);
+    m_content_panel->Show(!visible);
+    if (wxSizer* sizer = GetSizer()) {
+        sizer->Show(m_connecting_overlay, visible);
+        sizer->Show(m_content_panel, !visible);
+        sizer->Layout();
+    } else {
+        Layout();
+    }
 }
 
 void DeviceDashboardPage::set_command_handler(CommandHandler handler)

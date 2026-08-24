@@ -198,7 +198,7 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
         state.movement.print_speed_percent = 125;
         break;
     case SPEED_LEVEL_RAMPAGE:
-        state.movement.print_speed_percent = 166;
+        state.movement.print_speed_percent = 150;
         break;
     default:
         state.movement.print_speed_percent = machine->printing_speed_mag > 0 ? machine->printing_speed_mag : 100;

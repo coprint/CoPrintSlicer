@@ -8,11 +8,12 @@
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Plater.hpp"
 
+#include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Time.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string.hpp>>
 
 using namespace nlohmann;
 
@@ -84,6 +85,51 @@ namespace Slic3r
             mark(normalize_lan_host(dev_id));
             mark(normalize_lan_host(dev_ip));
         }
+
+        constexpr const char* kLastSelectedMachineKey = "coprint_last_selected_machine";
+
+        void persist_last_selected_machine(const std::string& dev_id)
+        {
+            AppConfig* config = GUI::wxGetApp().app_config;
+            if (config == nullptr)
+                return;
+            const std::string current = config->get(kLastSelectedMachineKey);
+            if (dev_id.empty()) {
+                if (!current.empty()) {
+                    config->erase("app", kLastSelectedMachineKey);
+                    config->save();
+                }
+                return;
+            }
+            if (current == dev_id)
+                return;
+            config->set(kLastSelectedMachineKey, dev_id);
+            config->save();
+        }
+
+        MachineObject* find_machine_by_saved_id(
+            const std::map<std::string, MachineObject*>& machines, const std::string& needle)
+        {
+            if (needle.empty())
+                return nullptr;
+            auto it = machines.find(needle);
+            if (it != machines.end() && it->second != nullptr)
+                return it->second;
+
+            const std::string needle_host = normalize_lan_host(needle);
+            for (const auto& entry : machines) {
+                MachineObject* machine = entry.second;
+                if (machine == nullptr)
+                    continue;
+                if (machine->get_dev_id() == needle || machine->get_dev_ip() == needle)
+                    return machine;
+                if (!needle_host.empty() &&
+                    (normalize_lan_host(machine->get_dev_id()) == needle_host ||
+                     normalize_lan_host(machine->get_dev_ip()) == needle_host))
+                    return machine;
+            }
+            return nullptr;
+        }
     }
 
     DeviceManager::DeviceManager(NetworkAgent* agent)
@@ -136,7 +182,7 @@ namespace Slic3r
                 obj->dev_connection_type = "lan";
                 obj->bind_state          = "free";
                 obj->bind_sec_link       = "secure";
-                obj->m_is_online         = true;
+                obj->m_is_online         = false;
                 obj->last_alive          = Slic3r::Utils::get_current_time_utc();
                 obj->set_access_code(config->get("access_code", store_id), false);
                 obj->set_user_access_code(config->get("user_access_code", store_id), false);
@@ -814,11 +860,17 @@ namespace Slic3r
             }
         }
 
-        if (selected_machine != dev_id) {
+        const bool selection_changed = selected_machine != dev_id;
+        if (selection_changed) {
             OnSelectedMachineChanged(selected_machine, dev_id);
         }
 
         selected_machine = dev_id;
+        if (selection_changed) {
+            if (m_agent)
+                m_agent->set_user_selected_machine(dev_id);
+            persist_last_selected_machine(dev_id);
+        }
         return true;
     }
 
@@ -1088,16 +1140,21 @@ namespace Slic3r
         auto all_machines = get_my_machine_list();
         if (all_machines.empty())
             return;
-        
-        // Then connect to the machine we last selected if available
-        const std::string last_monitor_machine = m_agent ? m_agent->get_user_selected_machine() : "";
-        const auto        last_machine         = all_machines.find(last_monitor_machine);
-        if (last_machine != all_machines.end()) {
-            this->set_selected_machine(last_machine->second->get_dev_id());
-        } else {
-            // If not, then select the first available one
-            this->set_selected_machine(all_machines.begin()->second->get_dev_id());
+
+        std::string last_id;
+        if (AppConfig* config = GUI::wxGetApp().app_config)
+            last_id = config->get(kLastSelectedMachineKey);
+        if (last_id.empty() && m_agent)
+            last_id = m_agent->get_user_selected_machine();
+
+        MachineObject* last_machine = find_machine_by_saved_id(all_machines, last_id);
+        if (last_machine != nullptr) {
+            this->set_selected_machine(last_machine->get_dev_id());
+            return;
         }
+
+        // If the remembered printer was forgotten, fall back to the first remaining one.
+        this->set_selected_machine(all_machines.begin()->second->get_dev_id());
     }
 
     void DeviceManager::OnMachineBindStateChanged(MachineObject* obj, const std::string& new_state)

@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include <wx/dcbuffer.h>
+#include <wx/dcclient.h>
 #include <wx/dcgraph.h>
 #include <wx/graphics.h>
 
@@ -18,7 +19,9 @@ namespace {
 constexpr int kTrackYDip = 22;
 constexpr int kSidePadDip = 22;
 constexpr int kThumbRDip = 11;
-constexpr int kKnotRDip = 4;
+constexpr int kKnotWDip = 1;
+constexpr int kKnotHDip = 4;
+constexpr int kTrackHDip = 4;
 
 } // namespace
 
@@ -27,9 +30,9 @@ PresetStepSlider::PresetStepSlider(wxWindow *parent, std::vector<wxString> label
     , m_labels(std::move(labels))
 {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
-    SetBackgroundColour(wxColour(0xEB, 0xEB, 0xEB));
+    SetBackgroundColour(wxColour(255, 255, 255));
     SetCursor(wxCursor(wxCURSOR_HAND));
-    SetMinSize(wxSize(FromDIP(320), FromDIP(64)));
+    SetMinSize(wxSize(FromDIP(360), FromDIP(64)));
     Bind(wxEVT_PAINT, &PresetStepSlider::on_paint, this);
     Bind(wxEVT_LEFT_DOWN, &PresetStepSlider::on_left_down, this);
     Bind(wxEVT_MOTION, &PresetStepSlider::on_motion, this);
@@ -53,10 +56,36 @@ void PresetStepSlider::set_change_handler(ChangeHandler handler)
     m_change_handler = std::move(handler);
 }
 
+void PresetStepSlider::set_enabled(bool enabled)
+{
+    if (m_enabled == enabled)
+        return;
+    m_enabled = enabled;
+    if (!m_enabled)
+        m_dragging = false;
+    SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
+    Refresh();
+}
+
+int PresetStepSlider::side_pad() const
+{
+    const int min_pad = FromDIP(kSidePadDip);
+    if (m_labels.empty())
+        return min_pad;
+    wxClientDC dc(const_cast<PresetStepSlider *>(this));
+    wxFont font = GetFont();
+    font.SetWeight(wxFONTWEIGHT_NORMAL);
+    dc.SetFont(font);
+    const int first = dc.GetTextExtent(m_labels.front()).GetWidth();
+    const int last = dc.GetTextExtent(m_labels.back()).GetWidth();
+    const int extra = FromDIP(4);
+    return std::max({min_pad, first / 2 + extra, last / 2 + extra});
+}
+
 wxPoint PresetStepSlider::knot_center(int index) const
 {
     const int count = static_cast<int>(m_labels.size());
-    const int pad = FromDIP(kSidePadDip);
+    const int pad = side_pad();
     const int y = FromDIP(kTrackYDip);
     const int span = std::max(1, GetClientSize().GetWidth() - 2 * pad);
     if (count <= 1)
@@ -84,6 +113,8 @@ int PresetStepSlider::hit_test(const wxPoint &pos) const
 
 void PresetStepSlider::select_from_mouse(const wxPoint &pos)
 {
+    if (!m_enabled)
+        return;
     const int index = hit_test(pos);
     if (index < 0 || index == m_selection)
         return;
@@ -105,35 +136,32 @@ void PresetStepSlider::on_paint(wxPaintEvent &)
     if (count <= 0 || size.x <= 0)
         return;
 
-    const int pad = FromDIP(kSidePadDip);
+    const int pad = side_pad();
     const int y = FromDIP(kTrackYDip);
-    const int knot_r = FromDIP(kKnotRDip);
+    const int knot_w = FromDIP(kKnotWDip);
+    const int knot_h = FromDIP(kKnotHDip);
+    const int track_h = FromDIP(kTrackHDip);
     const int thumb_r = FromDIP(kThumbRDip);
-    const wxColour track(0x9A, 0x9A, 0x9A);
+    const int border_w = std::max(1, FromDIP(1));
+    const wxColour track(0xEF, 0xEE, 0xEE);
     const wxColour knot(0x8A, 0x8A, 0x8A);
-    const wxColour thumb(0x5A, 0x5A, 0x5A);
-
-    dc.SetPen(wxPen(track, FromDIP(2)));
-    dc.DrawLine(pad, y, size.x - pad, y);
+    const wxColour thumb_fill(255, 255, 255);
+    const wxColour thumb_border(0xE1, 0xE1, 0xE1);
 
     dc.SetPen(*wxTRANSPARENT_PEN);
+    dc.SetBrush(wxBrush(track));
+    dc.DrawRectangle(pad, y - track_h / 2, std::max(1, size.x - 2 * pad), track_h);
+
     dc.SetBrush(wxBrush(knot));
     for (int i = 0; i < count; ++i) {
         const wxPoint c = knot_center(i);
-        dc.DrawCircle(c, knot_r);
+        dc.DrawRectangle(c.x - knot_w / 2, y - knot_h / 2, knot_w, knot_h);
     }
 
     const wxPoint thumb_c = knot_center(m_selection);
-    dc.SetBrush(wxBrush(thumb));
+    dc.SetPen(wxPen(thumb_border, border_w));
+    dc.SetBrush(wxBrush(thumb_fill));
     dc.DrawCircle(thumb_c, thumb_r);
-
-    dc.SetPen(wxPen(*wxWHITE, std::max(1, FromDIP(1))));
-    const int line_w = FromDIP(8);
-    const int gap = FromDIP(3);
-    for (int i = -1; i <= 1; ++i) {
-        const int ly = thumb_c.y + i * gap;
-        dc.DrawLine(thumb_c.x - line_w / 2, ly, thumb_c.x + line_w / 2, ly);
-    }
 
     wxFont font = GetFont();
     font.SetWeight(wxFONTWEIGHT_NORMAL);
@@ -149,6 +177,8 @@ void PresetStepSlider::on_paint(wxPaintEvent &)
 
 void PresetStepSlider::on_left_down(wxMouseEvent &event)
 {
+    if (!m_enabled)
+        return;
     m_dragging = true;
     select_from_mouse(event.GetPosition());
 }

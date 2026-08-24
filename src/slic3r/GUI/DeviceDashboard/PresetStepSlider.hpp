@@ -21,10 +21,13 @@ public:
     void set_selection(int index);
     int  selection() const { return m_selection; }
     void set_change_handler(ChangeHandler handler);
+    void set_enabled(bool enabled);
+    bool enabled() const { return m_enabled; }
 
 private:
     int  hit_test(const wxPoint &pos) const;
     wxPoint knot_center(int index) const;
+    int  side_pad() const;
     void on_paint(wxPaintEvent &);
     void on_left_down(wxMouseEvent &event);
     void on_motion(wxMouseEvent &event);
@@ -36,6 +39,7 @@ private:
     std::vector<wxString> m_labels;
     int                   m_selection{0};
     bool                  m_dragging{false};
+    bool                  m_enabled{true};
     ChangeHandler         m_change_handler;
 };
 

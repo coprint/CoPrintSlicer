@@ -169,6 +169,8 @@ public:
     /* update apis */
     //void update_ams(MachineObject* obj);
     void update_all();
+    void force_refresh_device();
+    void refresh_coprint_printer_names();
 
     void update_hms_tag();
     bool Show(bool show);

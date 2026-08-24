@@ -26,6 +26,7 @@ public:
 
     void sync_model_colors_from_plater();
     void sync_loaded_tool_filaments(MachineObject* obj, std::function<void()> on_done = {});
+    void fetch_filament_selections(MachineObject* obj, std::function<void(bool ok)> on_done);
     bool get_loaded_tool_filament(int tool_0based, wxColour* color_out, wxString* material_out) const;
 
 private:

@@ -32,7 +32,7 @@ public:
     explicit PrinterStatusPanel(wxWindow *parent);
 
     void apply_state(const std::array<ToolState, MaxDashboardTools> &tools, const BedState &bed,
-                     int print_speed_percent = 100);
+                     int print_speed_percent = 100, bool speed_enabled = false);
     void set_active_tool(int tool_index);
 
     void set_tool_select_handler(ToolSelectHandler handler);
@@ -62,6 +62,7 @@ private:
     void bind_temp_edit(TempView &view, int tool_index);
     void open_fan_popup();
     void open_speed_popup();
+    void set_speed_enabled(bool enabled);
 
     std::array<TempView, MaxDashboardTools> m_tools;
     TempView m_bed;
@@ -72,6 +73,7 @@ private:
     std::array<int, MaxDashboardTools> m_fan_percent{0, 0, 0, 0};
     int m_print_speed_percent{100};
     int m_active_tool{0};
+    bool m_speed_enabled{true};
 
     ToolSelectHandler m_tool_select_handler;
     NozzleTempHandler m_nozzle_temp_handler;

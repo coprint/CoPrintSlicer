@@ -353,8 +353,13 @@ void SideButton::mouseReleased(wxMouseEvent& event)
     event.Skip();
     if (pressedDown) {
         pressedDown = false;
-        ReleaseMouse();
-        if (wxRect({0, 0}, GetSize()).Contains(event.GetPosition()))
+        if (HasCapture())
+            ReleaseMouse();
+        state_handler.set_state(0, StateHandler::Pressed);
+        const bool inside = wxRect({0, 0}, GetSize()).Contains(event.GetPosition());
+        if (!inside)
+            state_handler.set_state(0, StateHandler::Hovered);
+        if (inside)
             sendButtonEvent();
     }
 }

@@ -103,6 +103,7 @@
 #include "BackgroundSlicingProcess.hpp"
 #include "SelectMachine.hpp"
 #include "StartPrint/StartPrintDialog.hpp"
+#include "DeviceDashboard/MoonrakerDeviceController.hpp"
 #include "SendMultiMachinePage.hpp"
 #include "SendToPrinter.hpp"
 #include "PublishDialog.hpp"
@@ -2132,8 +2133,12 @@ Sidebar::Sidebar(Plater *parent)
     ams_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "ams_fila_sync", wxEmptyString, wxDefaultSize, wxDefaultPosition,
                                                  wxBU_EXACTFIT | wxNO_BORDER, false, 16); // ORCA match icon size with other icons as 16x16
     ams_btn->SetToolTip(_L("Synchronize filament list from AMS"));
-    ams_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent &e) {
-        sync_ams_list();
+    ams_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        const auto printer_model = wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+        if (boost::algorithm::icontains(printer_model, "Quadro"))
+            sync_quadro_filaments_from_printer();
+        else
+            sync_ams_list();
     });
 
     ams_btn->Bind(wxEVT_UPDATE_UI, &Sidebar::update_sync_ams_btn_enable, this);
@@ -2436,6 +2441,7 @@ void Sidebar::update_all_preset_comboboxes()
     auto p_mainframe = wxGetApp().mainframe;
     auto cfg = preset_bundle.printers.get_edited_preset().config;
     const bool is_chromaset = boost::algorithm::icontains(cfg.opt_string("printer_model"), "ChromaSet");
+    const bool is_quadro = boost::algorithm::icontains(cfg.opt_string("printer_model"), "Quadro");
     if (p->m_printer_connect)
         p->m_printer_connect->Show(is_chromaset);
     if (p->m_panel_printer_title)
@@ -2444,15 +2450,19 @@ void Sidebar::update_all_preset_comboboxes()
     if (preset_bundle.use_bbl_network()) {
         //only show sync-ams button for BBL printer
         p->m_bpButton_ams_filament->Show();
+        p->m_bpButton_ams_filament->SetToolTip(_L("Synchronize filament list from AMS"));
         //update print button default value for bbl or third-party printer
         p_mainframe->set_print_button_to_default(MainFrame::PrintSelectType::ePrintPlate);
     } else {
         // ORCA: show/hide sync-ams button based on filament sync mode
         auto agent = wxGetApp().getAgent();
-        if (agent && agent->get_filament_sync_mode() != FilamentSyncMode::none)
+        if (is_quadro || (agent && agent->get_filament_sync_mode() != FilamentSyncMode::none))
             p->m_bpButton_ams_filament->Show();
         else
             p->m_bpButton_ams_filament->Hide();
+        p->m_bpButton_ams_filament->SetToolTip(is_quadro
+            ? _L("Synchronize filament list from printer")
+            : _L("Synchronize filament list from AMS"));
 
         auto print_btn_type = MainFrame::PrintSelectType::eExportGcode;
         if (is_chromaset) {
@@ -3504,6 +3514,193 @@ void Sidebar::load_ams_list(MachineObject* obj)
     }
 
     p->combo_printer->update();
+}
+
+namespace {
+
+bool machine_looks_like_quadro(const MachineObject *obj)
+{
+    if (obj == nullptr)
+        return false;
+    return boost::algorithm::icontains(obj->printer_type, "Quadro")
+        || boost::algorithm::icontains(obj->get_dev_name(), "Quadro")
+        || boost::algorithm::icontains(into_u8(obj->get_printer_type_display_str()), "Quadro");
+}
+
+bool is_empty_printer_filament(const wxString &material)
+{
+    return material.IsEmpty()
+        || material.CmpNoCase(wxString::FromUTF8("Empty")) == 0
+        || material.CmpNoCase(wxString::FromUTF8("N/A")) == 0;
+}
+
+std::string find_filament_preset_for_material(const wxString &material)
+{
+    auto *bundle = wxGetApp().preset_bundle;
+    if (bundle == nullptr || material.IsEmpty())
+        return {};
+
+    const std::string wanted = into_u8(material);
+    std::string best;
+    int best_score = -1;
+    for (const Preset &preset : bundle->filaments) {
+        if (!preset.is_visible)
+            continue;
+        const std::string type = preset.config.get_filament_type();
+        if (!boost::iequals(type, wanted))
+            continue;
+        int score = 0;
+        if (preset.is_compatible)
+            score += 8;
+        if (boost::algorithm::icontains(preset.name, "Quadro"))
+            score += 4;
+        if (boost::algorithm::icontains(preset.name, "Co Print"))
+            score += 2;
+        if (preset.is_system)
+            score += 1;
+        if (score > best_score) {
+            best_score = score;
+            best = preset.name;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
+void Sidebar::sync_quadro_filaments_from_printer()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr) {
+        p->plater->pop_warning_and_go_to_device_page(p->plater->get_selected_printer_name_in_combox(),
+            Plater::PrinterWarningType::NOT_CONNECTED, _L("Syncing filament"));
+        return;
+    }
+    if (!machine_looks_like_quadro(obj)) {
+        MessageDialog dlg(this,
+            _L("The currently connected printer is not a Co Print Quadro. Switch to a Quadro printer before syncing."),
+            _L("Syncing filament"), wxOK | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    auto *controller = wxGetApp().mainframe ? wxGetApp().mainframe->coprint_device_controller() : nullptr;
+    if (controller == nullptr) {
+        MessageDialog dlg(this, _L("Unable to reach the printer."), _L("Syncing filament"), wxOK | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    auto *dlg = new ProgressDialog(_L("Syncing filament"), _L("Syncing filament"), 100, this,
+                                   wxPD_APP_MODAL | wxPD_AUTO_HIDE);
+    dlg->Pulse(_L("Syncing filament"));
+
+    wxWeakRef<Sidebar> weak_sidebar(this);
+    wxWeakRef<wxDialog> weak_dlg(dlg);
+    controller->fetch_filament_selections(obj, [weak_sidebar, weak_dlg](bool ok) {
+        if (weak_dlg)
+            weak_dlg->Destroy();
+        if (!weak_sidebar)
+            return;
+        if (!ok) {
+            MessageDialog err(weak_sidebar.get(),
+                _L("Failed to read filaments from the printer."),
+                _L("Syncing filament"), wxOK | wxICON_WARNING);
+            err.ShowModal();
+            return;
+        }
+        weak_sidebar->apply_quadro_filaments_from_printer();
+    });
+}
+
+void Sidebar::apply_quadro_filaments_from_printer()
+{
+    auto *controller = wxGetApp().mainframe ? wxGetApp().mainframe->coprint_device_controller() : nullptr;
+    auto *bundle = wxGetApp().preset_bundle;
+    if (controller == nullptr || bundle == nullptr)
+        return;
+
+    DynamicPrintConfig *project_config = &bundle->project_config;
+    auto *color_head = project_config->option<ConfigOptionStrings>("filament_colour");
+    auto *color_pack = project_config->option<ConfigOptionStrings>("filament_multi_colour");
+    auto *color_type = project_config->option<ConfigOptionStrings>("filament_colour_type");
+    const int slot_count = std::min(4, (int) p->combos_filament.size());
+
+    std::vector<int> changed_slots;
+    wxString unknown_types;
+    int loaded_count = 0;
+    for (int i = 0; i < slot_count; ++i) {
+        wxColour color;
+        wxString material;
+        if (!controller->get_loaded_tool_filament(i, &color, &material))
+            continue;
+        if (is_empty_printer_filament(material))
+            continue;
+        ++loaded_count;
+
+        const std::string preset_name = find_filament_preset_for_material(material);
+        if (preset_name.empty()) {
+            unknown_types += wxString::Format("\n- T%d (%s)", i + 1, material);
+            continue;
+        }
+
+        bundle->set_filament_preset(i, preset_name);
+        if (color.IsOk() && color_head != nullptr && i < (int) color_head->values.size()) {
+            const std::string hex = into_u8(color.GetAsString(wxC2S_HTML_SYNTAX));
+            color_head->values[i] = hex;
+            if (color_pack != nullptr && i < (int) color_pack->values.size())
+                color_pack->values[i] = hex;
+            if (color_type != nullptr && i < (int) color_type->values.size())
+                color_type->values[i] = "1";
+        }
+        changed_slots.push_back(i);
+    }
+
+    if (loaded_count == 0) {
+        MessageDialog dlg(this,
+            _L("There are no loaded filaments on the printer to sync."),
+            _L("Syncing filament"), wxOK | wxICON_INFORMATION);
+        dlg.ShowModal();
+        return;
+    }
+    if (changed_slots.empty()) {
+        wxString detail = _L("There are no compatible filaments, and sync is not performed.");
+        if (!unknown_types.empty())
+            detail += unknown_types;
+        MessageDialog dlg(this, detail, _L("Syncing filament"), wxOK | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    wxGetApp().plater()->update_project_dirty_from_presets();
+    bundle->export_selections(*wxGetApp().app_config);
+    update_dynamic_filament_list();
+
+    DynamicPrintConfig new_cfg;
+    if (color_head != nullptr)
+        new_cfg.set_key_value("filament_colour", color_head->clone());
+    if (color_pack != nullptr)
+        new_cfg.set_key_value("filament_multi_colour", color_pack->clone());
+    if (color_type != nullptr)
+        new_cfg.set_key_value("filament_colour_type", color_type->clone());
+    wxGetApp().plater()->on_config_change(new_cfg);
+
+    update_presets(Preset::TYPE_FILAMENT);
+    for (int idx : changed_slots) {
+        wxGetApp().plater()->on_filament_change(idx);
+        auto_calc_flushing_volumes(idx);
+        if (idx >= 0 && idx < (int) p->combos_filament.size() && p->combos_filament[idx] != nullptr)
+            p->combos_filament[idx]->update();
+    }
+    wxGetApp().plater()->update();
+
+    if (!unknown_types.empty()) {
+        MessageDialog dlg(this,
+            _L("Some printer filaments could not be matched to a compatible preset.") + unknown_types,
+            _L("Syncing filament"), wxOK | wxICON_INFORMATION);
+        dlg.ShowModal();
+    }
 }
 
 void Sidebar::sync_ams_list(bool is_from_big_sync_btn)

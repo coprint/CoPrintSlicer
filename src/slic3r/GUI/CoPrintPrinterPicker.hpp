@@ -29,7 +29,7 @@ public:
 
     void set_open_status_handler(std::function<void()> handler);
     void set_status_page_active(bool active);
-    void refresh_list();
+    void refresh_list(bool force = false);
     void update_selection();
     void show_add_printer();
     void hide_add_printer();
@@ -70,6 +70,7 @@ private:
     wxBitmap                m_arrow_down;
     wxPanel*                m_submenu{nullptr};
     wxBoxSizer*             m_submenu_sizer{nullptr};
+    wxPanel*                m_submenu_border{nullptr};
     wxPanel*                m_add_panel{nullptr};
     wxPanel*                m_add_header{nullptr};
     wxStaticText*           m_add_tab_lbl[2]{nullptr, nullptr};
@@ -80,7 +81,7 @@ private:
     wxBoxSizer*             m_auto_list_sizer{nullptr};
     wxTextCtrl*             m_ip_field{nullptr};
     wxStaticText*           m_ip_status{nullptr};
-    bool                    m_expanded{false};
+    bool                    m_expanded{true};
     bool                    m_header_hovered{false};
     bool                    m_status_page_active{true};
     bool                    m_add_mode{false};

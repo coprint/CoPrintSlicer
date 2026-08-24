@@ -33,6 +33,16 @@ void MoonrakerDeviceController::sync_loaded_tool_filaments(MachineObject* obj, s
 {
     if (m_backend != nullptr)
         m_backend->sync_loaded_tool_filaments(obj, std::move(on_done));
+    else if (on_done)
+        on_done();
+}
+
+void MoonrakerDeviceController::fetch_filament_selections(MachineObject* obj, std::function<void(bool ok)> on_done)
+{
+    if (m_backend != nullptr)
+        m_backend->fetch_filament_selections(obj, std::move(on_done));
+    else if (on_done)
+        on_done(false);
 }
 
 bool MoonrakerDeviceController::get_loaded_tool_filament(int tool_0based, wxColour* color_out, wxString* material_out) const

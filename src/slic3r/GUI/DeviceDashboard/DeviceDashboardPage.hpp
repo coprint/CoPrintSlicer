@@ -10,6 +10,7 @@
 #include <wx/scrolwin.h>
 
 class wxStaticBitmap;
+class wxStaticText;
 
 namespace Slic3r {
 namespace GUI {
@@ -29,6 +30,7 @@ public:
     explicit DeviceDashboardPage(wxWindow* parent);
 
     void apply_state(const DeviceDashboardState& state);
+    void set_connecting_visible(bool visible, const wxString &message = wxEmptyString);
     void set_command_handler(CommandHandler handler);
 
     void update_camera_host_responsive_size();
@@ -62,8 +64,11 @@ private:
     PrinterStatusPanel* m_printer_status_panel{nullptr};
     FilamentPanel* m_filament_panel{nullptr};
     wxPanel* m_content_panel{nullptr};
+    wxPanel* m_connecting_overlay{nullptr};
+    wxStaticText* m_connecting_label{nullptr};
     CommandHandler m_command_handler;
     bool m_refreshing_scroll{false};
+    bool m_pending_scroll_refresh{false};
 };
 
 } // namespace DeviceDashboard

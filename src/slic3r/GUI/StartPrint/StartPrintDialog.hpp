@@ -7,6 +7,8 @@
 #include <vector>
 
 #include <wx/dialog.h>
+#include <wx/colour.h>
+#include <wx/image.h>
 #include <wx/panel.h>
 #include <wx/simplebook.h>
 #include <wx/timer.h>
@@ -23,6 +25,22 @@
 namespace Slic3r { namespace GUI {
 
 class Plater;
+
+struct PrinterStorageFilament {
+    std::string type;
+    wxColour    color;
+};
+
+struct PrinterStoragePrintRequest {
+    std::string file_path;
+    std::string machine_id;
+    wxString    display_name;
+    wxString    time_text;
+    wxString    weight_text;
+    wxString    printer_label;
+    wxImage     thumbnail;
+    std::vector<PrinterStorageFilament> filaments;
+};
 
 class PrinterToolSwatch;
 
@@ -69,6 +87,7 @@ public:
     explicit StartPrintDialog(wxWindow *parent);
 
     void prepare(int print_plate_idx);
+    void prepare_from_storage(PrinterStoragePrintRequest request);
 
     int ShowModal() override;
 
@@ -99,9 +118,17 @@ private:
     void on_task_name_edit(wxCommandEvent &event);
     void on_task_name_enter();
     void reset_print_options();
+    void apply_storage_preview();
+    void apply_storage_locks();
+    void fill_storage_filament_slots();
+    void start_storage_print();
 
     Plater *m_plater{nullptr};
     int     m_print_plate_idx{0};
+    bool    m_storage_mode{false};
+    std::string m_storage_file_path;
+    std::string m_locked_machine_id;
+    PrinterStoragePrintRequest m_storage_request;
 
     ThumbnailPanel *m_thumbnail_panel{nullptr};
     wxStaticText   *m_thumbnail_placeholder{nullptr};

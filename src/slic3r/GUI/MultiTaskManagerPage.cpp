@@ -3,6 +3,8 @@
 
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
+#include "StartPrint/StartPrintDialog.hpp"
+#include "Widgets/ProgressDialog.hpp"
 #include "Widgets/RadioBox.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
@@ -14,9 +16,15 @@
 #include <nlohmann/json.hpp>
 
 #include "DeviceCore/DevManager.h"
+#include "DeviceManager.hpp"
+#ifdef __APPLE__
+#include "../Utils/MacDarkMode.hpp"
+#endif
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
 #include <wx/mstream.h>
+#include <wx/timer.h>
+#include <wx/time.h>
 
 #include <algorithm>
 #include <atomic>
@@ -26,6 +34,7 @@
 #include <cstdint>
 #include <ctime>
 #include <functional>
+#include <map>
 #include <thread>
 #include <vector>
 
@@ -35,6 +44,270 @@ namespace GUI {
 namespace {
 constexpr int CLOUD_HISTORY_ITEM_HEIGHT = 96;
 constexpr size_t MOONRAKER_MODEL_FILE_LIMIT = 30;
+constexpr int kModelCardWDip = 265;
+constexpr int kModelCardHDip = 265;
+constexpr int kModelGridGapDip = 18;
+constexpr int kModelScrollBarWDip = 10;
+constexpr int kModelScrollThumbWDip = 4;
+const wxColour kModelScrollThumb(0x7A, 0x80, 0x88);
+
+wxBitmap load_model_card_png(wxWindow* host, const char* filename, int dip)
+{
+    wxImage img;
+    if (!img.LoadFile(wxString::FromUTF8(Slic3r::var(filename)), wxBITMAP_TYPE_PNG) || !img.IsOk())
+        return {};
+#ifdef __APPLE__
+    const double scale = std::max(1.0, mac_max_scaling_factor());
+    const int px = std::max(1, (int) std::lround(dip * scale));
+    img.Rescale(px, px, wxIMAGE_QUALITY_HIGH);
+    return wxBitmap(std::move(img), -1, scale);
+#else
+    const int px = std::max(1, host->FromDIP(dip));
+    if (img.GetWidth() != px || img.GetHeight() != px)
+        img.Rescale(px, px, wxIMAGE_QUALITY_HIGH);
+    return wxBitmap(img);
+#endif
+}
+
+class ModelGridOverlayScroll : public wxWindow
+{
+public:
+    explicit ModelGridOverlayScroll(wxWindow* parent)
+        : wxWindow()
+        , m_idle_timer(this)
+        , m_fade_timer(this)
+    {
+#ifdef __WXOSX__
+        SetBackgroundStyle(wxBG_STYLE_TRANSPARENT);
+#else
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+#endif
+        Create(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+        SetCanFocus(false);
+        Hide();
+        SetCursor(wxCursor(wxCURSOR_HAND));
+        Bind(wxEVT_PAINT, &ModelGridOverlayScroll::on_paint, this);
+        Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent&) {});
+        Bind(wxEVT_LEFT_DOWN, &ModelGridOverlayScroll::on_down, this);
+        Bind(wxEVT_LEFT_UP, &ModelGridOverlayScroll::on_up, this);
+        Bind(wxEVT_MOTION, &ModelGridOverlayScroll::on_move, this);
+        Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent&) {
+            m_hover = true;
+            reveal();
+        });
+        Bind(wxEVT_LEAVE_WINDOW, [this](wxMouseEvent&) {
+            m_hover = false;
+            if (!m_dragging)
+                arm_idle();
+        });
+        Bind(wxEVT_MOUSEWHEEL, [this](wxMouseEvent& evt) {
+            if (m_scrolled != nullptr)
+                m_scrolled->GetEventHandler()->ProcessEvent(evt);
+        });
+        Bind(wxEVT_MOUSE_CAPTURE_LOST, [this](wxMouseCaptureLostEvent&) {
+            m_dragging = false;
+            arm_idle();
+        });
+        m_idle_timer.Bind(wxEVT_TIMER, [this](wxTimerEvent&) { start_fade(); });
+        m_fade_timer.Bind(wxEVT_TIMER, [this](wxTimerEvent&) { step_fade(); });
+    }
+
+    void attach(wxScrolledWindow* scrolled) { m_scrolled = scrolled; }
+    void set_on_scroll(std::function<void()> cb) { m_on_scroll = std::move(cb); }
+
+    void sync(bool do_reveal)
+    {
+        if (m_scrolled == nullptr || !m_scrolled->IsShown()) {
+            m_fade_timer.Stop();
+            m_idle_timer.Stop();
+            Hide();
+            return;
+        }
+        pin_to_viewport();
+        update_thumb();
+        if (do_reveal)
+            reveal();
+        else if (m_need)
+            Refresh();
+        else
+            Hide();
+    }
+
+    void reveal()
+    {
+        if (m_scrolled == nullptr || !m_scrolled->IsShown()) {
+            Hide();
+            return;
+        }
+        pin_to_viewport();
+        update_thumb();
+        if (!m_need) {
+            m_fade_timer.Stop();
+            m_idle_timer.Stop();
+            m_alpha = 0;
+            Hide();
+            return;
+        }
+        m_alpha = 255;
+        m_fade_timer.Stop();
+        Show();
+        Raise();
+        Refresh();
+        if (!m_hover && !m_dragging)
+            arm_idle();
+        else
+            m_idle_timer.Stop();
+    }
+
+private:
+    void pin_to_viewport()
+    {
+        if (m_scrolled == nullptr)
+            return;
+        const wxRect r = m_scrolled->GetRect();
+        const int bar_w = FromDIP(kModelScrollBarWDip);
+        SetSize(r.x + r.width - bar_w, r.y, bar_w, r.height);
+        Raise();
+    }
+
+    void update_thumb()
+    {
+        m_need = false;
+        m_thumb_h = 0;
+        m_thumb_y = 0;
+        if (m_scrolled == nullptr)
+            return;
+        int y = 0;
+        int x = 0;
+        m_scrolled->GetViewStart(&x, &y);
+        int ux = 0;
+        int uy = 0;
+        m_scrolled->GetScrollPixelsPerUnit(&ux, &uy);
+        const int content_h = m_scrolled->GetVirtualSize().GetHeight();
+        const int view_h = m_scrolled->GetClientSize().GetHeight();
+        const int track_h = GetClientSize().GetHeight();
+        m_need = content_h > view_h && view_h > 0 && uy > 0 && track_h > 0;
+        if (!m_need)
+            return;
+        m_thumb_h = std::max(FromDIP(24), track_h * view_h / content_h);
+        const int max_scroll = std::max(1, content_h - view_h);
+        m_thumb_y = std::max(0, (track_h - m_thumb_h) * (y * uy) / max_scroll);
+    }
+
+    void arm_idle()
+    {
+        m_idle_timer.StartOnce(1100);
+    }
+
+    void start_fade()
+    {
+        if (m_hover || m_dragging)
+            return;
+        m_fade_timer.Start(32);
+    }
+
+    void step_fade()
+    {
+        if (m_hover || m_dragging) {
+            m_fade_timer.Stop();
+            m_alpha = 255;
+            Refresh();
+            return;
+        }
+        m_alpha = std::max(0, m_alpha - 28);
+        Refresh();
+        if (m_alpha <= 0) {
+            m_fade_timer.Stop();
+            Hide();
+        }
+    }
+
+    void on_paint(wxPaintEvent&)
+    {
+#ifdef __WXOSX__
+        wxPaintDC raw_dc(this);
+        wxGCDC dc(raw_dc);
+#else
+        wxAutoBufferedPaintDC raw_dc(this);
+        wxGCDC dc(raw_dc);
+        const wxColour bg = m_scrolled != nullptr ? m_scrolled->GetBackgroundColour() : GetBackgroundColour();
+        dc.SetBackground(wxBrush(bg));
+        dc.Clear();
+#endif
+        if (m_thumb_h <= 0 || m_alpha <= 0)
+            return;
+        const int bar_w = FromDIP(kModelScrollThumbWDip);
+        const int bar_x = (GetClientSize().GetWidth() - bar_w) / 2;
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(wxColour(kModelScrollThumb.Red(), kModelScrollThumb.Green(), kModelScrollThumb.Blue(), m_alpha)));
+        dc.DrawRoundedRectangle(bar_x, m_thumb_y, bar_w, m_thumb_h, bar_w / 2.0);
+    }
+
+    void scroll_to_thumb_y(int thumb_y)
+    {
+        if (m_scrolled == nullptr || m_thumb_h <= 0)
+            return;
+        const int content_h = m_scrolled->GetVirtualSize().GetHeight();
+        const int view_h = m_scrolled->GetClientSize().GetHeight();
+        const int track_h = GetClientSize().GetHeight();
+        const int max_thumb = std::max(1, track_h - m_thumb_h);
+        thumb_y = std::clamp(thumb_y, 0, max_thumb);
+        int ux = 0;
+        int uy = 0;
+        m_scrolled->GetScrollPixelsPerUnit(&ux, &uy);
+        const int max_scroll = std::max(1, content_h - view_h);
+        const int view_px = thumb_y * max_scroll / max_thumb;
+        m_scrolled->Scroll(0, uy > 0 ? view_px / uy : 0);
+        pin_to_viewport();
+        update_thumb();
+        Refresh();
+        if (m_on_scroll)
+            m_on_scroll();
+    }
+
+    void on_down(wxMouseEvent& evt)
+    {
+        if (m_thumb_h <= 0)
+            return;
+        reveal();
+        if (evt.GetY() >= m_thumb_y && evt.GetY() < m_thumb_y + m_thumb_h) {
+            m_dragging = true;
+            m_drag_off = evt.GetY() - m_thumb_y;
+            CaptureMouse();
+        } else {
+            const int page = m_scrolled != nullptr ? m_scrolled->GetClientSize().GetHeight() : m_thumb_h;
+            scroll_to_thumb_y(m_thumb_y + (evt.GetY() < m_thumb_y ? -page : page));
+        }
+    }
+
+    void on_up(wxMouseEvent&)
+    {
+        if (HasCapture())
+            ReleaseMouse();
+        m_dragging = false;
+        arm_idle();
+    }
+
+    void on_move(wxMouseEvent& evt)
+    {
+        if (!m_dragging || !evt.Dragging())
+            return;
+        scroll_to_thumb_y(evt.GetY() - m_drag_off);
+    }
+
+    wxScrolledWindow* m_scrolled{nullptr};
+    std::function<void()> m_on_scroll;
+    wxTimer           m_idle_timer;
+    wxTimer           m_fade_timer;
+    int               m_thumb_y{0};
+    int               m_thumb_h{0};
+    int               m_drag_off{0};
+    int               m_alpha{0};
+    bool              m_dragging{false};
+    bool              m_hover{false};
+    bool              m_need{false};
+};
+
 std::atomic<unsigned> s_moonraker_model_probe_gen{ 0 };
 std::atomic<bool> s_moonraker_model_probe_stop{ false };
 
@@ -122,14 +395,6 @@ struct MoonrakerModelDeleteResult
     std::string path;
 };
 
-struct MoonrakerModelPrintResult
-{
-    bool        ok{ false };
-    unsigned    status_code{ 0 };
-    std::string error_message;
-    std::string path;
-};
-
 wxString format_moonraker_file_size(std::uint64_t bytes)
 {
     const double mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
@@ -166,25 +431,10 @@ wxString format_moonraker_filament_weight(double grams)
 {
     if (grams <= 0.0)
         return "-";
-    return wxString::Format("%dg", static_cast<int>(std::round(grams)));
-}
-
-void draw_clock_icon(wxDC& dc, int x, int y, int size, const wxColour& colour)
-{
-    dc.SetPen(wxPen(colour, std::max(1, size / 10)));
-    dc.SetBrush(*wxTRANSPARENT_BRUSH);
-    dc.DrawCircle(x + size / 2, y + size / 2, size / 2 - 1);
-    dc.DrawLine(x + size / 2, y + size / 2, x + size / 2, y + size / 4);
-    dc.DrawLine(x + size / 2, y + size / 2, x + size * 3 / 4, y + size * 2 / 3);
-}
-
-void draw_filament_icon(wxDC& dc, int x, int y, int size, const wxColour& colour)
-{
-    dc.SetPen(wxPen(colour, std::max(1, size / 10)));
-    dc.SetBrush(*wxTRANSPARENT_BRUSH);
-    dc.DrawEllipse(x, y + size / 8, size, size * 3 / 4);
-    dc.DrawEllipse(x + size / 4, y + size / 3, size / 2, size / 3);
-    dc.DrawLine(x + size / 6, y + size * 3 / 4, x + size * 5 / 6, y + size * 3 / 4);
+    wxString text = wxString::Format("%.2f", grams);
+    while (text.length() > 1 && text.Contains('.') && (text.Last() == '0' || text.Last() == '.'))
+        text.RemoveLast();
+    return text + "g";
 }
 
 wxString basename_from_moonraker_path(const std::string& path)
@@ -279,15 +529,17 @@ std::string moonraker_thumbnail_path_from_metadata(const nlohmann::json& metadat
     return relative_path;
 }
 
-wxImage load_moonraker_thumbnail_image(const std::string& url)
+wxImage load_moonraker_thumbnail_image(const std::string& url, const std::string& api_key = {})
 {
     std::string body;
     unsigned status_code = 0;
     std::string error_message;
 
-    Http::get(url)
-        .timeout_connect(2)
-        .timeout_max(5)
+    auto http = Http::get(url);
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.timeout_connect(5)
+        .timeout_max(12)
         .size_limit(1024 * 1024)
         .on_complete([&](std::string response, unsigned status) {
             status_code = status;
@@ -318,10 +570,299 @@ wxImage load_moonraker_thumbnail_image(const std::string& url)
     return image.IsOk() ? image : wxImage();
 }
 
+std::string trim_moonraker_token(std::string s)
+{
+    auto is_wrapper = [](unsigned char c) {
+        return c == ' ' || c == '\t' || c == '"' || c == '\'' || c == '[' || c == ']' || c == '\\';
+    };
+    while (!s.empty() && is_wrapper(static_cast<unsigned char>(s.front())))
+        s.erase(s.begin());
+    while (!s.empty() && is_wrapper(static_cast<unsigned char>(s.back())))
+        s.pop_back();
+    return s;
+}
+
+wxColour parse_moonraker_filament_colour(const std::string& hex)
+{
+    const std::string v = trim_moonraker_token(hex);
+    wxColour colour(wxString::FromUTF8(v.c_str()));
+    return colour.IsOk() ? colour : wxColour(120, 120, 120);
+}
+
+std::vector<std::string> split_moonraker_meta_list(const std::string& raw)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    auto flush = [&]() {
+        const std::string token = trim_moonraker_token(cur);
+        if (!token.empty())
+            out.push_back(token);
+        cur.clear();
+    };
+    for (char ch : raw) {
+        if (ch == ',' || ch == ';' || ch == '\n')
+            flush();
+        else
+            cur.push_back(ch);
+    }
+    flush();
+    return out;
+}
+
+void collect_moonraker_string_list(const nlohmann::json& node, std::vector<std::string>& out)
+{
+    auto push_token = [&](std::string token) {
+        token = trim_moonraker_token(std::move(token));
+        if (!token.empty())
+            out.push_back(std::move(token));
+    };
+    if (node.is_array()) {
+        for (const auto& item : node) {
+            if (item.is_string())
+                push_token(item.get<std::string>());
+        }
+        return;
+    }
+    if (!node.is_string())
+        return;
+    const std::string raw = node.get<std::string>();
+    auto parsed = nlohmann::json::parse(raw, nullptr, false, true);
+    if (!parsed.is_discarded() && (parsed.is_array() || parsed.is_string())) {
+        collect_moonraker_string_list(parsed, out);
+        return;
+    }
+    for (const auto& part : split_moonraker_meta_list(raw))
+        push_token(part);
+}
+
+void collect_moonraker_number_list(const nlohmann::json& node, std::vector<double>& out)
+{
+    auto push_number = [&](double value) { out.push_back(value); };
+    if (node.is_number()) {
+        push_number(node.get<double>());
+        return;
+    }
+    if (node.is_array()) {
+        for (const auto& item : node) {
+            if (item.is_number())
+                push_number(item.get<double>());
+            else if (item.is_string()) {
+                try {
+                    push_number(std::stod(item.get<std::string>()));
+                } catch (...) {
+                }
+            }
+        }
+        return;
+    }
+    if (!node.is_string())
+        return;
+    auto parsed = nlohmann::json::parse(node.get<std::string>(), nullptr, false, true);
+    if (!parsed.is_discarded() && (parsed.is_array() || parsed.is_number() || parsed.is_string())) {
+        collect_moonraker_number_list(parsed, out);
+        return;
+    }
+    for (const auto& part : split_moonraker_meta_list(node.get<std::string>())) {
+        try {
+            push_number(std::stod(part));
+        } catch (...) {
+        }
+    }
+}
+
+nlohmann::json fetch_moonraker_file_metadata_json(const std::string& base_url,
+                                                  const std::string& api_key,
+                                                  const std::string& path)
+{
+    nlohmann::json parsed;
+    if (base_url.empty() || path.empty())
+        return parsed;
+
+    const std::string metadata_url = base_url + "/server/files/metadata?filename=" + moonraker_url_encode_path(path);
+    std::string body;
+    auto http = Http::get(metadata_url);
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.timeout_connect(8)
+        .timeout_max(20)
+        .on_complete([&](std::string response, unsigned status) {
+            if (status == 200)
+                body = std::move(response);
+        })
+        .on_error([&](std::string, std::string, unsigned) {})
+        .perform_sync();
+
+    if (body.empty())
+        return parsed;
+
+    parsed = nlohmann::json::parse(body, nullptr, false, true);
+    if (parsed.is_discarded())
+        return {};
+    if (parsed.contains("result"))
+        parsed = parsed["result"];
+    return parsed.is_object() ? parsed : nlohmann::json{};
+}
+
+void apply_moonraker_metadata_to_request(const nlohmann::json& parsed,
+                                         const std::string& base_url,
+                                         const std::string& api_key,
+                                         PrinterStoragePrintRequest& request)
+{
+    if (!parsed.is_object())
+        return;
+
+    if (parsed.contains("estimated_time") && parsed["estimated_time"].is_number())
+        request.time_text = format_moonraker_duration(parsed["estimated_time"].get<double>());
+    else if (parsed.contains("print_time") && parsed["print_time"].is_number())
+        request.time_text = format_moonraker_duration(parsed["print_time"].get<double>());
+
+    std::vector<std::string> types;
+    std::vector<std::string> colors;
+    std::vector<double> used_g;
+    std::vector<double> used_mm;
+
+    if (parsed.contains("filament_weight_total")) {
+        if (parsed["filament_weight_total"].is_number()) {
+            request.weight_text = format_moonraker_filament_weight(parsed["filament_weight_total"].get<double>());
+        } else {
+            std::vector<double> total_parts;
+            collect_moonraker_number_list(parsed["filament_weight_total"], total_parts);
+            if (total_parts.size() > 1)
+                used_g = total_parts;
+            double total = 0.0;
+            for (double w : total_parts)
+                total += w;
+            if (total > 0.0)
+                request.weight_text = format_moonraker_filament_weight(total);
+        }
+    }
+
+    if (parsed.contains("filament_type"))
+        collect_moonraker_string_list(parsed["filament_type"], types);
+    if (types.empty() && parsed.contains("filament_types"))
+        collect_moonraker_string_list(parsed["filament_types"], types);
+    if (parsed.contains("filament_colors"))
+        collect_moonraker_string_list(parsed["filament_colors"], colors);
+    else if (parsed.contains("filament_colour"))
+        collect_moonraker_string_list(parsed["filament_colour"], colors);
+
+    for (const char* key : { "filament_used_g", "filament_used_weight", "filament_weights" }) {
+        if (!parsed.contains(key) || !used_g.empty())
+            continue;
+        collect_moonraker_number_list(parsed[key], used_g);
+    }
+    // filament_total / filament_weight_total are Moonraker sums, not per-slot lists.
+    for (const char* key : { "filament_used_mm", "filament_used_m" }) {
+        if (!parsed.contains(key) || !used_mm.empty())
+            continue;
+        collect_moonraker_number_list(parsed[key], used_mm);
+        if (used_mm.size() == 1)
+            used_mm.clear();
+    }
+
+    std::vector<int> referenced_raw;
+    if (parsed.contains("referenced_tools")) {
+        const auto& tools_node = parsed["referenced_tools"];
+        auto push_raw = [&](int value) { referenced_raw.push_back(value); };
+        if (tools_node.is_array()) {
+            for (const auto& item : tools_node) {
+                if (item.is_number_integer())
+                    push_raw(item.get<int>());
+            }
+        } else {
+            std::vector<double> tool_nums;
+            collect_moonraker_number_list(tools_node, tool_nums);
+            for (double value : tool_nums)
+                push_raw(static_cast<int>(std::lround(value)));
+        }
+    }
+    std::vector<int> referenced_tools;
+    bool zero_based_tools = false;
+    for (int value : referenced_raw) {
+        if (value == 0)
+            zero_based_tools = true;
+    }
+    for (int value : referenced_raw) {
+        const int idx = zero_based_tools ? value : value - 1;
+        if (idx >= 0 && idx < 4)
+            referenced_tools.push_back(idx);
+    }
+
+    const size_t n = std::min<size_t>(4, std::max({ types.size(), colors.size(), used_g.size(), used_mm.size() }));
+    std::vector<char> keep(n, 0);
+    bool filtered = false;
+    if (!used_g.empty()) {
+        // A single value means only extruder 0 was used (CoPrint omits trailing zeros).
+        filtered = true;
+        for (size_t i = 0; i < n; ++i)
+            keep[i] = i < used_g.size() && used_g[i] > 0.01;
+    } else if (!referenced_tools.empty()) {
+        filtered = true;
+        for (int idx : referenced_tools) {
+            if (idx >= 0 && static_cast<size_t>(idx) < n)
+                keep[static_cast<size_t>(idx)] = 1;
+        }
+    } else if (used_mm.size() > 1) {
+        filtered = true;
+        for (size_t i = 0; i < n; ++i)
+            keep[i] = i < used_mm.size() && used_mm[i] > 1.0;
+    }
+    if (!filtered) {
+        if (n <= 1) {
+            if (n == 1)
+                keep[0] = 1;
+        } else {
+            bool same_color = colors.size() <= 1;
+            if (!same_color) {
+                same_color = true;
+                for (size_t i = 1; i < colors.size(); ++i) {
+                    if (parse_moonraker_filament_colour(colors[i]) != parse_moonraker_filament_colour(colors[0])) {
+                        same_color = false;
+                        break;
+                    }
+                }
+            }
+            if (same_color)
+                keep[0] = 1;
+            else {
+                for (size_t i = 0; i < n; ++i)
+                    keep[i] = 1;
+            }
+        }
+    }
+
+    bool any_kept = false;
+    for (char flag : keep) {
+        if (flag)
+            any_kept = true;
+    }
+    if (!any_kept && n > 0)
+        keep[0] = 1;
+
+    request.filaments.clear();
+    for (size_t i = 0; i < n; ++i) {
+        if (!keep[i])
+            continue;
+        PrinterStorageFilament slot;
+        slot.type = i < types.size() && !types[i].empty() ? types[i] : "PLA";
+        slot.color = i < colors.size() ? parse_moonraker_filament_colour(colors[i]) : wxColour(120, 120, 120);
+        request.filaments.push_back(std::move(slot));
+    }
+
+    const std::string thumbnail_path = moonraker_thumbnail_path_from_metadata(parsed);
+    if (!thumbnail_path.empty()) {
+        const std::string thumbnail_url = base_url + "/server/files/gcodes/" + moonraker_url_encode_path(thumbnail_path);
+        wxImage thumb = load_moonraker_thumbnail_image(thumbnail_url, api_key);
+        if (thumb.IsOk())
+            request.thumbnail = std::move(thumb);
+    }
+}
+
 void probe_moonraker_model_metadata(const std::string& base_url,
                                     const std::string& api_key,
                                     MoonrakerPrinterAgent* moonraker_agent,
-                                    std::vector<MoonrakerModelFileView>& files)
+                                    std::vector<MoonrakerModelFileView>& files,
+                                    const std::function<void(MoonrakerModelFileView)>& on_file_meta)
 {
     constexpr size_t max_metadata_probe_count = MOONRAKER_MODEL_FILE_LIMIT;
     const size_t probe_count = std::min(max_metadata_probe_count, files.size());
@@ -393,6 +934,8 @@ void probe_moonraker_model_metadata(const std::string& base_url,
         if (!thumbnail_path.empty()) {
             file.thumbnail_url = base_url + "/server/files/gcodes/" + moonraker_url_encode_path(thumbnail_path);
         }
+        if (on_file_meta)
+            on_file_meta(file);
 
         if (moonraker_probe_can_log())
             BOOST_LOG_TRIVIAL(info) << "Moonraker model metadata probe: file=" << file.path
@@ -442,52 +985,6 @@ MoonrakerModelDeleteResult delete_moonraker_model_file_sync(const std::string& b
         .perform_sync();
 
     BOOST_LOG_TRIVIAL(info) << "Moonraker model delete: file=" << path
-                            << " status=" << result.status_code
-                            << " ok=" << result.ok
-                            << " error=" << result.error_message
-                            << " body=" << body;
-
-    return result;
-}
-
-MoonrakerModelPrintResult start_moonraker_model_print_sync(const std::string& base_url,
-                                                           const std::string& api_key,
-                                                           const std::string& path)
-{
-    MoonrakerModelPrintResult result;
-    result.path = path;
-
-    if (base_url.empty() || path.empty()) {
-        result.error_message = "Missing printer URL or file path";
-        return result;
-    }
-
-    const std::string url = base_url + "/printer/print/start";
-    nlohmann::json payload;
-    payload["filename"] = path;
-
-    std::string body;
-    auto http = Http::post(url);
-    if (!api_key.empty())
-        http.header("X-Api-Key", api_key);
-    http.header("Content-Type", "application/json")
-        .set_post_body(payload.dump())
-        .timeout_connect(5)
-        .timeout_max(15)
-        .on_complete([&](std::string response, unsigned status) {
-            body = std::move(response);
-            result.status_code = status;
-            result.ok = status >= 200 && status < 300;
-        })
-        .on_error([&](std::string response, std::string error, unsigned status) {
-            body = std::move(response);
-            result.error_message = std::move(error);
-            result.status_code = status;
-            result.ok = false;
-        })
-        .perform_sync();
-
-    BOOST_LOG_TRIVIAL(info) << "Moonraker model print start: file=" << path
                             << " status=" << result.status_code
                             << " ok=" << result.ok
                             << " error=" << result.error_message
@@ -671,15 +1168,6 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
                                          _L("Delete"));
 }
 
-bool confirm_print_moonraker_model(wxWindow* parent, const wxString& display_name)
-{
-    return confirm_moonraker_model_action(parent,
-                                         display_name,
-                                         _L("Print model?"),
-                                         _L("This model will be started on the connected printer."),
-                                         _L("Yazdır"));
-}
-
 class MoonrakerModelFileCard : public wxPanel
 {
 public:
@@ -694,7 +1182,9 @@ public:
     {
         SetName(moonraker_model_card_name(m_file.path));
         SetBackgroundStyle(wxBG_STYLE_PAINT);
-        const wxSize card_size(FromDIP(230), FromDIP(250));
+        m_timer_icon = load_model_card_png(this, "cp_file_timer.png", 15);
+        m_filament_icon = load_model_card_png(this, "cp_file_filament.png", 15);
+        const wxSize card_size(FromDIP(kModelCardWDip), FromDIP(kModelCardHDip));
         SetMinSize(card_size);
         SetInitialSize(card_size);
         Bind(wxEVT_PAINT, &MoonrakerModelFileCard::on_paint, this);
@@ -712,12 +1202,58 @@ public:
             Refresh();
             evt.Skip();
         });
+    }
 
-        if (!m_file.thumbnail_url.empty()) {
-            m_thumbnail_request = wxWebSession::GetDefault().CreateRequest(this, wxString::FromUTF8(m_file.thumbnail_url));
-            if (m_thumbnail_request.IsOk())
-                m_thumbnail_request.Start();
+    void apply_metadata(const MoonrakerModelFileView& file)
+    {
+        m_file.estimated_time_seconds = file.estimated_time_seconds;
+        m_file.filament_weight_grams = file.filament_weight_grams;
+        m_file.thumbnail_url = file.thumbnail_url;
+        Refresh();
+    }
+
+    void apply_thumbnail(const wxImage& image)
+    {
+        if (!image.IsOk())
+            return;
+        m_thumbnail_image = image.Copy();
+        Refresh();
+    }
+
+    void request_thumbnail()
+    {
+        if (m_retiring || m_thumbnail_image.IsOk() || m_thumbnail_request.IsOk() || m_file.thumbnail_url.empty())
+            return;
+        m_thumbnail_request = wxWebSession::GetDefault().CreateRequest(this, wxString::FromUTF8(m_file.thumbnail_url));
+        if (m_thumbnail_request.IsOk())
+            m_thumbnail_request.Start();
+    }
+
+    bool has_thumbnail() const { return m_thumbnail_image.IsOk(); }
+
+    bool is_retiring() const { return m_retiring; }
+
+    // Keep this window alive until NSURLSession finishes. Destroying a wxWebRequest
+    // handler on macOS while State_Active crashes in SetState on a background queue.
+    void retire()
+    {
+        if (m_retiring)
+            return;
+        m_retiring = true;
+        Hide();
+        Disable();
+        if (m_thumbnail_request.IsOk() && m_thumbnail_request.GetState() == wxWebRequest::State_Active) {
+            m_thumbnail_request.Cancel();
+            return;
         }
+        Destroy();
+    }
+
+    std::string file_path() const { return m_file.path; }
+
+    void set_on_thumbnail_loaded(std::function<void(const std::string&, const wxImage&)> cb)
+    {
+        m_on_thumbnail_loaded = std::move(cb);
     }
 
     void set_card_size(const wxSize& card_size)
@@ -726,8 +1262,11 @@ public:
         SetInitialSize(card_size);
     }
 
+    wxImage thumbnail() const { return m_thumbnail_image; }
+
     ~MoonrakerModelFileCard() override
     {
+        SetEvtHandlerEnabled(false);
         if (m_thumbnail_request.IsOk())
             m_thumbnail_request.Cancel();
     }
@@ -791,7 +1330,7 @@ private:
         const wxColour parent_bg("#EEEEEF");
         const wxColour border_colour = m_hover ? wxColour("#00B894") : wxColour("#C7C7C7");
         const wxColour card_bg(*wxWHITE);
-        const wxColour preview_bg("#F5F5F5");
+        const wxColour preview_bg(*wxWHITE);
         const wxColour details_bg(*wxWHITE);
         const wxColour title_colour("#232527");
         const wxColour meta_colour("#767C84");
@@ -818,13 +1357,29 @@ private:
             wxImage thumb = m_thumbnail_image.Copy();
             wxRect image_area = preview;
             image_area.Deflate(FromDIP(14), FromDIP(14));
-            const double scale = std::min(
+            const double scale =
+#ifdef __APPLE__
+                std::max(1.0, mac_max_scaling_factor());
+#else
+                std::max(1.0, GetContentScaleFactor());
+#endif
+            const double fit = std::min(
                 static_cast<double>(image_area.width) / std::max(1, thumb.GetWidth()),
                 static_cast<double>(image_area.height) / std::max(1, thumb.GetHeight()));
-            const int thumb_w = std::max(1, static_cast<int>(thumb.GetWidth() * scale));
-            const int thumb_h = std::max(1, static_cast<int>(thumb.GetHeight() * scale));
-            thumb.Rescale(thumb_w, thumb_h, wxIMAGE_QUALITY_HIGH);
-            dc.DrawBitmap(wxBitmap(thumb), image_area.x + (image_area.width - thumb_w) / 2, image_area.y + (image_area.height - thumb_h) / 2, true);
+            const int thumb_w = std::max(1, static_cast<int>(std::lround(thumb.GetWidth() * fit)));
+            const int thumb_h = std::max(1, static_cast<int>(std::lround(thumb.GetHeight() * fit)));
+            thumb.Rescale(std::max(1, static_cast<int>(std::lround(thumb_w * scale))),
+                          std::max(1, static_cast<int>(std::lround(thumb_h * scale))),
+                          wxIMAGE_QUALITY_HIGH);
+#ifdef __APPLE__
+            dc.DrawBitmap(wxBitmap(std::move(thumb), -1, scale),
+                          image_area.x + (image_area.width - thumb_w) / 2,
+                          image_area.y + (image_area.height - thumb_h) / 2, true);
+#else
+            dc.DrawBitmap(wxBitmap(thumb),
+                          image_area.x + (image_area.width - thumb_w) / 2,
+                          image_area.y + (image_area.height - thumb_h) / 2, true);
+#endif
         } else {
             dc.SetFont(Label::Head_24);
             dc.SetTextForeground(wxColour("#AEB7C2"));
@@ -846,8 +1401,8 @@ private:
 
             dc.SetFont(Label::Body_14);
             dc.SetTextForeground(*wxWHITE);
-            const wxString delete_text = _L("Sil");
-            const wxString print_text = _L("Yazdır");
+            const wxString delete_text = _L("Delete");
+            const wxString print_text = _L("Print");
             wxCoord delete_w = 0;
             wxCoord delete_h = 0;
             wxCoord print_w = 0;
@@ -871,16 +1426,21 @@ private:
         const wxString duration_text = format_moonraker_duration(m_file.estimated_time_seconds);
         const wxString weight_text = format_moonraker_filament_weight(m_file.filament_weight_grams);
         const int meta_y = size.y - FromDIP(28);
-        const int icon_size = FromDIP(12);
-        const wxColour icon_colour("#85909D");
-        draw_clock_icon(dc, pad, meta_y + FromDIP(2), icon_size, icon_colour);
-        dc.DrawText(duration_text, pad + icon_size + FromDIP(5), meta_y);
+        const int icon_size = FromDIP(15);
+        const int icon_gap = FromDIP(5);
+        wxCoord duration_h = 0;
+        dc.GetTextExtent(duration_text, nullptr, &duration_h);
+        const int icon_y = meta_y + (duration_h - icon_size) / 2;
+        if (m_timer_icon.IsOk())
+            dc.DrawBitmap(m_timer_icon, pad, icon_y, true);
+        dc.DrawText(duration_text, pad + icon_size + icon_gap, meta_y);
 
         wxCoord weight_w = 0;
         dc.GetTextExtent(weight_text, &weight_w, nullptr);
-        const int filament_x = size.x - pad - weight_w - icon_size - FromDIP(5);
-        draw_filament_icon(dc, filament_x, meta_y + FromDIP(2), icon_size, icon_colour);
-        dc.DrawText(weight_text, filament_x + icon_size + FromDIP(5), meta_y);
+        const int filament_x = size.x - pad - weight_w - icon_size - icon_gap;
+        if (m_filament_icon.IsOk())
+            dc.DrawBitmap(m_filament_icon, filament_x, icon_y, true);
+        dc.DrawText(weight_text, filament_x + icon_size + icon_gap, meta_y);
 
         dc.SetPen(wxPen(border_colour, FromDIP(1)));
         dc.SetBrush(*wxTRANSPARENT_BRUSH);
@@ -889,11 +1449,19 @@ private:
 
     void on_thumbnail_request(wxWebRequestEvent& evt)
     {
+        if (m_retiring) {
+            if (evt.GetState() != wxWebRequest::State_Active && evt.GetState() != wxWebRequest::State_Idle)
+                CallAfter([this] { Destroy(); });
+            return;
+        }
         if (evt.GetState() == wxWebRequest::State_Completed && evt.GetResponse().GetStream() != nullptr) {
             wxImage image;
-            if (image.LoadFile(*evt.GetResponse().GetStream(), wxBITMAP_TYPE_ANY))
+            if (image.LoadFile(*evt.GetResponse().GetStream(), wxBITMAP_TYPE_ANY)) {
                 m_thumbnail_image = image;
-            Refresh();
+                if (m_on_thumbnail_loaded)
+                    m_on_thumbnail_loaded(m_file.path, m_thumbnail_image);
+                Refresh();
+            }
         }
     }
 
@@ -914,14 +1482,19 @@ private:
     }
 
     bool                   m_hover{ false };
+    bool                   m_retiring{ false };
     MoonrakerModelFileView m_file;
+    wxBitmap               m_timer_icon;
+    wxBitmap               m_filament_icon;
     wxImage                m_thumbnail_image;
     wxWebRequest           m_thumbnail_request;
     std::function<void(MoonrakerModelFileCard*, const MoonrakerModelFileView&)> m_on_delete_click;
     std::function<void(MoonrakerModelFileCard*, const MoonrakerModelFileView&)> m_on_print_click;
+    std::function<void(const std::string&, const wxImage&)> m_on_thumbnail_loaded;
 };
 
-void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> on_result = {})
+void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> on_result = {},
+                                 std::function<void(MoonrakerModelFileView)> on_file_meta = {})
 {
     Slic3r::DeviceManager* dev = wxGetApp().getDeviceManager();
     MachineObject* obj = dev ? dev->get_selected_machine() : nullptr;
@@ -944,7 +1517,8 @@ void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> 
     // Bump generation so only the newest probe updates the UI when Print Models
     // is opened/refreshed while a previous request is still in flight.
     const unsigned gen = ++s_moonraker_model_probe_gen;
-    std::thread([machine_id, base_url, api_key, printer_agent, gen, on_result = std::move(on_result)]() {
+    std::thread([machine_id, base_url, api_key, printer_agent, gen, on_result = std::move(on_result),
+                 on_file_meta = std::move(on_file_meta)]() {
         if (moonraker_probe_should_stop())
             return;
 
@@ -1074,8 +1648,15 @@ void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> 
                 }
             }
 
+            if (!moonraker_probe_should_stop() && gen == s_moonraker_model_probe_gen.load() && result.ok && on_result)
+                on_result(result);
+
             if (!moonraker_probe_should_stop() && result.ok && !result.files.empty())
-                probe_moonraker_model_metadata(base_url, api_key, moonraker_agent, result.files);
+                probe_moonraker_model_metadata(base_url, api_key, moonraker_agent, result.files,
+                    [&](MoonrakerModelFileView file) {
+                        if (!moonraker_probe_should_stop() && gen == s_moonraker_model_probe_gen.load() && on_file_meta)
+                            on_file_meta(std::move(file));
+                    });
         } catch (const std::exception& ex) {
             result.ok = false;
             result.error_message = ex.what();
@@ -1088,7 +1669,7 @@ void probe_moonraker_model_files(std::function<void(MoonrakerModelProbeResult)> 
                 BOOST_LOG_TRIVIAL(error) << "Moonraker model probe failed with unknown exception";
         }
 
-        if (!moonraker_probe_should_stop() && gen == s_moonraker_model_probe_gen.load() && on_result)
+        if (!moonraker_probe_should_stop() && gen == s_moonraker_model_probe_gen.load() && on_result && !result.ok)
             on_result(std::move(result));
     }).detach();
 }
@@ -2419,13 +3000,48 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     m_model_status_text->Wrap(-1);
     m_model_status_text->Show(false);
 
-    m_model_file_grid = new wxScrolledWindow(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    m_model_file_grid->SetMinSize(wxSize(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), FromDIP(520)));
+    m_model_file_grid = new wxScrolledWindow(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxVSCROLL);
     m_model_file_grid->SetBackgroundColour(cprint_panel_bg);
     m_model_file_grid->SetScrollRate(0, FromDIP(12));
     m_model_file_grid->ShowScrollbars(wxSHOW_SB_NEVER, wxSHOW_SB_NEVER);
-    m_model_file_grid_sizer = new wxFlexGridSizer(0, 5, FromDIP(18), FromDIP(18));
+    m_model_file_grid_sizer = new wxFlexGridSizer(0, 1, FromDIP(kModelGridGapDip), FromDIP(kModelGridGapDip));
     m_model_file_grid->SetSizer(m_model_file_grid_sizer);
+    auto* overlay = new ModelGridOverlayScroll(m_main_panel);
+    overlay->attach(m_model_file_grid);
+    overlay->set_on_scroll([this] { load_visible_model_thumbnails(); });
+    m_model_grid_scroll = overlay;
+    m_model_file_grid->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
+        evt.Skip();
+        relayout_model_file_grid();
+        sync_model_grid_overlay(false);
+        load_visible_model_thumbnails();
+    });
+    const auto on_grid_scroll = [this](wxScrollWinEvent& evt) {
+        evt.Skip();
+        sync_model_grid_overlay(true);
+        load_visible_model_thumbnails();
+    };
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_TOP, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_BOTTOM, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_LINEUP, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_LINEDOWN, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_PAGEUP, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_PAGEDOWN, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_THUMBTRACK, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_SCROLLWIN_THUMBRELEASE, on_grid_scroll);
+    m_model_file_grid->Bind(wxEVT_MOUSEWHEEL, [this](wxMouseEvent& evt) {
+        evt.Skip();
+        CallAfter([this] {
+            sync_model_grid_overlay(true);
+            load_visible_model_thumbnails();
+        });
+    });
+    m_model_file_grid->Bind(wxEVT_MOTION, [this](wxMouseEvent& evt) {
+        evt.Skip();
+        const int edge = FromDIP(kModelScrollBarWDip + 6);
+        if (m_model_file_grid != nullptr && evt.GetX() >= m_model_file_grid->GetClientSize().GetWidth() - edge)
+            sync_model_grid_overlay(true);
+    });
     m_model_file_grid->Show(false);
 
     m_task_list = new wxScrolledWindow(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
@@ -2497,12 +3113,14 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
         evt.Skip();
     });
 
-    m_refresh_tab = new Button(m_media_mode_panel, wxEmptyString, "refresh", wxNO_BORDER, FromDIP(18));
+    m_refresh_tab = new Button(m_media_mode_panel, wxEmptyString, "refresh", wxNO_BORDER, 18);
     m_refresh_tab->SetMinSize(wxSize(FromDIP(32), FromDIP(30)));
     m_refresh_tab->SetMaxSize(wxSize(FromDIP(32), FromDIP(30)));
-    m_refresh_tab->SetCornerRadius(FromDIP(8));
+    m_refresh_tab->SetCornerRadius(0);
+    m_refresh_tab->SetBorderWidth(0);
+    m_refresh_tab->SetBackgroundColor(StateColor());
+    m_refresh_tab->SetBackgroundColour(cprint_panel_bg);
     m_refresh_tab->SetToolTip(_L("Refresh"));
-    m_refresh_tab->SetBackgroundColor(ctrl_bg);
     m_refresh_tab->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
         if (m_media_timelapse_mode) {
             if (m_timelapse_panel)
@@ -2582,13 +3200,14 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     m_main_sizer->Add(m_media_mode_panel, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(24));
     m_main_sizer->AddSpacer(FromDIP(18));
     m_main_sizer->Add(m_model_status_text, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, FromDIP(12));
-    m_main_sizer->Add(m_model_file_grid, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(24));
+    m_main_sizer->Add(m_model_file_grid, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(24));
     m_main_sizer->Add(m_table_head_panel, 0, wxALIGN_CENTER_HORIZONTAL, 0);
     m_main_sizer->Add(m_tip_text, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(50));
     m_main_sizer->Add(m_loading_text, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(50));
     m_main_sizer->Add(m_task_list, 0, wxALIGN_CENTER_HORIZONTAL, 0);
     m_main_sizer->Add(m_timelapse_panel, 1, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(24));
-    m_main_sizer->AddSpacer(FromDIP(5));
+    if (m_media_presentation != MediaPresentation::ModelOnly)
+        m_main_sizer->AddSpacer(FromDIP(5));
 
     // add flipping page
     m_flipping_panel = new wxPanel(m_main_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
@@ -2698,13 +3317,18 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     m_ctrl_btn_panel->SetSizer(m_btn_sizer);
     m_ctrl_btn_panel->Layout();
 
-    m_main_sizer->AddSpacer(FromDIP(10));
+    if (m_media_presentation != MediaPresentation::ModelOnly)
+        m_main_sizer->AddSpacer(FromDIP(10));
     m_main_sizer->Add(m_ctrl_btn_panel, 0, wxALIGN_CENTER_HORIZONTAL, 0);
     m_main_panel->SetSizer(m_main_sizer);
     m_main_panel->Layout();
 
     page_sizer = new wxBoxSizer(wxVERTICAL);
-    page_sizer->Add(m_main_panel, 1, wxALL | wxEXPAND, FromDIP(10)); // ORCA match margin with other tabs
+    const int page_pad = FromDIP(10);
+    if (m_media_presentation == MediaPresentation::ModelOnly)
+        page_sizer->Add(m_main_panel, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, page_pad);
+    else
+        page_sizer->Add(m_main_panel, 1, wxALL | wxEXPAND, page_pad);
     Bind(wxEVT_TIMER, &CloudTaskManagerPage::on_timer, this);
 
     wxGetApp().UpdateDarkUIWin(this);
@@ -2764,36 +3388,135 @@ void CloudTaskManagerPage::refresh_moonraker_model_status()
     if (!m_model_status_text)
         return;
 
+    Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
+    MachineObject* obj = dev ? dev->get_selected_machine() : nullptr;
+    m_last_model_probe_machine_id = obj ? obj->get_dev_id() : std::string();
+    m_model_probe_in_flight = true;
+    m_last_model_probe_ok = false;
+    m_last_model_probe_started_ms = wxGetUTCTimeMillis().GetValue();
+
     m_model_status_text->SetLabel(_L("Loading printer models..."));
     m_model_status_text->Show(!m_media_timelapse_mode);
-    if (m_model_file_grid) {
-        if (m_model_file_grid_sizer)
-            m_model_file_grid_sizer->Clear(true);
+    if (m_model_file_grid)
         m_model_file_grid->Show(!m_media_timelapse_mode);
-    }
     Layout();
 
     std::weak_ptr<int> lifetime = m_model_status_lifetime;
-    probe_moonraker_model_files([this, lifetime](MoonrakerModelProbeResult result) {
-        wxGetApp().CallAfter([this, lifetime, result = std::move(result)]() {
-            if (lifetime.expired() || !m_model_status_text)
-                return;
+    const std::string probed_machine_id = m_last_model_probe_machine_id;
+    probe_moonraker_model_files(
+        [this, lifetime, probed_machine_id](MoonrakerModelProbeResult result) {
+            wxGetApp().CallAfter([this, lifetime, probed_machine_id, result = std::move(result)]() {
+                if (lifetime.expired() || !m_model_status_text)
+                    return;
+                if (m_last_model_probe_machine_id == probed_machine_id)
+                    m_model_probe_in_flight = false;
 
-            if (result.ok) {
-                m_model_status_text->SetLabel(wxString::Format(_L("%d printer models found."), static_cast<int>(result.file_count)));
-                render_moonraker_model_files(result.files);
-            } else if (result.status_code != 0) {
-                m_model_status_text->SetLabel(wxString::Format(_L("Printer model request failed. HTTP %u"), result.status_code));
-            } else if (!result.error_message.empty()) {
-                m_model_status_text->SetLabel(wxString::Format(_L("Printer models could not be loaded. (%s)"),
-                                                               wxString::FromUTF8(result.error_message)));
-            } else {
-                m_model_status_text->SetLabel(_L("Printer models could not be loaded."));
-            }
-            m_model_status_text->Show(!m_media_timelapse_mode);
-            Layout();
+                if (result.ok) {
+                    m_last_model_probe_ok = m_last_model_probe_machine_id == probed_machine_id;
+                    m_model_status_text->Hide();
+                    render_moonraker_model_files(result.files);
+                } else if (result.status_code != 0) {
+                    m_last_model_probe_ok = false;
+                    m_model_status_text->SetLabel(wxString::Format(_L("Printer model request failed. HTTP %u"), result.status_code));
+                    m_model_status_text->Show(!m_media_timelapse_mode);
+                } else if (!result.error_message.empty()) {
+                    m_last_model_probe_ok = false;
+                    m_model_status_text->SetLabel(wxString::Format(_L("Printer models could not be loaded. (%s)"),
+                                                                   wxString::FromUTF8(result.error_message)));
+                    m_model_status_text->Show(!m_media_timelapse_mode);
+                } else {
+                    m_last_model_probe_ok = false;
+                    m_model_status_text->SetLabel(_L("Printer models could not be loaded."));
+                    m_model_status_text->Show(!m_media_timelapse_mode);
+                }
+                Layout();
+            });
+        },
+        [this, lifetime](MoonrakerModelFileView file) {
+            wxGetApp().CallAfter([this, lifetime, file = std::move(file)]() {
+                if (lifetime.expired())
+                    return;
+                apply_model_file_metadata(file);
+            });
         });
-    });
+}
+
+int CloudTaskManagerPage::model_grid_column_count() const
+{
+    if (m_model_file_grid == nullptr)
+        return 1;
+    const int gap = FromDIP(kModelGridGapDip);
+    const int card_w = FromDIP(kModelCardWDip);
+    const int width = m_model_file_grid->GetClientSize().GetWidth();
+    if (width <= 0)
+        return 1;
+    return std::max(1, (width + gap) / (card_w + gap));
+}
+
+void CloudTaskManagerPage::sync_model_grid_overlay(bool reveal)
+{
+    if (auto* bar = static_cast<ModelGridOverlayScroll*>(m_model_grid_scroll))
+        bar->sync(reveal);
+}
+
+void CloudTaskManagerPage::relayout_model_file_grid()
+{
+    if (m_model_file_grid == nullptr || m_model_file_grid_sizer == nullptr)
+        return;
+    const int cols = model_grid_column_count();
+    if (m_model_file_grid_sizer->GetCols() == cols)
+        return;
+    m_model_file_grid_sizer->SetCols(cols);
+    m_model_file_grid_sizer->Layout();
+    m_model_file_grid->FitInside();
+    sync_model_grid_overlay(false);
+    load_visible_model_thumbnails();
+}
+
+void CloudTaskManagerPage::load_visible_model_thumbnails()
+{
+    if (m_model_file_grid == nullptr)
+        return;
+
+    int xu = 1;
+    int yu = 1;
+    m_model_file_grid->GetScrollPixelsPerUnit(&xu, &yu);
+    int vx = 0;
+    int vy = 0;
+    m_model_file_grid->GetViewStart(&vx, &vy);
+    const wxSize client = m_model_file_grid->GetClientSize();
+    const int prefetch = FromDIP(kModelCardHDip);
+    const wxRect visible(vx * std::max(1, xu), vy * std::max(1, yu),
+                         std::max(1, client.GetWidth()),
+                         std::max(1, client.GetHeight()) + prefetch);
+
+    for (wxWindow* child : m_model_file_grid->GetChildren()) {
+        auto* card = dynamic_cast<MoonrakerModelFileCard*>(child);
+        if (card == nullptr || card->is_retiring())
+            continue;
+        const wxRect rect(card->GetPosition(), card->GetSize());
+        if (!visible.Intersects(rect))
+            continue;
+        if (!card->has_thumbnail()) {
+            const auto cached = m_model_thumbnail_cache.find(card->file_path());
+            if (cached != m_model_thumbnail_cache.end())
+                card->apply_thumbnail(cached->second);
+            else
+                card->request_thumbnail();
+        }
+    }
+}
+
+void CloudTaskManagerPage::apply_model_file_metadata(const MoonrakerModelFileView& file)
+{
+    if (m_model_file_grid == nullptr)
+        return;
+    auto* found = wxWindow::FindWindowByName(moonraker_model_card_name(file.path), m_model_file_grid);
+    auto* card = dynamic_cast<MoonrakerModelFileCard*>(found);
+    if (card == nullptr)
+        return;
+    card->apply_metadata(file);
+    load_visible_model_thumbnails();
 }
 
 void CloudTaskManagerPage::render_moonraker_model_files(const std::vector<MoonrakerModelFileView>& files)
@@ -2802,15 +3525,26 @@ void CloudTaskManagerPage::render_moonraker_model_files(const std::vector<Moonra
         return;
 
     m_model_file_grid->Freeze();
-    m_model_file_grid_sizer->Clear(true);
 
-    const int grid_gap = FromDIP(18);
-    const int grid_width = std::max(FromDIP(CLOUD_TASK_ITEM_MAX_WIDTH), m_model_file_grid->GetClientSize().x);
-    const int card_width = std::max(FromDIP(230), (grid_width - grid_gap * 4) / 5);
-    const wxSize card_size(card_width, FromDIP(250));
+    std::map<std::string, MoonrakerModelFileCard*> existing;
+    for (wxWindow* child : m_model_file_grid->GetChildren()) {
+        auto* card = dynamic_cast<MoonrakerModelFileCard*>(child);
+        if (card == nullptr || card->is_retiring())
+            continue;
+        existing[card->file_path()] = card;
+    }
+    m_model_file_grid_sizer->Clear(false);
+    m_model_file_grid_sizer->SetCols(model_grid_column_count());
 
     for (const auto& file : files) {
-        auto* card = new MoonrakerModelFileCard(m_model_file_grid, file,
+        MoonrakerModelFileCard* card = nullptr;
+        const auto existing_it = existing.find(file.path);
+        if (existing_it != existing.end()) {
+            card = existing_it->second;
+            card->apply_metadata(file);
+            existing.erase(existing_it);
+        } else {
+        auto* new_card = new MoonrakerModelFileCard(m_model_file_grid, file,
         [this](MoonrakerModelFileCard*, const MoonrakerModelFileView& clicked_file) {
             if (!m_model_status_text)
                 return;
@@ -2841,9 +3575,13 @@ void CloudTaskManagerPage::render_moonraker_model_files(const std::vector<Moonra
                         if (m_model_file_grid != nullptr && m_model_file_grid_sizer != nullptr) {
                             if (auto* deleted_card = wxWindow::FindWindowByName(card_name, m_model_file_grid)) {
                                 m_model_file_grid_sizer->Detach(deleted_card);
-                                deleted_card->Destroy();
+                                if (auto* model_card = dynamic_cast<MoonrakerModelFileCard*>(deleted_card))
+                                    model_card->retire();
+                                else
+                                    deleted_card->Destroy();
                                 m_model_file_grid_sizer->Layout();
                                 m_model_file_grid->FitInside();
+                                sync_model_grid_overlay(false);
                             }
                         }
                         m_model_status_text->SetLabel(wxString::Format(_L("Deleted: %s"), display_name));
@@ -2860,53 +3598,79 @@ void CloudTaskManagerPage::render_moonraker_model_files(const std::vector<Moonra
                 });
             }).detach();
         },
-        [this](MoonrakerModelFileCard*, const MoonrakerModelFileView& clicked_file) {
-            if (!m_model_status_text)
-                return;
-
+        [this](MoonrakerModelFileCard* card, const MoonrakerModelFileView& clicked_file) {
             Slic3r::DeviceManager* dev = wxGetApp().getDeviceManager();
             MachineObject* obj = dev ? dev->get_selected_machine() : nullptr;
+            const wxString display_name = basename_from_moonraker_path(clicked_file.path);
             const std::string base_url = moonraker_base_url(obj);
             const std::string api_key = moonraker_api_key(obj);
-            const wxString display_name = basename_from_moonraker_path(clicked_file.path);
-            const std::string file_path = clicked_file.path;
+
+            PrinterStoragePrintRequest request;
+            request.file_path = clicked_file.path;
+            request.machine_id = obj ? obj->get_dev_id() : std::string();
+            request.display_name = display_name;
+            request.time_text = format_moonraker_duration(clicked_file.estimated_time_seconds);
+            request.weight_text = format_moonraker_filament_weight(clicked_file.filament_weight_grams);
+            if (obj != nullptr) {
+                wxString name = wxString::FromUTF8(obj->get_dev_name());
+                wxString ip = wxString::FromUTF8(obj->get_dev_ip());
+                request.printer_label = (!ip.empty() && name != ip)
+                    ? wxString::Format("%s (%s)", name, ip)
+                    : (name.empty() ? ip : name);
+            }
+            if (card != nullptr)
+                request.thumbnail = card->thumbnail();
+
+            wxWindow* dialog_parent = wxGetApp().mainframe != nullptr
+                ? static_cast<wxWindow*>(wxGetApp().mainframe)
+                : static_cast<wxWindow*>(this);
+            auto* fetch_dlg = new ProgressDialog(_L("Print"), _L("Fetching model information..."), 100,
+                                                 dialog_parent, wxPD_APP_MODAL | wxPD_NO_PROGRESS);
+            fetch_dlg->Update(0, _L("Fetching model information..."));
+
             std::weak_ptr<int> lifetime = m_model_status_lifetime;
-
-            if (!confirm_print_moonraker_model(this, display_name))
-                return;
-
-            m_model_status_text->SetLabel(wxString::Format(_L("Starting print: %s"), display_name));
-            m_model_status_text->Show(!m_media_timelapse_mode);
-            Layout();
-
-            std::thread([this, lifetime, base_url, api_key, file_path, display_name]() {
-                MoonrakerModelPrintResult print_result = start_moonraker_model_print_sync(base_url, api_key, file_path);
-                wxGetApp().CallAfter([this, lifetime, print_result = std::move(print_result), display_name]() {
-                    if (lifetime.expired() || !m_model_status_text)
+            std::thread([this, lifetime, base_url, api_key, request = std::move(request), fetch_dlg]() mutable {
+                const nlohmann::json parsed = fetch_moonraker_file_metadata_json(base_url, api_key, request.file_path);
+                apply_moonraker_metadata_to_request(parsed, base_url, api_key, request);
+                wxGetApp().CallAfter([this, lifetime, request = std::move(request), fetch_dlg]() mutable {
+                    if (fetch_dlg != nullptr)
+                        fetch_dlg->Destroy();
+                    if (lifetime.expired())
                         return;
 
-                    if (print_result.ok) {
-                        m_model_status_text->SetLabel(wxString::Format(_L("Print started: %s"), display_name));
-                    } else {
-                        const wxString reason = print_result.status_code != 0
-                            ? wxString::Format("HTTP %u", print_result.status_code)
-                            : wxString::FromUTF8(print_result.error_message);
-                        m_model_status_text->SetLabel(wxString::Format(_L("Print failed: %s (%s)"), display_name, reason));
-                    }
-                    m_model_status_text->Show(!m_media_timelapse_mode);
-                    Layout();
+                    wxWindow* start_parent = wxGetApp().mainframe != nullptr
+                        ? static_cast<wxWindow*>(wxGetApp().mainframe)
+                        : static_cast<wxWindow*>(this);
+                    StartPrintDialog dlg(start_parent);
+                    dlg.prepare_from_storage(std::move(request));
+                    dlg.ShowModal();
                 });
             }).detach();
         });
-        card->set_card_size(card_size);
+            card = new_card;
+            card->set_on_thumbnail_loaded([this](const std::string& path, const wxImage& image) {
+                if (image.IsOk())
+                    m_model_thumbnail_cache[path] = image.Copy();
+            });
+            const auto cached = m_model_thumbnail_cache.find(file.path);
+            if (cached != m_model_thumbnail_cache.end())
+                card->apply_thumbnail(cached->second);
+        }
         m_model_file_grid_sizer->Add(card, 0, wxFIXED_MINSIZE, 0);
     }
+
+    for (auto& leftover : existing)
+        leftover.second->retire();
 
     m_model_file_grid_sizer->Layout();
     m_model_file_grid->FitInside();
     m_model_file_grid->Show(!m_media_timelapse_mode);
+    if (m_model_grid_scroll)
+        m_model_grid_scroll->Raise();
+    sync_model_grid_overlay(false);
     m_model_file_grid->Thaw();
     Layout();
+    CallAfter([this] { load_visible_model_thumbnails(); });
 }
 
 void CloudTaskManagerPage::update_media_mode_tabs()
@@ -2954,13 +3718,13 @@ void CloudTaskManagerPage::update_media_mode_tabs()
         m_tip_text->Show(false);
     if (m_loading_text)
         m_loading_text->Show(model_mode && m_loading_text->IsShown());
-    if (m_model_status_text)
-        m_model_status_text->Show(model_mode);
+    if (m_model_status_text && !model_mode)
+        m_model_status_text->Hide();
     if (m_model_file_grid)
         m_model_file_grid->Show(model_mode);
+    sync_model_grid_overlay(false);
     if (m_task_list)
         m_task_list->Show(false);
-    if (m_flipping_panel)
         m_flipping_panel->Show(false);
     if (m_ctrl_btn_panel)
         m_ctrl_btn_panel->Show(false);
@@ -3157,10 +3921,11 @@ void CloudTaskManagerPage::refresh_user_device(bool clear)
     const bool model_mode = !m_media_timelapse_mode;
     m_table_head_panel->Show(false);
     m_tip_text->Show(false);
-    if (m_model_status_text)
-        m_model_status_text->Show(model_mode);
+    if (m_model_status_text && !model_mode)
+        m_model_status_text->Hide();
     if (m_model_file_grid)
         m_model_file_grid->Show(model_mode);
+    sync_model_grid_overlay(false);
     m_task_list->Show(false);
     m_timelapse_panel->Show(m_media_timelapse_mode);
     m_flipping_panel->Show(false);
@@ -3212,8 +3977,8 @@ bool CloudTaskManagerPage::Show(bool show)
 {
     if (show) {
         refresh_user_device();
-        if (!m_media_timelapse_mode && m_model_file_grid_sizer != nullptr && m_model_file_grid_sizer->IsEmpty())
-            refresh_moonraker_model_status();
+        if (!m_media_timelapse_mode)
+            ensure_media_models_for_selected_machine();
     }
     else {
         Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
@@ -3223,6 +3988,52 @@ bool CloudTaskManagerPage::Show(bool show)
     }
 
     return wxPanel::Show(show);
+}
+
+void CloudTaskManagerPage::reload_media_models()
+{
+    ensure_media_models_for_selected_machine();
+}
+
+void CloudTaskManagerPage::invalidate_media_cache_and_reload()
+{
+    m_model_thumbnail_cache.clear();
+    m_last_model_probe_ok = false;
+    m_last_model_probe_started_ms = 0;
+    m_model_probe_in_flight = false;
+
+    if (!IsShownOnScreen())
+        return;
+
+    if (m_media_timelapse_mode) {
+        if (m_timelapse_panel != nullptr)
+            m_timelapse_panel->Refresh();
+        return;
+    }
+
+    refresh_moonraker_model_status();
+}
+
+void CloudTaskManagerPage::ensure_media_models_for_selected_machine()
+{
+    if (m_media_timelapse_mode)
+        return;
+
+    Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
+    MachineObject* obj = dev ? dev->get_selected_machine() : nullptr;
+    const std::string machine_id = obj ? obj->get_dev_id() : std::string();
+    if (machine_id.empty())
+        return;
+    if (m_model_probe_in_flight)
+        return;
+    if (m_last_model_probe_ok && m_last_model_probe_machine_id == machine_id)
+        return;
+
+    const long long now_ms = wxGetUTCTimeMillis().GetValue();
+    if (m_last_model_probe_started_ms > 0 && (now_ms - m_last_model_probe_started_ms) < 1500)
+        return;
+
+    refresh_moonraker_model_status();
 }
 
 void CloudTaskManagerPage::update_page()

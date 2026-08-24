@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <wx/cursor.h>
+#include <wx/dcclient.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 
@@ -16,7 +17,7 @@ namespace DeviceDashboard {
 
 namespace {
 
-const wxColour kPopupBg(0xEB, 0xEB, 0xEB);
+const wxColour kPopupBg(255, 255, 255);
 
 int percent_to_speed_index(int percent)
 {
@@ -35,7 +36,7 @@ int speed_index_to_percent(int index)
     case 0: return 50;
     case 1: return 100;
     case 2: return 125;
-    default: return 166;
+    default: return 150;
     }
 }
 
@@ -54,6 +55,14 @@ void style_popup_shell(wxWindow *win)
 {
     win->SetBackgroundColour(kPopupBg);
     win->SetCursor(wxCursor(wxCURSOR_ARROW));
+    win->Bind(wxEVT_PAINT, [win](wxPaintEvent &) {
+        wxPaintDC dc(win);
+        const wxSize size = win->GetClientSize();
+        const int bw = std::max(1, win->FromDIP(1));
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        dc.SetPen(wxPen(wxColour(0xE1, 0xE1, 0xE1), bw));
+        dc.DrawRectangle(bw / 2, bw / 2, std::max(1, size.x - bw), std::max(1, size.y - bw));
+    });
 #ifdef __WXOSX__
     // wxPopupTransientWindow releases mouse on idle and can leave the
     // app without hover/cursor tracking after the popup is dismissed.
@@ -87,7 +96,7 @@ void position_popup(PopupWindow *popup, wxWindow *anchor)
 } // namespace
 
 PrintSpeedPopup::PrintSpeedPopup(wxWindow *parent)
-    : PopupWindow(parent, wxBORDER_SIMPLE | wxPU_CONTAINS_CONTROLS)
+    : PopupWindow(parent, wxBORDER_NONE | wxPU_CONTAINS_CONTROLS)
 {
     style_popup_shell(this);
     auto *root = new wxBoxSizer(wxVERTICAL);
@@ -97,13 +106,15 @@ PrintSpeedPopup::PrintSpeedPopup(wxWindow *parent)
     hint->SetBackgroundColour(kPopupBg);
     hint->SetCursor(wxCursor(wxCURSOR_ARROW));
     m_slider = new PresetStepSlider(this, {
-        wxString::FromUTF8("Silent"),
+        wxString::FromUTF8("Slow"),
         wxString::FromUTF8("Standard"),
-        wxString::FromUTF8("Sport"),
-        wxString::FromUTF8("Ludicrous")
+        wxString::FromUTF8("Fast"),
+        wxString::FromUTF8("Very Fast")
     });
     m_slider->SetBackgroundColour(kPopupBg);
     m_slider->set_change_handler([this](int index) {
+        if (m_slider != nullptr && !m_slider->enabled())
+            return;
         if (m_change_handler)
             m_change_handler(speed_index_to_percent(index));
     });
@@ -123,6 +134,12 @@ void PrintSpeedPopup::set_change_handler(ChangeHandler handler)
     m_change_handler = std::move(handler);
 }
 
+void PrintSpeedPopup::set_enabled(bool enabled)
+{
+    if (m_slider != nullptr)
+        m_slider->set_enabled(enabled);
+}
+
 void PrintSpeedPopup::popup_at(wxWindow *anchor)
 {
     position_popup(this, anchor);
@@ -136,7 +153,7 @@ void PrintSpeedPopup::OnDismiss()
 }
 
 FanSpeedPopup::FanSpeedPopup(wxWindow *parent)
-    : PopupWindow(parent, wxBORDER_SIMPLE | wxPU_CONTAINS_CONTROLS)
+    : PopupWindow(parent, wxBORDER_NONE | wxPU_CONTAINS_CONTROLS)
 {
     style_popup_shell(this);
     auto *root = new wxBoxSizer(wxVERTICAL);

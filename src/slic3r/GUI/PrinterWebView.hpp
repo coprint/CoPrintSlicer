@@ -85,6 +85,8 @@ public:
     void on_thumbnail_webrequest_state(wxWebRequestEvent &evt);
     void update_preview_thumbnail(const MachineObject *obj, bool has_active_job);
     void refresh_layer_info_from_selected_machine();
+    void invalidate_device_cache_and_refresh();
+    void refresh_coprint_device_names(std::function<void()> on_updated = {});
     void refresh_update_page_from_selected_machine();
     void UpdateState();
     void OnClose(wxCloseEvent &evt);
@@ -100,6 +102,7 @@ public:
 
     /** Starts a background Moonraker filament_selections fetch; updates tool colour cache on the UI thread. */
     void sync_loaded_tool_filaments(MachineObject *obj, std::function<void()> on_done = {});
+    void fetch_filament_selections(MachineObject *obj, std::function<void(bool ok)> on_done);
 
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
     bool get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const;
@@ -116,6 +119,11 @@ private:
     void apply_filament_tool_selection(int tool_index);
     void refresh_filament_preview_from_selected_machine();
     void apply_filament_preview_fallback();
+    void apply_loaded_filament_cache(const std::array<wxColour, 4> &colors,
+                                     const std::array<wxString, 4> &materials,
+                                     const std::array<wxString, 4> &brands,
+                                     const std::array<std::string, 4> &item_json,
+                                     const std::array<bool, 4> &has_color);
     void apply_filament_preview_rows(const std::array<wxColour, 4> &model_colors,
                                      const std::array<wxString, 4> &materials,
                                      const std::array<wxString, 4> &weights,
@@ -130,12 +138,17 @@ private:
     void send_tool_map_command(int model_slot_index, int ui_tool);
     bool send_tool_select_command(int tool_index);
     bool send_print_control_command(bool stop_print);
+    bool send_klipper_gcode_script(const std::string& script);
     bool show_filament_material_dialog(bool start_load_after_save, const wxPoint& anchor_screen_pos = wxDefaultPosition);
     void prompt_and_save_filament_selection_then_load();
     void save_filament_selection_to_moonraker(int ui_tool, const DeviceDashboard::FilamentSelection &selection);
     void clear_filament_selection_from_moonraker(int ui_tool);
+    void queue_filament_selections_write();
+    void start_filament_selections_write();
     void refresh_moonraker_status_from_selected_machine();
     void refresh_dashboard_panels(MachineObject *obj);
+    void update_dashboard_connecting_overlay(MachineObject *obj);
+    void apply_klippy_connection_ui(MachineObject *obj);
     void refresh_connected_printer_header(MachineObject *obj);
     void refresh_printer_info_labels(MachineObject *obj);
     void refresh_camera_stream(MachineObject *obj);
@@ -153,6 +166,7 @@ private:
     void show_filament_load_wizard();
     void show_filament_busy_dialog(bool is_load);
     bool confirm_forget_printer();
+    void post_coprint_device_name(MachineObject *machine, const std::string &device_name);
     void forget_local_printer(MachineObject *machine);
     void ensure_camera_webview_created();
     void ensure_storage_page_created();
@@ -211,6 +225,8 @@ private:
     std::string m_camera_machine_id;
     wxString m_camera_stream_url;
     wxString m_preview_thumbnail_url;
+    wxString m_pending_thumbnail_url;
+    bool m_clear_thumbnail_after_cancel{false};
     wxPopupTransientWindow *m_printers_popup{ nullptr };
     StaticBox *m_printers_popup_panel{ nullptr };
     int m_printers_popup_max_width{ 0 };
@@ -223,7 +239,10 @@ private:
     std::array<wxColour, 4> m_filament_loaded_tool_colors;
     std::array<wxString, 4> m_filament_loaded_tool_materials;
     std::array<wxString, 4> m_filament_loaded_tool_brands;
+    std::array<std::string, 4> m_filament_tool_item_json;
     std::array<bool, 4> m_filament_tool_has_color{};
+    bool m_filament_db_write_in_progress{ false };
+    bool m_filament_db_write_queued{ false };
     // Colors synced from the Plater at upload time — used as fallback when
     // no printer metadata is available (e.g. printer is idle after upload).
     std::array<wxColour, 4> m_plater_synced_colors;
@@ -237,6 +256,7 @@ private:
     double m_moonraker_bed_target{ 0.0 };
     int m_moonraker_available_tool_count{ 0 };
     bool m_has_moonraker_status{ false };
+    std::string m_klippy_state;
     bool m_has_moonraker_print_status{ false };
     DeviceDashboard::PrintJobState m_moonraker_print_job;
     bool m_moonraker_status_fetch_in_progress{ false };
@@ -270,8 +290,10 @@ private:
     int m_zoomFactor{ 100 };
     std::shared_ptr<int> m_lifetime_token{ std::make_shared<int>(1) };
     bool m_destroying{ false };
+    int m_coprint_names_fetch_gen{ 0 };
     std::string m_last_refresh_machine_id;
     int m_refresh_tick_counter{ 0 };
+    wxLongLong m_dashboard_connect_started_ms{ 0 };
 
     // Sidebar printer-card connection attempt: Connecting (yellow) → Connected / Not connected (red after 15s).
     enum class SidebarConnectPhase { None, Connecting, Failed };

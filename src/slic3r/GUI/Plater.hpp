@@ -194,6 +194,8 @@ public:
     void load_ams_list(MachineObject* obj);
     std::map<int, DynamicPrintConfig> build_filament_ams_list(MachineObject* obj);
     void sync_ams_list(bool is_from_big_sync_btn = false);
+    void sync_quadro_filaments_from_printer();
+    void apply_quadro_filaments_from_printer();
     bool sync_extruder_list();
     bool need_auto_sync_extruder_list_after_connect_priner(const MachineObject* obj);
     void update_sync_status(const MachineObject* obj);

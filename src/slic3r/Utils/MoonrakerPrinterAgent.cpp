@@ -1370,8 +1370,22 @@ bool MoonrakerPrinterAgent::fetch_device_info(const std::string&   base_url,
         const std::string printer_type = coprint_result.value("printer_type", "");
         const std::string identity     = manufacturer + " " + model + " " + device_name + " " + printer_type;
 
-        if (!device_name.empty())
-            info.dev_name = device_name;
+        if (!device_name.empty()) {
+            std::string compact;
+            compact.reserve(device_name.size());
+            for (unsigned char ch : device_name) {
+                if (std::isalnum(ch))
+                    compact += static_cast<char>(std::tolower(ch));
+            }
+            const bool factory_quadro = compact == "coprintquadro" || compact == "quadro";
+            const bool factory_chroma = compact == "coprintchromaset" || compact == "chromaset" || compact == "chromahead";
+            if (factory_quadro)
+                info.dev_name = "Co Print Quadro";
+            else if (factory_chroma)
+                info.dev_name = "Co Print ChromaSet";
+            else
+                info.dev_name = device_name;
+        }
 
         const bool is_coprint_brand =
             boost::icontains(manufacturer, "Co Print") ||
@@ -1397,12 +1411,14 @@ bool MoonrakerPrinterAgent::fetch_device_info(const std::string&   base_url,
         if (is_quadro || (is_coprint_brand && boost::icontains(identity, "quadro"))) {
             info.model_name = "Co Print Quadro";
             info.model_id   = "Co_Print_Quadro";
-            info.dev_name   = "Co Print Quadro";
+            if (info.dev_name.empty() || boost::iequals(info.dev_name, "Co-Print-Quadro"))
+                info.dev_name = "Co Print Quadro";
             coprint_identity_found = true;
         } else if (is_chromaset || (is_coprint_brand && (boost::icontains(identity, "chroma")))) {
             info.model_name = "Co Print ChromaSet";
             info.model_id   = "Co_Print_ChromaSet";
-            info.dev_name   = "Co Print ChromaSet";
+            if (info.dev_name.empty() || boost::iequals(info.dev_name, "Co-Print-ChromaSet"))
+                info.dev_name = "Co Print ChromaSet";
             coprint_identity_found = true;
         }
     }
@@ -1786,6 +1802,16 @@ void MoonrakerPrinterAgent::announce_printhost_device()
                 return;
 
             const std::string current = obj->get_dev_name();
+            auto is_factory_slug = [](const std::string &name) {
+                std::string compact;
+                compact.reserve(name.size());
+                for (unsigned char ch : name) {
+                    if (std::isalnum(ch))
+                        compact += static_cast<char>(std::tolower(ch));
+                }
+                return compact == "coprintquadro" || compact == "quadro" ||
+                       compact == "coprintchromaset" || compact == "chromaset" || compact == "chromahead";
+            };
             const bool placeholder =
                 current.empty() ||
                 boost::iequals(current, "Unknown Printer") ||
@@ -1794,13 +1820,11 @@ void MoonrakerPrinterAgent::announce_printhost_device()
                 boost::iequals(current, "CO-PRINT") ||
                 current.find(':') != std::string::npos;
             bool changed = false;
-            if (!apply_name.empty() && (placeholder || current != apply_name) &&
-                (placeholder || apply_type == "Co_Print_Quadro" || apply_type == "Co_Print_ChromaSet")) {
-                // Always replace placeholders; also replace hostname-like names with product names.
-                if (placeholder || boost::icontains(current, "quadorya") || boost::icontains(current, "chromahead")) {
-                    obj->set_dev_name(apply_name);
-                    changed = true;
-                }
+            if (!apply_name.empty() && current != apply_name &&
+                (placeholder || is_factory_slug(current) ||
+                 boost::icontains(current, "quadorya") || boost::icontains(current, "chromahead"))) {
+                obj->set_dev_name(apply_name);
+                changed = true;
             }
             if (!apply_type.empty() && obj->printer_type != apply_type) {
                 obj->printer_type = apply_type;
