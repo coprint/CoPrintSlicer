@@ -58,6 +58,9 @@ class MediaFilePanel;
 class PrinterWebView;
 class CoPrintPrinterPicker;
 class CloudTaskManagerPage;
+namespace DeviceDashboard {
+class PrinterOfflineOverlay;
+}
 
 class AddMachinePanel : public wxPanel
 {
@@ -100,6 +103,7 @@ private:
     wxPanel*                              m_coprint_update_page{nullptr};
     CoPrintPrinterPicker*                 m_coprint_printer_picker{nullptr};
     PrinterWebView*                       m_coprint_backend{nullptr};
+    DeviceDashboard::PrinterOfflineOverlay* m_coprint_session_overlay{nullptr};
     std::unique_ptr<DeviceDashboard::MoonrakerDeviceController> m_coprint_controller;
     DeviceUiMode                          m_device_ui_mode{DeviceUiMode::Bambu};
     int                                   m_coprint_status_tab_index{-1};

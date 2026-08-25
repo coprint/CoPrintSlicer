@@ -16,6 +16,7 @@
 #include <wx/image.h>
 #include <wx/webrequest.h>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -23,6 +24,10 @@
 
 namespace Slic3r { 
 namespace GUI {
+
+namespace DeviceDashboard {
+class PrinterOfflineOverlay;
+}
 
 #define CLOUD_TASK_ITEM_MAX_WIDTH 1100
 #define TASK_ITEM_MAX_WIDTH    900
@@ -167,6 +172,9 @@ public:
     void reload_media_models();
     void ensure_media_models_for_selected_machine();
     void invalidate_media_cache_and_reload();
+    void set_allow_moonraker_fetch(bool allow);
+    void set_offline_overlay_visible(bool visible, const wxString &printer_name = wxEmptyString);
+    void set_offline_retry_handler(std::function<void()> handler);
     std::string utc_time_to_date(std::string utc_time);
     bool Show(bool show);
     void update_page_number();
@@ -236,6 +244,8 @@ private:
     bool m_model_probe_in_flight{ false };
     bool m_last_model_probe_ok{ false };
     long long m_last_model_probe_started_ms{ 0 };
+    bool m_allow_moonraker_fetch{ true };
+    DeviceDashboard::PrinterOfflineOverlay *m_offline_overlay{ nullptr };
 
     // Flipping pages
     int                         m_current_page{ 0 };

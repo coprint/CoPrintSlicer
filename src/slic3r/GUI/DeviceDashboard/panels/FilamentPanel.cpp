@@ -258,6 +258,10 @@ private:
 
     void on_left_down(wxMouseEvent& event)
     {
+        if (!IsEnabled()) {
+            event.Skip();
+            return;
+        }
         const wxPoint pos = event.GetPosition();
         const int track_tool = hit_test_track(pos);
         if (track_tool >= 0) {
@@ -288,6 +292,11 @@ private:
 
     void on_motion(wxMouseEvent& event)
     {
+        if (!IsEnabled()) {
+            SetCursor(wxCursor(wxCURSOR_ARROW));
+            event.Skip();
+            return;
+        }
         const wxPoint pos = event.GetPosition();
         const int track = hit_test_track(pos);
         const int tool = track >= 0 ? -1 : hit_test_tool(pos);
@@ -445,10 +454,8 @@ void style_action_button(Button* button)
 {
     if (button == nullptr)
         return;
-    const wxSize size(d(button, 80), d(button, 30));
-    button->SetMinSize(size);
-    button->SetMaxSize(size);
-    button->SetSize(size);
+    button->SetPaddingSize(wxSize(button->FromDIP(20), button->FromDIP(10)));
+    button->SetMaxSize(wxDefaultSize);
     button->SetCornerRadius(d(button, 8));
     button->SetBorderWidth(0);
     StateColor bg(
@@ -548,8 +555,9 @@ void FilamentPanel::set_command_handler(CommandHandler handler)
 
 void FilamentPanel::dispatch(DeviceCommand command) const
 {
-    if (m_command_handler)
-        m_command_handler(command);
+    if (!IsEnabled() || !m_command_handler)
+        return;
+    m_command_handler(command);
 }
 
 void FilamentPanel::select_manage_tool(int tool_index)

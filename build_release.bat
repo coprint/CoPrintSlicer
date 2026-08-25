@@ -1,3 +1,7 @@
+@REM Co Print Slicer Windows build for Visual Studio 2019 (legacy).
+@REM Prefer build_release_vs.bat (auto-detects VS 2019 / 2022 / 2026).
+@REM Output: build\CoPrintSlicer\coprintslicer.exe
+@echo off
 set WP=%CD%
 
 set debug=OFF
@@ -29,8 +33,9 @@ if defined ORCA_UPDATER_SIG_KEY set "SIG_FLAG=-DORCA_UPDATER_SIG_KEY=%ORCA_UPDAT
 if "%1"=="slicer" (
     GOTO :slicer
 )
-echo "building deps.."
+echo building deps..
 
+set CMAKE_POLICY_VERSION_MINIMUM=3.5
 echo cmake ../ -G "Visual Studio 16 2019" -A x64 -DCMAKE_BUILD_TYPE=%build_type%
 cmake ../ -G "Visual Studio 16 2019" -A x64 -DCMAKE_BUILD_TYPE=%build_type%
 cmake --build . --config %build_type% --target deps -- -m
@@ -38,15 +43,18 @@ cmake --build . --config %build_type% --target deps -- -m
 if "%1"=="deps" exit /b 0
 
 :slicer
-echo "building CoPrintSlicer..."
+echo building Co Print Slicer...
 cd %WP%
 mkdir %build_dir%
 cd %build_dir%
 
+set CMAKE_POLICY_VERSION_MINIMUM=3.5
 echo cmake .. -G "Visual Studio 16 2019" -A x64 -DCMAKE_BUILD_TYPE=%build_type%
-cmake .. -G "Visual Studio 16 2019" -A x64 -DCMAKE_BUILD_TYPE=%build_type% %SIG_FLAG%
+cmake .. -G "Visual Studio 16 2019" -A x64 -DORCA_TOOLS=ON %SIG_FLAG% -DCMAKE_BUILD_TYPE=%build_type%
 cmake --build . --config %build_type% --target ALL_BUILD -- -m
 cd ..
 call scripts/run_gettext.bat
 cd %build_dir%
 cmake --build . --target install --config %build_type%
+echo.
+echo Co Print Slicer output: %WP%\%build_dir%\CoPrintSlicer\coprintslicer.exe

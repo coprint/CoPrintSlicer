@@ -134,7 +134,9 @@ private:
         const double y = std::max(0, (hs.y - shape_h) / 2) + press_offset;
 
         wxColour fill(0xD6, 0xD6, 0xD6);
-        if (m_pressed)
+        if (!IsEnabled())
+            fill = wxColour(0xEE, 0xEE, 0xEE);
+        else if (m_pressed)
             fill = darken(fill, kPressDarken);
         else if (m_hovered)
             fill = darken(fill, kHoverDarken);
@@ -170,6 +172,10 @@ private:
 
     void on_enter(wxMouseEvent& event)
     {
+        if (!IsEnabled()) {
+            event.Skip();
+            return;
+        }
         m_hovered = true;
         Refresh();
         event.Skip();
@@ -185,6 +191,10 @@ private:
 
     void on_left_down(wxMouseEvent& event)
     {
+        if (!IsEnabled()) {
+            event.Skip();
+            return;
+        }
         m_pressed = true;
         if (!HasCapture())
             CaptureMouse();
@@ -204,7 +214,7 @@ private:
         m_hovered = hit_rect.Contains(event.GetPosition());
         Refresh();
 
-        if (clicked && m_click_handler)
+        if (clicked && IsEnabled() && m_click_handler)
             m_click_handler();
         else
             event.Skip();
@@ -401,6 +411,11 @@ private:
 
     void on_motion(wxMouseEvent& event)
     {
+        if (!IsEnabled()) {
+            set_hovered_action(JoystickAction::None);
+            event.Skip();
+            return;
+        }
         if (!HasCapture())
             set_hovered_action(hit_test(event.GetPosition()));
         event.Skip();
@@ -408,6 +423,10 @@ private:
 
     void on_left_down(wxMouseEvent& event)
     {
+        if (!IsEnabled()) {
+            event.Skip();
+            return;
+        }
         m_pressed_action = hit_test(event.GetPosition());
         if (m_pressed_action != JoystickAction::None) {
             if (!HasCapture())
@@ -430,7 +449,7 @@ private:
         SetCursor(released != JoystickAction::None ? wxCursor(wxCURSOR_HAND) : wxCursor(wxCURSOR_ARROW));
         Refresh();
 
-        if (m_action_handler && pressed != JoystickAction::None && pressed == released)
+        if (m_action_handler && IsEnabled() && pressed != JoystickAction::None && pressed == released)
             m_action_handler(pressed);
         else
             event.Skip();
@@ -471,7 +490,9 @@ private:
             const bool pressed = piece.action == m_pressed_action;
             const bool hovered = piece.action == m_hovered_action;
             wxColour fill = piece_bg;
-            if (pressed)
+            if (!IsEnabled())
+                fill = wxColour(238, 238, 238);
+            else if (pressed)
                 fill = darken(piece_bg, kPressDarken);
             else if (hovered)
                 fill = darken(piece_bg, kHoverDarken);
@@ -689,6 +710,7 @@ void MovementPanel::apply_state(const MovementState& state)
     set_available_tool_count(state.available_tool_count);
     set_active_tool_button(state.selected_tool);
     set_active_distance_button(state.selected_distance_mm);
+    set_controls_enabled(state.can_move);
 }
 
 void MovementPanel::set_command_handler(CommandHandler handler)
@@ -734,8 +756,9 @@ void MovementPanel::dispatch_axis(Axis axis, double direction) const
 
 void MovementPanel::dispatch(DeviceCommand command) const
 {
-    if (m_command_handler)
-        m_command_handler(command);
+    if (!IsEnabled() || !m_command_handler)
+        return;
+    m_command_handler(command);
 }
 
 void MovementPanel::set_active_tool_button(int tool_index)
@@ -783,6 +806,31 @@ void MovementPanel::set_active_distance_button(double distance_mm)
             m_distance_buttons[i],
             std::abs(DistanceOptions[i] - m_selected_distance_mm) < 0.01,
             m_distance_button_active[i]);
+}
+
+void MovementPanel::set_controls_enabled(bool enabled)
+{
+    if (m_xy_area != nullptr) {
+        m_xy_area->Enable(enabled);
+        m_xy_area->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
+        m_xy_area->Refresh();
+    }
+    if (m_center_button != nullptr)
+        set_button_enabled(m_center_button, enabled);
+    if (m_z_plus_host != nullptr) {
+        m_z_plus_host->Enable(enabled);
+        m_z_plus_host->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
+        m_z_plus_host->Refresh();
+    }
+    if (m_z_minus_host != nullptr) {
+        m_z_minus_host->Enable(enabled);
+        m_z_minus_host->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
+        m_z_minus_host->Refresh();
+    }
+    for (int i = 0; i < MaxDashboardTools; ++i)
+        set_button_enabled(m_tool_buttons[i], enabled && i < m_available_tool_count);
+    for (int i = 0; i < 4; ++i)
+        set_button_enabled(m_distance_buttons[i], enabled);
 }
 
 } // namespace DeviceDashboard

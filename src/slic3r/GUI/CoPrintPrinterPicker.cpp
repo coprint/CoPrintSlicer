@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include <wx/button.h>
@@ -48,8 +49,14 @@ const wxColour kOnlineBorder("#82AA6F");
 const wxColour kOnlineBg("#FBFCF9");
 const wxColour kOfflineBorder("#ECECEC");
 const wxColour kOfflineBg("#F9FAFA");
+const wxColour kOfflineSelectedBorder("#E74C3C");
+const wxColour kOfflineSelectedBg("#FDF6F5");
 const wxColour kDotOnline("#35AD27");
 const wxColour kDotOffline("#767C84");
+const wxColour kDotOfflineRed("#E74C3C");
+const wxColour kConnectingBorder("#E2B93A");
+const wxColour kConnectingBg("#FFF8E8");
+const wxColour kDotConnecting("#F2C94C");
 const wxColour kTextPrimary("#434343");
 const wxColour kTextMuted(118, 124, 132);
 const wxColour kAddAccent(40, 167, 69);
@@ -125,7 +132,7 @@ void apply_add_caption_style(wxStaticText* label)
 {
     if (label == nullptr)
         return;
-    wxFont font = Label::sysFont(9, false);
+    wxFont font = Label::sysFont(11, false);
     font.SetWeight(wxFONTWEIGHT_MEDIUM);
     label->SetFont(font);
     label->SetForegroundColour(kAddCaption);
@@ -509,6 +516,9 @@ void CoPrintPrinterPicker::build_add_printer()
         auto* vs = new wxBoxSizer(wxVERTICAL);
         m_add_tab_lbl[i] = new wxStaticText(cell, wxID_ANY, tab_titles[i], wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL);
         m_add_tab_lbl[i]->SetCursor(wxCursor(wxCURSOR_HAND));
+        wxFont tab_font = Label::sysFont(11, false);
+        tab_font.SetWeight(wxFONTWEIGHT_MEDIUM);
+        m_add_tab_lbl[i]->SetFont(tab_font);
         vs->Add(m_add_tab_lbl[i], 0, wxALIGN_CENTER_HORIZONTAL | wxTOP, FromDIP(10));
         m_add_tab_under[i] = new wxPanel(cell, wxID_ANY);
         m_add_tab_under[i]->SetMinSize(wxSize(-1, FromDIP(2)));
@@ -531,13 +541,16 @@ void CoPrintPrinterPicker::build_add_printer()
     auto_page->SetBackgroundColour(kHeaderBg);
     auto* auto_sz = new wxBoxSizer(wxVERTICAL);
     auto* search_row = new wxBoxSizer(wxHORIZONTAL);
-    auto* auto_status = new wxStaticText(auto_page, wxID_ANY, _L("Searching for printers on your network..."));
+    auto* auto_status = new wxStaticText(auto_page, wxID_ANY, _L("Searching for printers on your network..."),
+        wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
     apply_add_caption_style(auto_status);
-    search_row->Add(auto_status, 1, wxALIGN_CENTER_VERTICAL);
+    auto_status->SetMinSize(wxSize(1, -1));
+    search_row->Add(auto_status, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
     auto* refresh_btn = new wxStaticBitmap(auto_page, wxID_ANY, create_scaled_bitmap("refresh", this, 16));
     refresh_btn->SetCursor(wxCursor(wxCURSOR_HAND));
     refresh_btn->SetToolTip(_L("Refresh"));
     refresh_btn->SetBackgroundColour(kHeaderBg);
+    refresh_btn->SetMinSize(wxSize(FromDIP(16), FromDIP(16)));
     search_row->Add(refresh_btn, 0, wxALIGN_CENTER_VERTICAL);
     auto_sz->Add(search_row, 0, wxEXPAND | wxALL, FromDIP(8));
     m_auto_list = new wxScrolledWindow(auto_page, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxVSCROLL);
@@ -647,6 +660,7 @@ void CoPrintPrinterPicker::build_add_printer()
     ip_row->Add(ip_shell, 1, wxALIGN_CENTER_VERTICAL);
 
     auto* ip_add = new Button(ip_page, _L("Add"));
+    m_ip_add_btn = ip_add;
     ip_add->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
     wxFont ip_add_font = Label::sysFont(10, false);
     ip_add_font.SetWeight(wxFONTWEIGHT_MEDIUM);
@@ -765,8 +779,8 @@ void CoPrintPrinterPicker::apply_add_tab(int idx)
             continue;
         const bool on = (i == idx);
         m_add_tab_lbl[i]->SetForegroundColour(on ? kAddAccent : wxColour(72, 72, 78));
-        wxFont f = m_add_tab_lbl[i]->GetFont();
-        f.SetWeight(on ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL);
+        wxFont f = Label::sysFont(11, false);
+        f.SetWeight(wxFONTWEIGHT_MEDIUM);
         m_add_tab_lbl[i]->SetFont(f);
         m_add_tab_under[i]->SetBackgroundColour(on ? kAddAccent : kHeaderBg);
         m_add_tab_under[i]->Refresh();
@@ -990,6 +1004,8 @@ void CoPrintPrinterPicker::update_auto_scrollbar()
 
 void CoPrintPrinterPicker::try_ip_add()
 {
+    if (m_ip_add_busy)
+        return;
     if (m_ip_status != nullptr)
         m_ip_status->SetLabelText(wxString());
     if (m_ip_field == nullptr)
@@ -1004,6 +1020,9 @@ void CoPrintPrinterPicker::try_ip_add()
         return;
     }
 
+    if (m_backend == nullptr)
+        return;
+
     std::string host = into_u8(ip_value);
     const bool has_scheme = host.rfind("http://", 0) == 0 || host.rfind("https://", 0) == 0;
     const std::string normalized_host = MachineObject::dev_id_from_address(host);
@@ -1017,12 +1036,33 @@ void CoPrintPrinterPicker::try_ip_add()
     machine.dev_name = friendly_host_from_address(dev_ip);
     machine.printer_type = "Moonraker";
 
+    m_ip_add_busy = true;
     if (m_ip_status != nullptr)
         m_ip_status->SetLabelText(_L("Connecting to printer..."));
-    if (m_backend != nullptr && m_backend->finish_add_moonraker_printer(machine, host.rfind("https://", 0) == 0))
-        hide_add_printer();
-    else if (m_ip_status != nullptr)
-        m_ip_status->SetLabelText(_L("Could not connect to the printer."));
+    if (m_ip_add_btn != nullptr)
+        m_ip_add_btn->Enable(false);
+    if (m_ip_field != nullptr)
+        m_ip_field->Enable(false);
+
+    // Probe on a worker thread. Synchronous Moonraker HTTP on the UI thread
+    // freezes the app for several seconds when the address is unreachable.
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    m_backend->add_moonraker_printer_async(machine, host.rfind("https://", 0) == 0,
+        [this, lifetime](bool ok, const wxString &message) {
+            if (lifetime.expired())
+                return;
+            m_ip_add_busy = false;
+            if (m_ip_add_btn != nullptr)
+                m_ip_add_btn->Enable(true);
+            if (m_ip_field != nullptr)
+                m_ip_field->Enable(true);
+            if (!ok) {
+                if (m_ip_status != nullptr)
+                    m_ip_status->SetLabelText(message.IsEmpty() ? _L("Could not connect to the printer.") : message);
+                return;
+            }
+            hide_add_printer();
+        });
 }
 
 void CoPrintPrinterPicker::paint_header()
@@ -1159,6 +1199,8 @@ std::string CoPrintPrinterPicker::list_signature() const
         out += machine->get_dev_name();
         out += '|';
         out += machine->get_dev_ip();
+        out += '|';
+        out += machine->is_online() ? '1' : '0';
         out += ';';
     };
 
@@ -1166,6 +1208,8 @@ std::string CoPrintPrinterPicker::list_signature() const
     out += "sel=";
     if (selected != nullptr)
         out += selected->get_dev_id();
+    out += ";conn=";
+    out += (m_backend != nullptr && m_backend->is_printer_connecting(selected)) ? '1' : '0';
     out += ';';
     for (const auto& entry : dev->get_my_machine_list())
         append(entry.second);
@@ -1223,21 +1267,17 @@ void CoPrintPrinterPicker::rebuild_list()
 
     m_submenu_sizer->AddSpacer(FromDIP(8));
     add_section_title(_L("Active printers"));
-    if (active_list.empty()) {
-        auto* empty = new wxStaticText(m_submenu, wxID_ANY, _L("No active printers"));
-        empty->SetForegroundColour(kTextMuted);
-        m_submenu_sizer->Add(empty, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
-    } else {
+    if (active_list.empty())
+        add_empty_placeholder_card(_L("No active printers"));
+    else {
         for (MachineObject* machine : active_list)
             add_printer_card(machine, true);
     }
 
     add_section_title(_L("Offline printers"));
-    if (inactive_list.empty()) {
-        auto* empty = new wxStaticText(m_submenu, wxID_ANY, _L("No offline printers"));
-        empty->SetForegroundColour(kTextMuted);
-        m_submenu_sizer->Add(empty, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
-    } else {
+    if (inactive_list.empty())
+        add_empty_placeholder_card(_L("No offline printers"));
+    else {
         for (MachineObject* machine : inactive_list)
             add_printer_card(machine, false);
     }
@@ -1257,29 +1297,61 @@ void CoPrintPrinterPicker::add_section_title(const wxString& text)
     m_submenu_sizer->Add(lab, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(10));
 }
 
-void CoPrintPrinterPicker::add_printer_card(MachineObject* machine, bool online)
+void CoPrintPrinterPicker::add_empty_placeholder_card(const wxString& text)
+{
+    auto* card = new StaticBox(m_submenu, wxID_ANY);
+    card->SetCornerRadius(static_cast<double>(FromDIP(8)));
+    card->SetBorderWidth(1);
+    card->SetBorderColorNormal(kOfflineBorder);
+    card->SetBackgroundColorNormal(kOfflineBg);
+    card->SetBackgroundColour(kOfflineBg);
+
+    auto* label = new wxStaticText(card, wxID_ANY, text, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+    label->SetForegroundColour(kTextPrimary);
+    label->SetBackgroundColour(kOfflineBg);
+
+    auto* pad = new wxBoxSizer(wxVERTICAL);
+    pad->Add(label, 0, wxEXPAND | wxALL, FromDIP(10));
+    card->SetSizer(pad);
+
+    m_submenu_sizer->Add(card, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(8));
+}
+
+void CoPrintPrinterPicker::add_printer_card(MachineObject* machine, bool selected)
 {
     if (machine == nullptr)
         return;
 
+    const bool online = machine->is_online();
+    const bool connecting = selected && m_backend != nullptr && m_backend->is_printer_connecting(machine);
+    const wxColour border = connecting ? kConnectingBorder
+        : selected ? (online ? kOnlineBorder : kOfflineSelectedBorder)
+                   : kOfflineBorder;
+    const wxColour bg = connecting ? kConnectingBg
+        : selected ? (online ? kOnlineBg : kOfflineSelectedBg)
+                   : kOfflineBg;
+    const wxColour dot_colour = connecting ? kDotConnecting
+        : selected ? (online ? kDotOnline : kDotOfflineRed)
+                   : kDotOffline;
+
     auto* card = new StaticBox(m_submenu, wxID_ANY);
     card->SetCornerRadius(static_cast<double>(FromDIP(8)));
     card->SetBorderWidth(1);
-    card->SetBorderColorNormal(online ? kOnlineBorder : kOfflineBorder);
-    card->SetBackgroundColorNormal(online ? kOnlineBg : kOfflineBg);
-    card->SetBackgroundColour(online ? kOnlineBg : kOfflineBg);
+    card->SetBorderColorNormal(border);
+    card->SetBackgroundColorNormal(bg);
+    card->SetBackgroundColour(bg);
     card->SetCursor(wxCursor(wxCURSOR_HAND));
 
     auto* row = new wxBoxSizer(wxHORIZONTAL);
 
     auto* dot = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("\xE2\x97\x8F"));
-    dot->SetForegroundColour(online ? kDotOnline : kDotOffline);
-    dot->SetBackgroundColour(online ? kOnlineBg : kOfflineBg);
+    dot->SetForegroundColour(dot_colour);
+    dot->SetBackgroundColour(bg);
     dot->SetCursor(wxCursor(wxCURSOR_HAND));
     row->Add(dot, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
 
     auto* texts = new wxPanel(card, wxID_ANY);
-    texts->SetBackgroundColour(online ? kOnlineBg : kOfflineBg);
+    texts->SetBackgroundColour(bg);
     texts->SetCursor(wxCursor(wxCURSOR_HAND));
     auto* texts_sizer = new wxBoxSizer(wxVERTICAL);
     wxString name = m_backend != nullptr
@@ -1287,12 +1359,12 @@ void CoPrintPrinterPicker::add_printer_card(MachineObject* machine, bool online)
         : from_u8(machine->get_dev_name());
     auto* name_lbl = new wxStaticText(texts, wxID_ANY, name, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
     name_lbl->SetForegroundColour(kTextPrimary);
-    name_lbl->SetBackgroundColour(online ? kOnlineBg : kOfflineBg);
+    name_lbl->SetBackgroundColour(bg);
     name_lbl->SetCursor(wxCursor(wxCURSOR_HAND));
     const wxString ip = display_ip_only(machine);
     auto* ip_lbl = new wxStaticText(texts, wxID_ANY, ip, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
     ip_lbl->SetForegroundColour(kTextMuted);
-    ip_lbl->SetBackgroundColour(online ? kOnlineBg : kOfflineBg);
+    ip_lbl->SetBackgroundColour(bg);
     ip_lbl->SetFont(Label::Body_10);
     ip_lbl->SetCursor(wxCursor(wxCURSOR_HAND));
     texts_sizer->Add(name_lbl, 0, wxEXPAND);
@@ -1301,7 +1373,7 @@ void CoPrintPrinterPicker::add_printer_card(MachineObject* machine, bool online)
     row->Add(texts, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
 
     auto* actions = new wxPanel(card, wxID_ANY);
-    actions->SetBackgroundColour(online ? kOnlineBg : kOfflineBg);
+    actions->SetBackgroundColour(bg);
     auto* actions_sizer = new wxBoxSizer(wxHORIZONTAL);
     auto* edit_icon = new wxStaticBitmap(actions, wxID_ANY, create_scaled_bitmap("rename_edit", this, 16));
     edit_icon->SetCursor(wxCursor(wxCURSOR_HAND));
@@ -1350,10 +1422,13 @@ void CoPrintPrinterPicker::open_machine(MachineObject* machine)
         dev->set_selected_machine(dev_id);
     if (wxGetApp().mainframe != nullptr && wxGetApp().mainframe->m_monitor != nullptr)
         wxGetApp().mainframe->m_monitor->select_machine(dev_id);
+    if (m_backend != nullptr) {
+        if (!machine->is_online())
+            m_backend->mark_printer_connecting(dev_id);
+        m_backend->refresh_layer_info_from_selected_machine();
+    }
     if (m_open_status)
         m_open_status();
-    if (m_backend != nullptr)
-        m_backend->refresh_layer_info_from_selected_machine();
     set_status_page_active(true);
 }
 

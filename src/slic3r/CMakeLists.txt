@@ -399,6 +399,7 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/DeviceCardFrame.hpp
     GUI/DeviceDashboard/DeviceDashboardPage.cpp
     GUI/DeviceDashboard/DeviceDashboardPage.hpp
+    GUI/DeviceDashboard/PrinterOfflineOverlay.hpp
     GUI/DeviceDashboard/MoonrakerDeviceController.cpp
     GUI/DeviceDashboard/MoonrakerDeviceController.hpp
     GUI/CoPrintPrinterPicker.cpp

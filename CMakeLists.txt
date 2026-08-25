@@ -162,13 +162,13 @@ if (APPLE)
     endif()
     SET(CMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.softfever3d.coprintslicer")
 
-    message(STATUS "Orca: IS_CROSS_COMPILE: ${IS_CROSS_COMPILE}")
+    message(STATUS "Co Print Slicer: IS_CROSS_COMPILE: ${IS_CROSS_COMPILE}")
 endif ()
 
 # Proposal for C++ unit tests and sandboxes
 option(SLIC3R_BUILD_SANDBOXES   "Build development sandboxes" OFF)
 option(BUILD_TESTS       "Build unit tests" OFF)
-option(ORCA_TOOLS       "Build Orca tools" OFF)
+option(ORCA_TOOLS       "Build Co Print Slicer extra tools (profile validator)" OFF)
 
 if (FLATPAK)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++20")

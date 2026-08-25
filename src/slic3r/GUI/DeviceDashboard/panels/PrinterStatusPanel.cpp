@@ -308,9 +308,14 @@ PrinterStatusPanel::PrinterStatusPanel(wxWindow *parent)
     SetSizer(root);
 
     const auto bind_action = [](wxWindow *cell, std::function<void()> fn) {
-        cell->Bind(wxEVT_LEFT_DOWN, [fn](wxMouseEvent &) { fn(); });
+        auto invoke = [cell, fn](wxMouseEvent &) {
+            if (cell == nullptr || !cell->IsEnabled())
+                return;
+            fn();
+        };
+        cell->Bind(wxEVT_LEFT_DOWN, invoke);
         for (wxWindow *child : cell->GetChildren())
-            child->Bind(wxEVT_LEFT_DOWN, [fn](wxMouseEvent &) { fn(); });
+            child->Bind(wxEVT_LEFT_DOWN, invoke);
     };
     bind_action(m_fan_cell, [this]() { open_fan_popup(); });
     bind_action(m_speed_cell, [this]() { open_speed_popup(); });
@@ -341,7 +346,11 @@ void PrinterStatusPanel::bind_temp_edit(TempView &view, int tool_index)
     const auto bind_click = [this, tool_index](wxWindow *win) {
         if (win == nullptr)
             return;
-        win->Bind(wxEVT_LEFT_DOWN, [this, tool_index](wxMouseEvent &) { begin_target_edit(tool_index); });
+        win->Bind(wxEVT_LEFT_DOWN, [this, win, tool_index](wxMouseEvent &) {
+            if (win == nullptr || !win->IsEnabled())
+                return;
+            begin_target_edit(tool_index);
+        });
     };
     bind_click(view.temp_target_hit);
     bind_click(view.temp_target);

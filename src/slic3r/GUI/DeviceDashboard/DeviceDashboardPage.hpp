@@ -16,6 +16,7 @@ namespace Slic3r {
 namespace GUI {
 namespace DeviceDashboard {
 
+class PrinterOfflineOverlay;
 class CameraPanel;
 class FilamentPanel;
 class MovementPanel;
@@ -31,6 +32,8 @@ public:
 
     void apply_state(const DeviceDashboardState& state);
     void set_connecting_visible(bool visible, const wxString &message = wxEmptyString);
+    void set_offline_overlay_visible(bool visible, const wxString &printer_name = wxEmptyString);
+    void set_offline_retry_handler(std::function<void()> handler);
     void set_command_handler(CommandHandler handler);
 
     void update_camera_host_responsive_size();
@@ -57,6 +60,8 @@ public:
 private:
     void bind_size_handler();
     void refresh_scroll();
+    void layout_offline_overlay();
+    void update_controls_enabled();
 
     CameraPanel* m_camera_panel{nullptr};
     PrintStatusPanel* m_print_status_panel{nullptr};
@@ -64,11 +69,11 @@ private:
     PrinterStatusPanel* m_printer_status_panel{nullptr};
     FilamentPanel* m_filament_panel{nullptr};
     wxPanel* m_content_panel{nullptr};
-    wxPanel* m_connecting_overlay{nullptr};
-    wxStaticText* m_connecting_label{nullptr};
+    PrinterOfflineOverlay* m_offline_overlay{nullptr};
     CommandHandler m_command_handler;
     bool m_refreshing_scroll{false};
     bool m_pending_scroll_refresh{false};
+    bool m_can_send_commands{false};
 };
 
 } // namespace DeviceDashboard

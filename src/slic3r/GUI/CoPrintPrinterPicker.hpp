@@ -2,6 +2,7 @@
 #define slic3r_GUI_CoPrintPrinterPicker_hpp_
 
 #include <functional>
+#include <memory>
 #include <string>
 
 #include <wx/bitmap.h>
@@ -14,6 +15,7 @@ class wxStaticBitmap;
 class wxStaticText;
 class wxScrolledWindow;
 class wxTextCtrl;
+class Button;
 class StaticBox;
 
 namespace Slic3r {
@@ -48,7 +50,8 @@ private:
     void rebuild_list();
     void schedule_rebuild_list();
     void add_section_title(const wxString& text);
-    void add_printer_card(MachineObject* machine, bool online);
+    void add_empty_placeholder_card(const wxString& text);
+    void add_printer_card(MachineObject* machine, bool selected);
     void open_machine(MachineObject* machine);
     MachineObject* live_machine(const std::string& dev_id) const;
     void apply_add_tab(int idx);
@@ -80,6 +83,7 @@ private:
     wxPanel*                m_auto_scroll{nullptr};
     wxBoxSizer*             m_auto_list_sizer{nullptr};
     wxTextCtrl*             m_ip_field{nullptr};
+    Button*                 m_ip_add_btn{nullptr};
     wxStaticText*           m_ip_status{nullptr};
     bool                    m_expanded{true};
     bool                    m_header_hovered{false};
@@ -87,7 +91,9 @@ private:
     bool                    m_add_mode{false};
     bool                    m_rebuild_queued{false};
     bool                    m_filling_auto_cards{false};
+    bool                    m_ip_add_busy{false};
     int                     m_add_tab{0};
+    std::shared_ptr<int>    m_lifetime_token{std::make_shared<int>(1)};
     std::string             m_list_signature;
     std::string             m_auto_list_signature;
 };

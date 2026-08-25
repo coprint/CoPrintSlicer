@@ -35,6 +35,7 @@ namespace GUI {
 
 namespace DeviceDashboard {
 struct FilamentSelection;
+class PrinterOfflineOverlay;
 }
 
 class CloudTaskManagerPage;
@@ -68,6 +69,17 @@ public:
     CloudTaskManagerPage* coprint_storage_page() const { return m_storage_page; }
     void ensure_coprint_storage_page();
     void set_coprint_storage_mode(bool print_models);
+    void attach_media_pages(CloudTaskManagerPage *timelapse, CloudTaskManagerPage *models);
+    void mark_printer_connecting(const std::string &dev_id);
+    bool is_printer_connecting(const MachineObject *machine) const;
+
+    enum class DeviceSessionUi {
+        None,
+        Connecting,
+        Failed
+    };
+    void set_device_session_ui_handler(std::function<void(DeviceSessionUi, const wxString &)> handler);
+    void acknowledge_device_connect_failure();
     void prompt_ip_connect();
     void reset_placeholder_selections();
     void rebuild_printers_popup();
@@ -95,8 +107,14 @@ public:
     void OnLoaded(wxWebViewEvent &evt);
 
     /** Used by Add Printer flow (dialog + LAN discovery). Returns false on failure.
-     *  When run_probe is false, the caller already resolved identity off the UI thread. */
+     *  When run_probe is false, the caller already resolved identity off the UI thread.
+     *  When run_probe is true, an unreachable host is not inserted. */
     bool finish_add_moonraker_printer(const BBLocalMachine &machine, bool use_ssl, bool run_probe = true);
+
+    /** Probe Moonraker off the UI thread, then insert only if reachable.
+     *  on_done always runs on the UI thread (unless this view is destroyed). */
+    void add_moonraker_printer_async(const BBLocalMachine &machine, bool use_ssl,
+                                     std::function<void(bool ok, const wxString &message)> on_done);
 
     void sync_model_colors_from_plater();
 
@@ -148,6 +166,8 @@ private:
     void refresh_moonraker_status_from_selected_machine();
     void refresh_dashboard_panels(MachineObject *obj);
     void update_dashboard_connecting_overlay(MachineObject *obj);
+    void retry_selected_printer_connection();
+    void sync_media_page_connection_state(bool printer_ready, bool show_offline, const wxString &printer_name);
     void apply_klippy_connection_ui(MachineObject *obj);
     void refresh_connected_printer_header(MachineObject *obj);
     void refresh_printer_info_labels(MachineObject *obj);
@@ -267,7 +287,12 @@ private:
     wxPanel *m_status_page{ nullptr };
     DeviceDashboard::DeviceDashboardPage* m_dashboard_page{nullptr};
     CloudTaskManagerPage *m_storage_page{ nullptr };
+    CloudTaskManagerPage *m_media_timelapse_page{ nullptr };
+    CloudTaskManagerPage *m_media_models_page{ nullptr };
+    DeviceDashboard::PrinterOfflineOverlay *m_update_offline_overlay{nullptr};
     bool m_embedded_in_monitor{false};
+    bool m_connect_fail_acked{false};
+    std::function<void(DeviceSessionUi, const wxString &)> m_device_session_ui;
     wxImage m_thumbnail_image;
     wxWebRequest m_thumbnail_web_request;
     wxStaticText *m_update_connection_badge{ nullptr };

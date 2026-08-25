@@ -34,6 +34,7 @@
 #include "PrinterWebView.hpp"
 #include "CoPrintPrinterPicker.hpp"
 #include "MultiTaskManagerPage.hpp"
+#include "DeviceDashboard/PrinterOfflineOverlay.hpp"
 
 #include "DeviceCore/DevManager.h"
 
@@ -276,6 +277,29 @@ void MonitorPanel::ensure_coprint_backend()
     }
 
     m_coprint_controller = std::make_unique<DeviceDashboard::MoonrakerDeviceController>(m_coprint_backend);
+
+    if (m_coprint_session_overlay == nullptr) {
+        m_coprint_session_overlay = new DeviceDashboard::PrinterOfflineOverlay(this);
+        m_coprint_session_overlay->set_ok_handler([this]() {
+            if (m_coprint_backend != nullptr)
+                m_coprint_backend->acknowledge_device_connect_failure();
+        });
+        m_coprint_backend->set_device_session_ui_handler(
+            [this](PrinterWebView::DeviceSessionUi ui, const wxString &message) {
+                if (m_coprint_session_overlay == nullptr)
+                    return;
+                using Kind = DeviceDashboard::PrinterOfflineOverlay::Kind;
+                if (ui == PrinterWebView::DeviceSessionUi::Connecting)
+                    m_coprint_session_overlay->set_kind(Kind::Connecting, message);
+                else if (ui == PrinterWebView::DeviceSessionUi::Failed)
+                    m_coprint_session_overlay->set_kind(Kind::Failed, message,
+                        _L("Check that the printer is powered on and on the same network."));
+                else
+                    m_coprint_session_overlay->set_kind(Kind::Hidden);
+            });
+    }
+
+    m_coprint_backend->attach_media_pages(m_coprint_storage_page, m_coprint_print_models_page);
 }
 
 void MonitorPanel::configure_device_ui(DeviceUiMode mode)

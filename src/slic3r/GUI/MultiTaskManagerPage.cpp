@@ -1,5 +1,6 @@
 #include "MultiTaskManagerPage.hpp"
 #include "I18N.hpp"
+#include "DeviceDashboard/PrinterOfflineOverlay.hpp"
 
 #include "GUI_App.hpp"
 #include "MainFrame.hpp"
@@ -3334,6 +3335,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     wxGetApp().UpdateDarkUIWin(this);
 
     SetSizer(page_sizer);
+    m_offline_overlay = new DeviceDashboard::PrinterOfflineOverlay(this);
     update_media_mode_tabs();
     Layout();
     Fit();
@@ -3358,7 +3360,7 @@ void CloudTaskManagerPage::set_media_mode(bool timelapse)
     m_media_timelapse_mode = timelapse;
     update_media_mode_tabs();
 
-    if (!m_media_timelapse_mode)
+    if (!m_media_timelapse_mode && m_allow_moonraker_fetch)
         refresh_moonraker_model_status();
 }
 
@@ -3385,6 +3387,8 @@ void CloudTaskManagerPage::set_media_presentation(MediaPresentation presentation
 
 void CloudTaskManagerPage::refresh_moonraker_model_status()
 {
+    if (!m_allow_moonraker_fetch)
+        return;
     if (!m_model_status_text)
         return;
 
@@ -4014,9 +4018,34 @@ void CloudTaskManagerPage::invalidate_media_cache_and_reload()
     refresh_moonraker_model_status();
 }
 
+void CloudTaskManagerPage::set_allow_moonraker_fetch(bool allow)
+{
+    const bool changed = m_allow_moonraker_fetch != allow;
+    m_allow_moonraker_fetch = allow;
+    if (!allow) {
+        m_last_model_probe_ok = false;
+        m_last_model_probe_started_ms = 0;
+        return;
+    }
+    if (changed && IsShownOnScreen() && !m_media_timelapse_mode)
+        ensure_media_models_for_selected_machine();
+}
+
+void CloudTaskManagerPage::set_offline_overlay_visible(bool visible, const wxString &printer_name)
+{
+    if (m_offline_overlay != nullptr)
+        m_offline_overlay->set_visible(visible, printer_name);
+}
+
+void CloudTaskManagerPage::set_offline_retry_handler(std::function<void()> handler)
+{
+    if (m_offline_overlay != nullptr)
+        m_offline_overlay->set_retry_handler(std::move(handler));
+}
+
 void CloudTaskManagerPage::ensure_media_models_for_selected_machine()
 {
-    if (m_media_timelapse_mode)
+    if (!m_allow_moonraker_fetch || m_media_timelapse_mode)
         return;
 
     Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();

@@ -2,19 +2,28 @@
 
 #include "DeviceCardFrame.hpp"
 #include "DeviceUiStyle.hpp"
+#include "PrinterOfflineOverlay.hpp"
 #include "panels/CameraPanel.hpp"
 #include "panels/FilamentPanel.hpp"
 #include "panels/MovementPanel.hpp"
 #include "panels/PrinterStatusPanel.hpp"
 #include "panels/PrintStatusPanel.hpp"
+#include "slic3r/GUI/Widgets/Button.hpp"
+#include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "../I18N.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <memory>
 #include <utility>
 
+#include <wx/dcbuffer.h>
+#include <wx/dcclient.h>
+#include <wx/graphics.h>
 #include <wx/sizer.h>
 #include <wx/scrolwin.h>
 #include <wx/stattext.h>
+#include <wx/timer.h>
 
 namespace Slic3r {
 namespace GUI {
@@ -65,28 +74,17 @@ DeviceDashboardPage::DeviceDashboardPage(wxWindow* parent)
 
     m_content_panel->SetSizer(content_columns);
 
-    m_connecting_overlay = new wxPanel(this, wxID_ANY);
-    m_connecting_overlay->SetBackgroundColour(wxColour(238, 238, 239));
-    auto* overlay_sizer = new wxBoxSizer(wxVERTICAL);
-    overlay_sizer->AddStretchSpacer(1);
-    m_connecting_label = new wxStaticText(m_connecting_overlay, wxID_ANY, _L("Connecting..."));
-    m_connecting_label->SetForegroundColour(DeviceUiStyle::text_primary());
-    m_connecting_label->SetBackgroundColour(wxColour(238, 238, 239));
-    wxFont connecting_font = m_connecting_label->GetFont();
-    connecting_font.SetPointSize(std::max(16, connecting_font.GetPointSize() + 3));
-    connecting_font.SetWeight(wxFONTWEIGHT_BOLD);
-    m_connecting_label->SetFont(connecting_font);
-    overlay_sizer->Add(m_connecting_label, 0, wxALIGN_CENTER_HORIZONTAL);
-    overlay_sizer->AddStretchSpacer(1);
-    m_connecting_overlay->SetSizer(overlay_sizer);
-    m_connecting_overlay->Hide();
-
     auto* root = new wxBoxSizer(wxVERTICAL);
     root->Add(m_content_panel, 1, wxEXPAND | wxALL, FromDIP(10));
-    root->Add(m_connecting_overlay, 1, wxEXPAND | wxALL, FromDIP(10));
     SetSizer(root);
 
+    m_offline_overlay = new PrinterOfflineOverlay(this);
+
     auto forward_command = [this](const DeviceCommand& command) {
+        if (!m_can_send_commands)
+            return;
+        if (m_offline_overlay != nullptr && m_offline_overlay->IsShown())
+            return;
         if (m_command_handler)
             m_command_handler(command);
     };
@@ -130,12 +128,8 @@ void DeviceDashboardPage::refresh_scroll()
     if (m_refreshing_scroll || GetSizer() == nullptr || !IsShownOnScreen())
         return;
     m_refreshing_scroll = true;
-    if (m_connecting_overlay != nullptr && m_connecting_overlay->IsShown()) {
-        Layout();
-        m_refreshing_scroll = false;
-        return;
-    }
     Layout();
+    layout_offline_overlay();
     if (m_camera_panel != nullptr && m_print_status_panel != nullptr) {
         const wxSize client = GetClientSize();
         const int print_h = m_print_status_panel->GetBestSize().GetHeight();
@@ -151,11 +145,13 @@ void DeviceDashboardPage::refresh_scroll()
     SetVirtualSize(std::max(min_size.GetWidth(), client.GetWidth()),
                    std::max(min_size.GetHeight(), client.GetHeight()));
     Layout();
+    layout_offline_overlay();
     m_refreshing_scroll = false;
 }
 
 void DeviceDashboardPage::apply_state(const DeviceDashboardState& state)
 {
+    m_can_send_commands = state.connection.can_send_commands;
     if (m_camera_panel != nullptr)
         m_camera_panel->apply_state(state.camera);
     if (m_print_status_panel != nullptr)
@@ -168,27 +164,59 @@ void DeviceDashboardPage::apply_state(const DeviceDashboardState& state)
     if (m_filament_panel != nullptr)
         m_filament_panel->apply_state(state.filament);
 
+    update_controls_enabled();
     refresh_scroll();
 }
 
-void DeviceDashboardPage::set_connecting_visible(bool visible, const wxString &message)
+void DeviceDashboardPage::layout_offline_overlay()
 {
-    if (m_connecting_overlay == nullptr || m_content_panel == nullptr)
+    if (m_offline_overlay != nullptr)
+        m_offline_overlay->layout_over_parent();
+}
+
+void DeviceDashboardPage::set_connecting_visible(bool visible, const wxString &)
+{
+    // Connecting UI is owned by MonitorPanel so it can cover the left menu.
+    if (!visible)
         return;
-    if (visible && m_connecting_label != nullptr && !message.empty() &&
-        m_connecting_label->GetLabelText() != message)
-        m_connecting_label->SetLabelText(message);
-    if (m_connecting_overlay->IsShown() == visible && m_content_panel->IsShown() != visible)
+    if (m_offline_overlay != nullptr && m_offline_overlay->IsShown())
+        set_offline_overlay_visible(false);
+}
+
+void DeviceDashboardPage::set_offline_overlay_visible(bool visible, const wxString &printer_name)
+{
+    if (m_offline_overlay == nullptr || m_content_panel == nullptr)
         return;
-    m_connecting_overlay->Show(visible);
-    m_content_panel->Show(!visible);
-    if (wxSizer* sizer = GetSizer()) {
-        sizer->Show(m_connecting_overlay, visible);
-        sizer->Show(m_content_panel, !visible);
-        sizer->Layout();
-    } else {
-        Layout();
-    }
+    m_offline_overlay->set_visible(visible, printer_name);
+    update_controls_enabled();
+    if (wxPanel *host = camera_webview_host())
+        host->Show(!visible);
+    m_content_panel->Show(true);
+    if (wxSizer *sizer = GetSizer())
+        sizer->Show(m_content_panel, true);
+    Refresh();
+}
+
+void DeviceDashboardPage::update_controls_enabled()
+{
+    const bool overlay_blocks = m_offline_overlay != nullptr && m_offline_overlay->IsShown();
+    const bool interactive = m_can_send_commands && !overlay_blocks;
+    if (m_camera_panel != nullptr)
+        m_camera_panel->Enable(interactive);
+    if (m_print_status_panel != nullptr)
+        m_print_status_panel->Enable(interactive);
+    if (m_filament_panel != nullptr)
+        m_filament_panel->Enable(interactive);
+    if (m_movement_panel != nullptr)
+        m_movement_panel->Enable(interactive);
+    if (m_printer_status_panel != nullptr)
+        m_printer_status_panel->Enable(interactive);
+}
+
+void DeviceDashboardPage::set_offline_retry_handler(std::function<void()> handler)
+{
+    if (m_offline_overlay != nullptr)
+        m_offline_overlay->set_retry_handler(std::move(handler));
 }
 
 void DeviceDashboardPage::set_command_handler(CommandHandler handler)
@@ -252,6 +280,334 @@ void DeviceDashboardPage::set_printer_status_handlers(
     m_printer_status_panel->set_nozzle_temp_handler(std::move(nozzle_temp));
     m_printer_status_panel->set_fan_speed_handler(std::move(fan_speed));
     m_printer_status_panel->set_bed_temp_handler(std::move(bed_temp));
+}
+
+namespace {
+constexpr int kCardRadiusDip = 15;
+}
+
+DeviceBusySpinner::DeviceBusySpinner(wxWindow *parent, const wxSize &size, const wxColour &bg)
+    : wxPanel(parent, wxID_ANY, wxDefaultPosition, size)
+    , m_timer(this)
+    , m_arc_colour(DeviceUiStyle::accent())
+{
+    SetMinSize(size);
+    SetMaxSize(size);
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
+    SetBackgroundColour(bg);
+    Bind(wxEVT_PAINT, &DeviceBusySpinner::on_paint, this);
+    Bind(wxEVT_TIMER, &DeviceBusySpinner::on_timer, this);
+    Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+}
+
+DeviceBusySpinner::~DeviceBusySpinner()
+{
+    Stop();
+}
+
+void DeviceBusySpinner::Play()
+{
+    if (!m_timer.IsRunning())
+        m_timer.Start(16);
+}
+
+void DeviceBusySpinner::Stop()
+{
+    if (m_timer.IsRunning())
+        m_timer.Stop();
+}
+
+void DeviceBusySpinner::on_timer(wxTimerEvent &)
+{
+    m_angle_deg = std::fmod(m_angle_deg + 6.0, 360.0);
+    Refresh(false);
+}
+
+void DeviceBusySpinner::on_paint(wxPaintEvent &)
+{
+    wxAutoBufferedPaintDC dc(this);
+    dc.SetBackground(wxBrush(GetBackgroundColour()));
+    dc.Clear();
+
+    const wxSize sz = GetClientSize();
+    if (sz.GetWidth() <= 0 || sz.GetHeight() <= 0)
+        return;
+
+    std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+    if (!gc)
+        return;
+
+    const double side = std::min(sz.GetWidth(), sz.GetHeight());
+    const double cx = sz.GetWidth() * 0.5;
+    const double cy = sz.GetHeight() * 0.5;
+    const double radius = side * 0.32;
+    const double stroke = std::max(2.0, side * 0.09);
+
+    wxPen track(wxColour(230, 230, 230), int(std::lround(stroke)));
+    track.SetCap(wxCAP_ROUND);
+    gc->SetPen(gc->CreatePen(track));
+    wxGraphicsPath track_path = gc->CreatePath();
+    track_path.AddCircle(cx, cy, radius);
+    gc->StrokePath(track_path);
+
+    wxPen pen(m_arc_colour, int(std::lround(stroke)));
+    pen.SetCap(wxCAP_ROUND);
+    gc->SetPen(gc->CreatePen(pen));
+    wxGraphicsPath path = gc->CreatePath();
+    constexpr double kPi = 3.14159265358979323846;
+    const double start_rad = m_angle_deg * kPi / 180.0;
+    path.AddArc(cx, cy, radius, start_rad, start_rad + kPi, true);
+    gc->StrokePath(path);
+}
+
+PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
+    : wxPanel(parent, wxID_ANY)
+{
+    SetBackgroundStyle(wxBG_STYLE_PAINT);
+    Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
+        wxPaintDC dc(this);
+        wxGraphicsContext *gc = wxGraphicsContext::Create(dc);
+        if (gc == nullptr)
+            return;
+        const wxSize sz = GetClientSize();
+        gc->SetPen(*wxTRANSPARENT_PEN);
+        const bool dark_scrim = m_kind == Kind::Connecting || m_kind == Kind::Failed;
+        gc->SetBrush(wxBrush(dark_scrim ? wxColour(0, 0, 0, 140) : wxColour(0xD9, 0xD9, 0xD9, 153)));
+        gc->DrawRectangle(0, 0, sz.GetWidth(), sz.GetHeight());
+        if (wxPanel *card = active_card()) {
+            const wxRect rect = card->GetRect();
+            gc->SetBrush(*wxWHITE);
+            gc->DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height,
+                FromDIP(kCardRadiusDip));
+        }
+        delete gc;
+    });
+    Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    const auto swallow_mouse = [](wxMouseEvent &event) { event.Skip(false); };
+    Bind(wxEVT_LEFT_DOWN, swallow_mouse);
+    Bind(wxEVT_LEFT_UP, swallow_mouse);
+    Bind(wxEVT_LEFT_DCLICK, swallow_mouse);
+    Bind(wxEVT_RIGHT_DOWN, swallow_mouse);
+    Bind(wxEVT_MOTION, swallow_mouse);
+    Bind(wxEVT_MOUSEWHEEL, swallow_mouse);
+
+    m_connecting_card = new wxPanel(this, wxID_ANY);
+    m_connecting_card->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_connecting_card->Bind(wxEVT_PAINT, [](wxPaintEvent &) {});
+    m_connecting_card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    m_connecting_card->SetMinSize(wxSize(FromDIP(200), FromDIP(176)));
+    m_connecting_card->SetMaxSize(wxSize(FromDIP(200), FromDIP(176)));
+    const int spinner_px = FromDIP(48);
+    m_spinner = new DeviceBusySpinner(m_connecting_card, wxSize(spinner_px, spinner_px), *wxWHITE);
+    m_connecting_label = new wxStaticText(m_connecting_card, wxID_ANY, _L("Connecting..."),
+        wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
+    m_connecting_label->SetForegroundColour(DeviceUiStyle::text_primary());
+    m_connecting_label->SetBackgroundColour(*wxWHITE);
+    {
+        wxFont f = m_connecting_label->GetFont();
+        f.SetPointSize(std::max(13, f.GetPointSize() + 1));
+        f.SetWeight(wxFONTWEIGHT_MEDIUM);
+        m_connecting_label->SetFont(f);
+    }
+    auto *loading_label = new wxStaticText(m_connecting_card, wxID_ANY, _L("Loading"),
+        wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
+    loading_label->SetForegroundColour(wxColour(118, 118, 124));
+    loading_label->SetBackgroundColour(*wxWHITE);
+    auto *connecting_sizer = new wxBoxSizer(wxVERTICAL);
+    connecting_sizer->AddStretchSpacer(1);
+    connecting_sizer->Add(m_spinner, 0, wxALIGN_CENTER_HORIZONTAL);
+    connecting_sizer->AddSpacer(FromDIP(14));
+    connecting_sizer->Add(m_connecting_label, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT, FromDIP(16));
+    connecting_sizer->AddSpacer(FromDIP(4));
+    connecting_sizer->Add(loading_label, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT, FromDIP(16));
+    connecting_sizer->AddStretchSpacer(1);
+    m_connecting_card->SetSizer(connecting_sizer);
+    m_connecting_card->Hide();
+
+    m_failed_card = new wxPanel(this, wxID_ANY);
+    m_failed_card->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_failed_card->Bind(wxEVT_PAINT, [](wxPaintEvent &) {});
+    m_failed_card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    m_failed_card->SetMinSize(wxSize(FromDIP(320), FromDIP(210)));
+    m_failed_card->SetMaxSize(wxSize(FromDIP(320), FromDIP(210)));
+    m_title = new wxStaticText(m_failed_card, wxID_ANY, _L("Could not connect to the printer."),
+        wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
+    m_title->SetForegroundColour(DeviceUiStyle::text_primary());
+    m_title->SetBackgroundColour(*wxWHITE);
+    wxFont title_font = m_title->GetFont();
+    title_font.SetPointSize(std::max(13, title_font.GetPointSize() + 1));
+    title_font.SetWeight(wxFONTWEIGHT_BOLD);
+    m_title->SetFont(title_font);
+    m_hint = new wxStaticText(m_failed_card, wxID_ANY,
+        _L("Check that the printer is powered on and on the same network."),
+        wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
+    m_hint->SetForegroundColour(DeviceUiStyle::text_primary());
+    m_hint->SetBackgroundColour(*wxWHITE);
+    m_hint->Wrap(FromDIP(270));
+    m_ok = new Button(m_failed_card, _L("OK"));
+    {
+        const wxSize ok_size(FromDIP(96), FromDIP(32));
+        m_ok->SetMinSize(ok_size);
+        m_ok->SetMaxSize(ok_size);
+        m_ok->SetCornerRadius(FromDIP(8));
+        m_ok->SetBorderWidth(0);
+        const wxColour accent = DeviceUiStyle::accent();
+        StateColor bg(
+            std::pair(wxColour(232, 232, 232), (int) StateColor::Disabled),
+            std::pair(StateColor::LightenDarkenColor(accent, -18), (int) StateColor::Pressed),
+            std::pair(StateColor::LightenDarkenColor(accent, 12), (int) StateColor::Hovered),
+            std::pair(accent, (int) StateColor::Normal));
+        bg.setTakeFocusedAsHovered(false);
+        StateColor fg(
+            std::pair(wxColour(180, 180, 180), (int) StateColor::Disabled),
+            std::pair(*wxWHITE, (int) StateColor::Normal));
+        fg.setTakeFocusedAsHovered(false);
+        m_ok->SetBackgroundColor(bg);
+        m_ok->SetTextColor(fg);
+        m_ok->SetCanFocus(false);
+    }
+    m_ok->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        if (m_ok_handler)
+            m_ok_handler();
+        else if (m_retry_handler)
+            m_retry_handler();
+    });
+    auto *failed_sizer = new wxBoxSizer(wxVERTICAL);
+    failed_sizer->AddSpacer(FromDIP(28));
+    failed_sizer->Add(m_title, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT, FromDIP(20));
+    failed_sizer->AddSpacer(FromDIP(10));
+    failed_sizer->Add(m_hint, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT, FromDIP(20));
+    failed_sizer->AddStretchSpacer(1);
+    failed_sizer->Add(m_ok, 0, wxALIGN_CENTER_HORIZONTAL);
+    failed_sizer->AddSpacer(FromDIP(24));
+    m_failed_card->SetSizer(failed_sizer);
+    m_failed_card->Hide();
+
+    auto *root = new wxBoxSizer(wxVERTICAL);
+    auto *row = new wxBoxSizer(wxHORIZONTAL);
+    row->AddStretchSpacer(1);
+    row->Add(m_connecting_card, 0, wxALIGN_CENTER_VERTICAL);
+    row->Add(m_failed_card, 0, wxALIGN_CENTER_VERTICAL);
+    row->AddStretchSpacer(1);
+    root->AddStretchSpacer(1);
+    root->Add(row, 0, wxEXPAND);
+    root->AddStretchSpacer(1);
+    SetSizer(root);
+    Hide();
+
+    if (wxWindow *host = GetParent())
+        host->Bind(wxEVT_SIZE, &PrinterOfflineOverlay::on_parent_size, this);
+}
+
+PrinterOfflineOverlay::~PrinterOfflineOverlay()
+{
+    if (m_spinner != nullptr)
+        m_spinner->Stop();
+    if (wxWindow *host = GetParent())
+        host->Unbind(wxEVT_SIZE, &PrinterOfflineOverlay::on_parent_size, this);
+}
+
+wxPanel *PrinterOfflineOverlay::active_card() const
+{
+    if (m_kind == Kind::Connecting && m_connecting_card != nullptr && m_connecting_card->IsShown())
+        return m_connecting_card;
+    if (m_kind == Kind::Failed && m_failed_card != nullptr && m_failed_card->IsShown())
+        return m_failed_card;
+    return nullptr;
+}
+
+void PrinterOfflineOverlay::on_parent_size(wxSizeEvent &event)
+{
+    event.Skip();
+    if (IsShown())
+        layout_over_parent();
+}
+
+void PrinterOfflineOverlay::layout_over_parent()
+{
+    wxWindow *host = GetParent();
+    if (host == nullptr || !IsShown())
+        return;
+    const wxSize sz = host->GetClientSize();
+    if (sz.GetWidth() <= 0 || sz.GetHeight() <= 0)
+        return;
+    wxPoint origin(0, 0);
+    if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(host))
+        origin = scrolled->CalcUnscrolledPosition(wxPoint(0, 0));
+    const wxRect want(origin.x, origin.y, sz.GetWidth(), sz.GetHeight());
+    if (GetRect() != want)
+        SetSize(want);
+    Raise();
+    Layout();
+    Refresh();
+}
+
+void PrinterOfflineOverlay::apply_kind()
+{
+    const bool connecting = m_kind == Kind::Connecting;
+    const bool failed = m_kind == Kind::Failed;
+    if (m_connecting_card != nullptr)
+        m_connecting_card->Show(connecting);
+    if (m_failed_card != nullptr)
+        m_failed_card->Show(failed);
+    if (wxSizer *sizer = GetSizer()) {
+        if (m_connecting_card != nullptr)
+            sizer->Show(m_connecting_card, connecting, true);
+        if (m_failed_card != nullptr)
+            sizer->Show(m_failed_card, failed, true);
+    }
+    if (m_spinner != nullptr) {
+        if (connecting)
+            m_spinner->Play();
+        else
+            m_spinner->Stop();
+    }
+    const bool show = m_kind != Kind::Hidden;
+    if (IsShown() != show)
+        Show(show);
+    if (show)
+        layout_over_parent();
+    else if (wxWindow *host = GetParent())
+        host->Refresh();
+    Layout();
+    Refresh();
+}
+
+void PrinterOfflineOverlay::set_kind(Kind kind, const wxString &title, const wxString &hint)
+{
+    if (kind == Kind::Failed && m_title != nullptr && !title.empty() && m_title->GetLabelText() != title) {
+        m_title->SetLabelText(title);
+        m_title->Wrap(FromDIP(270));
+    }
+    if (kind == Kind::Failed && m_hint != nullptr && !hint.empty() && m_hint->GetLabelText() != hint) {
+        m_hint->SetLabelText(hint);
+        m_hint->Wrap(FromDIP(270));
+    }
+    if (kind == Kind::Connecting && m_connecting_label != nullptr && !title.empty() &&
+        m_connecting_label->GetLabelText() != title)
+        m_connecting_label->SetLabelText(title);
+    if (m_kind == kind && IsShown() == (kind != Kind::Hidden)) {
+        if (kind != Kind::Hidden)
+            layout_over_parent();
+        return;
+    }
+    m_kind = kind;
+    apply_kind();
+}
+
+void PrinterOfflineOverlay::set_visible(bool visible, const wxString &)
+{
+    set_kind(visible ? Kind::Dim : Kind::Hidden);
+}
+
+void PrinterOfflineOverlay::set_retry_handler(std::function<void()> handler)
+{
+    m_retry_handler = std::move(handler);
+}
+
+void PrinterOfflineOverlay::set_ok_handler(std::function<void()> handler)
+{
+    m_ok_handler = std::move(handler);
 }
 
 } // namespace DeviceDashboard

@@ -18,6 +18,7 @@
 #include "slic3r/GUI/DeviceDashboard/services/DashboardStateAdapter.hpp"
 #include "slic3r/GUI/DeviceDashboard/DeviceUiStyle.hpp"
 #include "slic3r/GUI/DeviceDashboard/DeviceDashboardPage.hpp"
+#include "slic3r/GUI/DeviceDashboard/PrinterOfflineOverlay.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/CameraPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/FilamentSelectDialog.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/FilamentPanel.hpp"
@@ -746,6 +747,22 @@ static bool probe_moonraker_host(const std::string &ip, BBLocalMachine &machine)
     return any_endpoint;
 }
 
+static bool klippy_is_ready(const std::string &state)
+{
+    return state == "ready";
+}
+
+static bool klippy_is_unusable(const std::string &state)
+{
+    return state == "error" || state == "shutdown" ||
+           state == "disconnected" || state == "offline";
+}
+
+static bool dashboard_commands_allowed(MachineObject *obj, const std::string &klippy_state)
+{
+    return obj != nullptr && obj->is_online() && klippy_is_ready(klippy_state);
+}
+
 static bool is_coprint_discovered_machine(const BBLocalMachine &machine)
 {
     const std::string normalized_name = to_lower_ascii(machine.dev_name);
@@ -1359,6 +1376,8 @@ static wxString klippy_state_label(const std::string &state)
         return _L("Starting");
     if (state == "disconnected")
         return _L("Disconnected");
+    if (state == "offline")
+        return _L("Printer offline");
     if (state.empty())
         return _L("Connecting");
     std::string titled = state;
@@ -1370,7 +1389,7 @@ static wxColour klippy_state_colour(const std::string &state)
 {
     if (state == "ready")
         return wxColour("#35CE82");
-    if (state == "error")
+    if (state == "error" || state == "offline")
         return wxColour("#E24C4B");
     if (state == "shutdown" || state == "disconnected")
         return wxColour("#AAB2BD");
@@ -1389,6 +1408,8 @@ static DeviceDashboard::ConnectionStatus connection_from_klippy(const std::strin
         return DeviceDashboard::ConnectionStatus::Shutdown;
     if (state == "startup")
         return DeviceDashboard::ConnectionStatus::Connecting;
+    if (state == "offline" || state == "disconnected")
+        return DeviceDashboard::ConnectionStatus::Offline;
     if (state.empty())
         return DeviceDashboard::ConnectionStatus::Connecting;
     return DeviceDashboard::ConnectionStatus::Offline;
@@ -2023,6 +2044,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
             state == DeviceDashboard::CameraLoadState::Initializing)
             start_camera_stream();
     });
+    m_dashboard_page->set_offline_retry_handler([this]() { retry_selected_printer_connection(); });
     m_dashboard_page->set_camera_play_handler([this]() {
         if (m_dashboard_page == nullptr || m_dashboard_page->camera_panel() == nullptr)
             return;
@@ -2196,6 +2218,56 @@ void PrinterWebView::set_sidebar_visible(bool visible)
     Layout();
 }
 
+void PrinterWebView::attach_media_pages(CloudTaskManagerPage *timelapse, CloudTaskManagerPage *models)
+{
+    m_media_timelapse_page = timelapse;
+    m_media_models_page = models;
+    auto retry = [this]() { retry_selected_printer_connection(); };
+    if (timelapse != nullptr)
+        timelapse->set_offline_retry_handler(retry);
+    if (models != nullptr)
+        models->set_offline_retry_handler(retry);
+
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    update_dashboard_connecting_overlay(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+}
+
+void PrinterWebView::set_device_session_ui_handler(std::function<void(DeviceSessionUi, const wxString &)> handler)
+{
+    m_device_session_ui = std::move(handler);
+}
+
+void PrinterWebView::acknowledge_device_connect_failure()
+{
+    m_connect_fail_acked = true;
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    update_dashboard_connecting_overlay(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+}
+
+void PrinterWebView::retry_selected_printer_connection()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr;
+    if (obj != nullptr && !obj->is_online()) {
+        begin_sidebar_connect_attempt(obj->get_dev_id());
+        obj->connect(obj->local_use_ssl);
+    }
+    invalidate_device_cache_and_refresh();
+}
+
+void PrinterWebView::sync_media_page_connection_state(bool printer_ready, bool show_offline, const wxString &printer_name)
+{
+    auto apply = [&](CloudTaskManagerPage *page) {
+        if (page == nullptr)
+            return;
+        page->set_allow_moonraker_fetch(printer_ready);
+        page->set_offline_overlay_visible(show_offline, printer_name);
+    };
+    apply(m_storage_page);
+    apply(m_media_timelapse_page);
+    apply(m_media_models_page);
+}
+
 void PrinterWebView::ensure_coprint_storage_page()
 {
     ensure_storage_page_created();
@@ -2274,23 +2346,23 @@ bool PrinterWebView::finish_add_moonraker_printer(const BBLocalMachine &machine,
 
     if (run_probe) {
         BBLocalMachine detected_machine;
-        if (probe_moonraker_host(machine_to_add.dev_ip, detected_machine)) {
-            if (!detected_machine.dev_name.empty())
-                machine_to_add.dev_name = detected_machine.dev_name;
-            if (!detected_machine.printer_type.empty())
-                machine_to_add.printer_type = detected_machine.printer_type;
-            if (!detected_machine.dev_id.empty()) {
-                std::string sanitized_id;
-                std::string unused;
-                if (sanitize_moonraker_address(detected_machine.dev_id, sanitized_id, unused))
-                    machine_to_add.dev_id = sanitized_id;
-            }
-            if (!detected_machine.dev_ip.empty()) {
-                std::string sanitized_ip;
-                std::string unused;
-                if (sanitize_moonraker_address(detected_machine.dev_ip, sanitized_ip, unused))
-                    machine_to_add.dev_ip = sanitized_ip;
-            }
+        if (!probe_moonraker_host(machine_to_add.dev_ip, detected_machine))
+            return false;
+        if (!detected_machine.dev_name.empty())
+            machine_to_add.dev_name = detected_machine.dev_name;
+        if (!detected_machine.printer_type.empty())
+            machine_to_add.printer_type = detected_machine.printer_type;
+        if (!detected_machine.dev_id.empty()) {
+            std::string sanitized_id;
+            std::string unused;
+            if (sanitize_moonraker_address(detected_machine.dev_id, sanitized_id, unused))
+                machine_to_add.dev_id = sanitized_id;
+        }
+        if (!detected_machine.dev_ip.empty()) {
+            std::string sanitized_ip;
+            std::string unused;
+            if (sanitize_moonraker_address(detected_machine.dev_ip, sanitized_ip, unused))
+                machine_to_add.dev_ip = sanitized_ip;
         }
     }
 
@@ -2391,6 +2463,61 @@ bool PrinterWebView::finish_add_moonraker_printer(const BBLocalMachine &machine,
     refresh_layer_info_from_selected_machine();
     Layout();
     return true;
+}
+
+void PrinterWebView::add_moonraker_printer_async(const BBLocalMachine &machine, bool use_ssl,
+                                                 std::function<void(bool ok, const wxString &message)> on_done)
+{
+    auto finish_ui = [on_done](bool ok, const wxString &message) {
+        if (on_done)
+            on_done(ok, message);
+    };
+
+    BBLocalMachine work = machine;
+    std::string sanitized;
+    std::string sanitize_error;
+    const std::string raw = !work.dev_ip.empty() ? work.dev_ip : work.dev_id;
+    if (!sanitize_moonraker_address(raw, sanitized, sanitize_error)) {
+        finish_ui(false, from_u8(sanitize_error));
+        return;
+    }
+    work.dev_id = sanitized;
+    work.dev_ip = sanitized;
+
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, work, use_ssl, finish_ui]() {
+        BBLocalMachine resolved = work;
+        BBLocalMachine detected;
+        const bool probed = probe_moonraker_host(work.dev_ip, detected);
+        if (probed) {
+            if (!detected.dev_name.empty())
+                resolved.dev_name = detected.dev_name;
+            if (!detected.printer_type.empty())
+                resolved.printer_type = detected.printer_type;
+            std::string sanitized_detected;
+            std::string unused;
+            if (!detected.dev_ip.empty() && sanitize_moonraker_address(detected.dev_ip, sanitized_detected, unused)) {
+                resolved.dev_ip = sanitized_detected;
+                resolved.dev_id = sanitized_detected;
+            } else if (!detected.dev_id.empty() && sanitize_moonraker_address(detected.dev_id, sanitized_detected, unused)) {
+                resolved.dev_ip = sanitized_detected;
+                resolved.dev_id = sanitized_detected;
+            }
+        }
+
+        wxGetApp().CallAfter([this, lifetime, resolved, use_ssl, probed, finish_ui]() {
+            if (lifetime.expired() || m_destroying) {
+                finish_ui(false, _L("Could not connect to the printer."));
+                return;
+            }
+            if (!probed) {
+                finish_ui(false, _L("Could not connect to the printer."));
+                return;
+            }
+            const bool ok = finish_add_moonraker_printer(resolved, use_ssl, false);
+            finish_ui(ok, ok ? wxString() : _L("Could not connect to the printer."));
+        });
+    }).detach();
 }
 
 void PrinterWebView::show_printer_card_actions_menu(wxWindow *anchor, MachineObject *machine)
@@ -2829,6 +2956,12 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
     machine->disconnect();
     delete machine;
 
+    m_has_active_printer_connection = false;
+    m_has_moonraker_status = false;
+    m_has_moonraker_print_status = false;
+    m_klippy_state.clear();
+    refresh_dashboard_panels(dev_manager ? dev_manager->get_selected_machine() : nullptr);
+
     // Destroying sidebar cards while the trash button is still handling the click
     // can abort the refresh; rebuild after the event unwinds.
     m_sidebar_printer_list_signature.clear();
@@ -3060,6 +3193,8 @@ void PrinterWebView::show_add_printer_dialog()
 
         void try_ip_add()
         {
+            if (m_ip_add_busy)
+                return;
             if (m_ip_status != nullptr)
                 m_ip_status->SetLabelText(wxString());
             wxString ip_value = m_ip_field->GetValue();
@@ -3086,8 +3221,35 @@ void PrinterWebView::show_add_printer_dialog()
 
             if (m_ip_status != nullptr)
                 m_ip_status->SetLabelText(_L("Connecting to printer..."));
-            if (m_owner != nullptr && m_owner->finish_add_moonraker_printer(machine, host.rfind("https://", 0) == 0))
+            if (m_owner == nullptr)
+                return;
+
+            m_ip_add_busy = true;
+            if (m_ip_field != nullptr)
+                m_ip_field->Enable(false);
+
+            if (m_alive == nullptr) {
+                m_alive = std::make_shared<bool>(true);
+                Bind(wxEVT_DESTROY, [alive = m_alive](wxWindowDestroyEvent &event) {
+                    *alive = false;
+                    event.Skip();
+                });
+            }
+
+            const bool use_ssl = host.rfind("https://", 0) == 0;
+            m_owner->add_moonraker_printer_async(machine, use_ssl, [this, alive = m_alive](bool ok, const wxString &message) {
+                if (!alive || !*alive)
+                    return;
+                m_ip_add_busy = false;
+                if (m_ip_field != nullptr)
+                    m_ip_field->Enable(true);
+                if (!ok) {
+                    if (m_ip_status != nullptr)
+                        m_ip_status->SetLabelText(message.IsEmpty() ? _L("Could not connect to the printer.") : message);
+                    return;
+                }
                 EndModal(wxID_OK);
+            });
         }
 
         PrinterWebView *m_owner{ nullptr };
@@ -3103,6 +3265,8 @@ void PrinterWebView::show_add_printer_dialog()
         wxBoxSizer *m_auto_list_sizer{ nullptr };
         wxTextCtrl *m_ip_field{ nullptr };
         wxStaticText *m_ip_status{ nullptr };
+        bool m_ip_add_busy{ false };
+        std::shared_ptr<bool> m_alive;
     };
 
     AddPrinterDialog dlg(this, this);
@@ -3221,7 +3385,9 @@ void PrinterWebView::rebuild_printers_popup()
     for (MachineObject *m : sorted) {
         if (m == nullptr)
             continue;
-        if (m->is_online())
+        const bool selected = selected_machine != nullptr &&
+                              selected_machine->get_dev_id() == m->get_dev_id();
+        if (m->is_online() || selected)
             online_list.push_back(m);
         else
             offline_list.push_back(m);
@@ -3240,8 +3406,8 @@ void PrinterWebView::rebuild_printers_popup()
         if (machine == nullptr)
             return;
         const bool online = machine->is_online();
-        const bool active = online && selected_machine != nullptr &&
-                            selected_machine->get_dev_id() == machine->get_dev_id();
+        const bool selected = selected_machine != nullptr &&
+                              selected_machine->get_dev_id() == machine->get_dev_id();
         wxColour dot_colour = k_red;
         if (online)
             dot_colour = k_green;
@@ -3252,7 +3418,7 @@ void PrinterWebView::rebuild_printers_popup()
         card->SetMinSize(wxSize(-1, FromDIP(36)));
         card->SetCornerRadius(static_cast<double>(FromDIP(8)));
         card->SetBorderWidth(1);
-        card->SetBorderColorNormal(active ? k_green : k_card_border);
+        card->SetBorderColorNormal(selected ? k_green : k_card_border);
         card->SetBackgroundColorNormal(wxColour(255, 255, 255));
         card->SetBackgroundColour(wxColour(255, 255, 255));
         card->SetCursor(wxCursor(wxCURSOR_HAND));
@@ -3836,80 +4002,47 @@ void PrinterWebView::show_sidebar_add_printer_view()
             ip_input->Enable(false);
         m_sidebar_add_printer_panel->Layout();
 
-        // Probe off the UI thread — synchronous Moonraker HTTP used to freeze the app
-        // for many seconds when a printer was slow or partially unreachable.
         const bool use_ssl = host.rfind("https://", 0) == 0;
-        std::weak_ptr<int> lifetime = m_lifetime_token;
-        std::thread([this, lifetime, machine, use_ssl]() {
-            BBLocalMachine resolved = machine;
-            BBLocalMachine detected;
-            const bool probed = probe_moonraker_host(machine.dev_ip, detected);
-            if (probed) {
-                if (!detected.dev_name.empty())
-                    resolved.dev_name = detected.dev_name;
-                if (!detected.printer_type.empty())
-                    resolved.printer_type = detected.printer_type;
-                std::string sanitized_detected;
-                std::string unused;
-                if (!detected.dev_ip.empty() && sanitize_moonraker_address(detected.dev_ip, sanitized_detected, unused)) {
-                    resolved.dev_ip = sanitized_detected;
-                    resolved.dev_id = sanitized_detected;
-                } else if (!detected.dev_id.empty() && sanitize_moonraker_address(detected.dev_id, sanitized_detected, unused)) {
-                    resolved.dev_ip = sanitized_detected;
-                    resolved.dev_id = sanitized_detected;
+        add_moonraker_printer_async(machine, use_ssl, [this](bool ok, const wxString &message) {
+            wxWindow *status_ctrl = m_sidebar_add_printer_panel
+                ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_status")
+                : nullptr;
+            wxWindow *add_btn_ctrl = m_sidebar_add_printer_panel
+                ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_button")
+                : nullptr;
+            wxWindow *ip_input_ctrl = m_sidebar_add_printer_panel
+                ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_ip")
+                : nullptr;
+
+            auto show_fail = [&](const wxString &fail_message) {
+                if (status_ctrl != nullptr) {
+                    status_ctrl->Show();
+                    if (auto *label = dynamic_cast<wxStaticText *>(status_ctrl))
+                        label->SetLabelText(fail_message);
+                    if (m_sidebar_add_printer_panel != nullptr)
+                        m_sidebar_add_printer_panel->Layout();
                 }
-            }
-
-            wxGetApp().CallAfter([this, lifetime, resolved, use_ssl, probed]() {
-                if (lifetime.expired() || m_destroying)
-                    return;
-
-                wxWindow *status_ctrl = m_sidebar_add_printer_panel
-                    ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_status")
-                    : nullptr;
-                wxWindow *add_btn_ctrl = m_sidebar_add_printer_panel
-                    ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_button")
-                    : nullptr;
-                wxWindow *ip_input_ctrl = m_sidebar_add_printer_panel
-                    ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_ip")
-                    : nullptr;
-
-                auto show_fail = [&](const wxString &message) {
-                    if (status_ctrl != nullptr) {
-                        status_ctrl->Show();
-                        if (auto *label = dynamic_cast<wxStaticText *>(status_ctrl))
-                            label->SetLabelText(message);
-                        if (m_sidebar_add_printer_panel != nullptr)
-                            m_sidebar_add_printer_panel->Layout();
-                    }
-                    if (add_btn_ctrl != nullptr)
-                        add_btn_ctrl->Enable(true);
-                    if (ip_input_ctrl != nullptr)
-                        ip_input_ctrl->Enable(true);
-                };
-
-                // Do not insert unreachable printers as "Unknown" — that leaves the UI
-                // stuck on Connecting... against a bad/forgotten address.
-                if (!probed) {
-                    show_fail(_L("Could not connect to the printer."));
-                    return;
-                }
-
-                const bool ok = finish_add_moonraker_printer(resolved, use_ssl, false);
-                if (ok) {
-                    begin_sidebar_connect_attempt(resolved.dev_id);
-                    show_sidebar_printers_view();
-                } else {
-                    show_fail(_L("Could not connect to the printer."));
-                    return;
-                }
-
                 if (add_btn_ctrl != nullptr)
                     add_btn_ctrl->Enable(true);
                 if (ip_input_ctrl != nullptr)
                     ip_input_ctrl->Enable(true);
-            });
-        }).detach();
+            };
+
+            if (!ok) {
+                show_fail(message.IsEmpty() ? _L("Could not connect to the printer.") : message);
+                return;
+            }
+
+            auto *dev_manager = wxGetApp().getDeviceManager();
+            MachineObject *added = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+            if (added != nullptr)
+                begin_sidebar_connect_attempt(added->get_dev_id());
+            show_sidebar_printers_view();
+            if (add_btn_ctrl != nullptr)
+                add_btn_ctrl->Enable(true);
+            if (ip_input_ctrl != nullptr)
+                ip_input_ctrl->Enable(true);
+        });
     };
     if (add_btn != nullptr)
         add_btn->Bind(wxEVT_BUTTON, submit_ip);
@@ -3937,6 +4070,27 @@ void PrinterWebView::begin_sidebar_connect_attempt(const std::string &dev_id)
     m_sidebar_connect_dev_id = dev_id;
     m_sidebar_connect_started_ms = wxGetUTCTimeMillis();
     m_sidebar_connect_phase = SidebarConnectPhase::Connecting;
+    m_connect_fail_acked = false;
+}
+
+void PrinterWebView::mark_printer_connecting(const std::string &dev_id)
+{
+    begin_sidebar_connect_attempt(dev_id);
+    m_klippy_state.clear();
+    m_has_moonraker_status = false;
+    m_has_moonraker_print_status = false;
+    m_sidebar_printer_list_signature.clear();
+    rebuild_sidebar_printer_list();
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    update_dashboard_connecting_overlay(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+}
+
+bool PrinterWebView::is_printer_connecting(const MachineObject *machine) const
+{
+    if (machine == nullptr || m_sidebar_connect_dev_id.empty())
+        return false;
+    return m_sidebar_connect_phase == SidebarConnectPhase::Connecting &&
+           machine->get_dev_id() == m_sidebar_connect_dev_id;
 }
 
 void PrinterWebView::update_sidebar_connect_attempt_state()
@@ -3967,7 +4121,7 @@ void PrinterWebView::update_sidebar_connect_attempt_state()
         }
     }
 
-    if (machine != nullptr && machine->is_online()) {
+    if (machine != nullptr && machine->is_online() && klippy_is_ready(m_klippy_state)) {
         clear_sidebar_connect_attempt();
         m_sidebar_printer_list_signature.clear();
         rebuild_sidebar_printer_list();
@@ -4115,7 +4269,9 @@ void PrinterWebView::rebuild_sidebar_printer_list()
     for (MachineObject *machine : deduped) {
         if (machine == nullptr)
             continue;
-        (machine->is_online() ? online_list : offline_list).push_back(machine);
+        const bool selected = selected_machine != nullptr &&
+                              selected_machine->get_dev_id() == machine->get_dev_id();
+        (machine->is_online() || selected ? online_list : offline_list).push_back(machine);
     }
     auto by_name = [](MachineObject *a, MachineObject *b) {
         if (a == nullptr || b == nullptr)
@@ -4304,7 +4460,7 @@ void PrinterWebView::rebuild_sidebar_printer_list()
             status_text = _L("Connecting...");
             status_colour = k_yellow;
             dot_colour = k_yellow;
-        } else if (show_not_connected) {
+        } else if (show_not_connected || (selected && !online)) {
             status_text = _L("Not connected");
             status_colour = k_red;
             dot_colour = k_red;
@@ -4528,7 +4684,8 @@ void PrinterWebView::update_dashboard_filament_state(const std::array<wxColour, 
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    const bool can_load_unload = obj != nullptr && obj->is_online() && !obj->is_in_printing();
+    const bool can_load_unload = dashboard_commands_allowed(obj, m_klippy_state) &&
+                                 obj != nullptr && !obj->is_in_printing();
 
     m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
         for (int i = 0; i < 4; ++i) {
@@ -4667,6 +4824,8 @@ bool PrinterWebView::send_klipper_gcode_script(const std::string& script)
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (!dashboard_commands_allowed(obj, m_klippy_state))
+        return false;
     const std::string base = moonraker_base_url(obj);
     if (obj == nullptr || base.empty() || script.empty())
         return false;
@@ -4907,7 +5066,7 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
     const wxString metadata_file_path = active_file_metadata_path(obj);
     const bool has_file = !metadata_file_path.empty();
 
-    if (obj == nullptr || !obj->is_online() || base.empty()) {
+    if (obj == nullptr || !obj->is_online() || !klippy_is_ready(m_klippy_state) || base.empty()) {
         m_filament_preview_fetch_key.clear();
         m_filament_preview_fetch_in_progress = false;
         m_filament_tool_has_color.fill(false);
@@ -5277,6 +5436,11 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_moonraker_status_machine_id = machine_id;
     }
 
+    if (klippy_is_unusable(m_klippy_state) && !is_printer_connecting(obj)) {
+        apply_klippy_connection_ui(obj);
+        return;
+    }
+
     if (m_moonraker_status_fetch_in_progress)
         return;
 
@@ -5314,114 +5478,117 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             .on_error([](std::string, std::string, unsigned) {})
             .perform_sync();
 
-        Http::get(status_query_url)
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
+        const std::string probed_klippy = parse_klippy_state(server_info_body);
+        const bool klippy_ready = klippy_is_ready(probed_klippy);
+        std::string objects_list_body;
+        std::string hostname_hint;
 
-        if (!body.empty()) {
-            auto parsed_status = nlohmann::json::parse(body, nullptr, false, true);
-            if (!parsed_status.is_discarded()) {
-                if (parsed_status.contains("result"))
-                    parsed_status = parsed_status["result"];
-                if (parsed_status.is_object() && parsed_status.contains("status") && parsed_status["status"].is_object()) {
-                    const auto &status = parsed_status["status"];
-                    if (status.contains("print_stats") && status["print_stats"].is_object()) {
-                        const auto &print_stats = status["print_stats"];
-                        if (print_stats.contains("filename") && print_stats["filename"].is_string()) {
-                            const std::string raw_filename = print_stats["filename"].get<std::string>();
-                            if (!raw_filename.empty()) {
-                                const std::string metadata_url = base + "/server/files/metadata?filename=" + url_encode_path_preserving_slashes(raw_filename);
-                                Http::get(metadata_url)
-                                    .timeout_connect(2)
-                                    .timeout_max(4)
-                                    .on_complete([&](std::string response, unsigned status_code) {
-                                        if (status_code == 200)
-                                            metadata_body = std::move(response);
-                                    })
-                                    .on_error([](std::string, std::string, unsigned) {})
-                                    .perform_sync();
+        // Temperatures, fans, files, and identity only while Klippy is ready.
+        if (klippy_ready) {
+            Http::get(status_query_url)
+                .timeout_connect(2)
+                .timeout_max(4)
+                .on_complete([&](std::string response, unsigned status) {
+                    if (status == 200)
+                        body = std::move(response);
+                })
+                .on_error([](std::string, std::string, unsigned) {})
+                .perform_sync();
+
+            if (!body.empty()) {
+                auto parsed_status = nlohmann::json::parse(body, nullptr, false, true);
+                if (!parsed_status.is_discarded()) {
+                    if (parsed_status.contains("result"))
+                        parsed_status = parsed_status["result"];
+                    if (parsed_status.is_object() && parsed_status.contains("status") && parsed_status["status"].is_object()) {
+                        const auto &status = parsed_status["status"];
+                        if (status.contains("print_stats") && status["print_stats"].is_object()) {
+                            const auto &print_stats = status["print_stats"];
+                            if (print_stats.contains("filename") && print_stats["filename"].is_string()) {
+                                const std::string raw_filename = print_stats["filename"].get<std::string>();
+                                if (!raw_filename.empty()) {
+                                    const std::string metadata_url = base + "/server/files/metadata?filename=" + url_encode_path_preserving_slashes(raw_filename);
+                                    Http::get(metadata_url)
+                                        .timeout_connect(2)
+                                        .timeout_max(4)
+                                        .on_complete([&](std::string response, unsigned status_code) {
+                                            if (status_code == 200)
+                                                metadata_body = std::move(response);
+                                        })
+                                        .on_error([](std::string, std::string, unsigned) {})
+                                        .perform_sync();
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        Http::get(fan_query_url)
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    fan_body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        Http::get(base + "/machine/coprint/info")
-            .timeout_connect(2)
-            .timeout_max(5)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    coprint_info_body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        // Also use objects/list when /machine/coprint/info is missing/slow — Quadro has extruder1+.
-        std::string objects_list_body;
-        Http::get(base + "/printer/objects/list")
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    objects_list_body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        // Resolve Moonraker hostname so placeholder names like "Unknown Printer"
-        // can be upgraded to Co Print product names (e.g. chromahead -> ChromaSet).
-        std::string hostname_hint;
-        auto capture_hostname = [&](const std::string &path) {
-            if (!hostname_hint.empty())
-                return;
-            std::string response_body;
-            Http::get(base + path)
+            Http::get(fan_query_url)
                 .timeout_connect(2)
                 .timeout_max(4)
                 .on_complete([&](std::string response, unsigned status) {
                     if (status == 200)
-                        response_body = std::move(response);
+                        fan_body = std::move(response);
                 })
                 .on_error([](std::string, std::string, unsigned) {})
                 .perform_sync();
-            if (response_body.empty())
-                return;
-            auto parsed_host = nlohmann::json::parse(response_body, nullptr, false, true);
-            if (parsed_host.is_discarded())
-                return;
-            if (parsed_host.contains("result"))
-                parsed_host = parsed_host["result"];
-            if (!parsed_host.is_object())
-                return;
-            if (parsed_host.contains("machine_name") && parsed_host["machine_name"].is_string())
-                hostname_hint = parsed_host["machine_name"].get<std::string>();
-            else if (parsed_host.contains("hostname") && parsed_host["hostname"].is_string())
-                hostname_hint = parsed_host["hostname"].get<std::string>();
-            else if (parsed_host.contains("system_info") && parsed_host["system_info"].is_object() &&
-                     parsed_host["system_info"].contains("hostname") &&
-                     parsed_host["system_info"]["hostname"].is_string())
-                hostname_hint = parsed_host["system_info"]["hostname"].get<std::string>();
-        };
-        capture_hostname("/server/info");
-        capture_hostname("/printer/info");
-        capture_hostname("/machine/system_info");
+
+            Http::get(base + "/machine/coprint/info")
+                .timeout_connect(2)
+                .timeout_max(5)
+                .on_complete([&](std::string response, unsigned status) {
+                    if (status == 200)
+                        coprint_info_body = std::move(response);
+                })
+                .on_error([](std::string, std::string, unsigned) {})
+                .perform_sync();
+
+            Http::get(base + "/printer/objects/list")
+                .timeout_connect(2)
+                .timeout_max(4)
+                .on_complete([&](std::string response, unsigned status) {
+                    if (status == 200)
+                        objects_list_body = std::move(response);
+                })
+                .on_error([](std::string, std::string, unsigned) {})
+                .perform_sync();
+
+            auto capture_hostname = [&](const std::string &path) {
+                if (!hostname_hint.empty())
+                    return;
+                std::string response_body;
+                Http::get(base + path)
+                    .timeout_connect(2)
+                    .timeout_max(4)
+                    .on_complete([&](std::string response, unsigned status) {
+                        if (status == 200)
+                            response_body = std::move(response);
+                    })
+                    .on_error([](std::string, std::string, unsigned) {})
+                    .perform_sync();
+                if (response_body.empty())
+                    return;
+                auto parsed_host = nlohmann::json::parse(response_body, nullptr, false, true);
+                if (parsed_host.is_discarded())
+                    return;
+                if (parsed_host.contains("result"))
+                    parsed_host = parsed_host["result"];
+                if (!parsed_host.is_object())
+                    return;
+                if (parsed_host.contains("machine_name") && parsed_host["machine_name"].is_string())
+                    hostname_hint = parsed_host["machine_name"].get<std::string>();
+                else if (parsed_host.contains("hostname") && parsed_host["hostname"].is_string())
+                    hostname_hint = parsed_host["hostname"].get<std::string>();
+                else if (parsed_host.contains("system_info") && parsed_host["system_info"].is_object() &&
+                         parsed_host["system_info"].contains("hostname") &&
+                         parsed_host["system_info"]["hostname"].is_string())
+                    hostname_hint = parsed_host["system_info"]["hostname"].get<std::string>();
+            };
+            capture_hostname("/server/info");
+            capture_hostname("/printer/info");
+            capture_hostname("/machine/system_info");
+        }
 
         wxGetApp().CallAfter([this, lifetime, machine_id, body, fan_body, coprint_info_body, objects_list_body, metadata_body, hostname_hint, base, server_info_body]() {
             if (lifetime.expired() || m_destroying)
@@ -5433,10 +5600,36 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             if (obj == nullptr || obj->get_dev_id() != machine_id)
                 return;
 
-            const std::string parsed_klippy = parse_klippy_state(server_info_body);
-            if (!parsed_klippy.empty() || !server_info_body.empty())
-                m_klippy_state = parsed_klippy;
+            const bool moonraker_reachable = !server_info_body.empty();
+            if (!moonraker_reachable) {
+                m_klippy_state = "offline";
+            } else {
+                const std::string parsed_klippy = parse_klippy_state(server_info_body);
+                if (!parsed_klippy.empty() || !server_info_body.empty())
+                    m_klippy_state = parsed_klippy;
+            }
+
+            if (!moonraker_reachable || klippy_is_unusable(m_klippy_state)) {
+                m_has_moonraker_status = false;
+                m_has_moonraker_print_status = false;
+                m_has_active_printer_connection = false;
+                m_moonraker_print_job = DeviceDashboard::PrintJobState();
+                if (obj->is_online())
+                    obj->set_online_state(false);
+            } else if (klippy_is_ready(m_klippy_state)) {
+                const bool was_offline = !obj->is_online();
+                obj->set_online_state(true);
+                m_has_active_printer_connection = true;
+                if (was_offline || m_sidebar_connect_phase != SidebarConnectPhase::None) {
+                    clear_sidebar_connect_attempt();
+                    m_sidebar_printer_list_signature.clear();
+                    rebuild_sidebar_printer_list();
+                }
+            }
+
             apply_klippy_connection_ui(obj);
+            if (!moonraker_reachable || !klippy_is_ready(m_klippy_state))
+                return;
 
             auto upgrade_placeholder_identity = [&](std::string detected_name, std::string detected_type, int moonraker_tool_count) {
                 if (detected_type.empty() && !coprint_info_body.empty()) {
@@ -5739,8 +5932,6 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             }
 
             m_has_moonraker_status = got_any;
-            if (got_any)
-                obj->set_online_state(true);
             // Moonraker verisi geldi — sadece sıcaklık panelini güncelle
             // (refresh_layer_info_from_selected_machine() çağırmıyoruz;
             //  o fonksiyon içinde yeni bir Moonraker fetch başlatır → sonsuz döngü)
@@ -5784,8 +5975,9 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                     patched.print_job = moonraker_print_job;
                 patched.connection.status = connection_from_klippy(m_klippy_state);
                 patched.connection.message = klippy_state_label(m_klippy_state);
-                patched.connection.can_send_commands = m_klippy_state == "ready";
+                patched.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
                 patched.movement.can_move = patched.connection.can_send_commands;
+                patched.filament.can_load_unload = patched.connection.can_send_commands && !obj->is_in_printing();
                 if (active_tool_index >= 0 && active_tool_index < patched.movement.available_tool_count && m_dashboard_page->printer_status_panel() != nullptr)
                     m_dashboard_page->printer_status_panel()->set_active_tool(active_tool_index);
                 m_dashboard_state_store.set_state(patched);
@@ -5906,6 +6098,8 @@ bool PrinterWebView::send_toolhead_fan_speed_command(int tool_index, int fan_per
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (!dashboard_commands_allowed(obj, m_klippy_state))
+        return false;
     const std::string base = moonraker_base_url(obj);
     if (obj == nullptr || !obj->is_online() || base.empty())
         return false;
@@ -6995,6 +7189,7 @@ void PrinterWebView::ensure_storage_page_created()
 
     m_storage_page = new CloudTaskManagerPage(parent, CloudTaskManagerPage::MediaPresentation::TimelapseOnly);
     m_storage_page->Hide();
+    m_storage_page->set_offline_retry_handler([this]() { retry_selected_printer_connection(); });
 
     if (!sizer->Replace(m_storage_placeholder, m_storage_page, false)) {
         BOOST_LOG_TRIVIAL(error) << "PrinterWebView: ensure_storage_page_created Replace failed";
@@ -7034,8 +7229,16 @@ void PrinterWebView::select_tab(PrinterWebViewTab tab)
         m_assistant_page->Show(tab == PrinterWebViewTab::Assistant);
 
     if ((tab == PrinterWebViewTab::Storage || tab == PrinterWebViewTab::PrintModels) && m_storage_page != nullptr) {
-        m_storage_page->refresh_user_device();
-        m_storage_page->update_page();
+        const bool printer_ready = klippy_is_ready(m_klippy_state);
+        if (printer_ready) {
+            m_storage_page->refresh_user_device();
+            m_storage_page->update_page();
+        }
+    }
+
+    {
+        auto *dev_manager = wxGetApp().getDeviceManager();
+        update_dashboard_connecting_overlay(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
     }
 
     update_sidebar_selection();
@@ -7399,6 +7602,8 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     page_sizer->Add(card, 0, wxLEFT | wxRIGHT, FromDIP(31));
     page_sizer->AddStretchSpacer(1);
     page->SetSizer(page_sizer);
+    m_update_offline_overlay = new DeviceDashboard::PrinterOfflineOverlay(page);
+    m_update_offline_overlay->set_retry_handler([this]() { retry_selected_printer_connection(); });
     return page;
 }
 
@@ -7549,6 +7754,8 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (!dashboard_commands_allowed(obj, m_klippy_state))
+        return;
 
     switch (command.kind) {
     case DeviceDashboard::DeviceCommandKind::SelectTool:
@@ -7677,7 +7884,8 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
     }
     dashboard_state.filament = m_dashboard_state_store.state().filament;
     dashboard_state.filament.selected_tool    = std::clamp(m_selected_filament_tool, 0, 3);
-    dashboard_state.filament.can_load_unload  = obj != nullptr && obj->is_online() && !obj->is_in_printing();
+    dashboard_state.filament.can_load_unload  = dashboard_commands_allowed(obj, m_klippy_state) &&
+                                                obj != nullptr && !obj->is_in_printing();
     dashboard_state.filament.is_loading       = false;
     dashboard_state.filament.loading_tool     = -1;
     dashboard_state.movement.selected_tool    = m_selected_extruder_index;
@@ -7712,7 +7920,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
 
     // Moonraker WebSocket verileri MachineObject içinde değil, PrinterWebView'ın
     // kendi m_moonraker_* alanlarında tutuluyor — DashboardStateAdapter çıktısının üzerine yaz.
-    if (m_has_moonraker_status) {
+    if (m_has_moonraker_status && klippy_is_ready(m_klippy_state)) {
         dashboard_state.bed.temperature.available = true;
         dashboard_state.bed.temperature.current   = m_moonraker_bed_current;
         dashboard_state.bed.temperature.target    = m_moonraker_bed_target;
@@ -7731,7 +7939,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
             0,
             std::max(0, dashboard_state.movement.available_tool_count - 1));
     }
-    if (m_has_moonraker_print_status) {
+    if (m_has_moonraker_print_status && klippy_is_ready(m_klippy_state)) {
         if (m_moonraker_print_job.has_active_job) {
             DeviceDashboard::PrintJobState merged = m_moonraker_print_job;
             const DeviceDashboard::PrintJobState &adapter_job = dashboard_state.print_job;
@@ -7747,7 +7955,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
 
     dashboard_state.connection.status = connection_from_klippy(m_klippy_state);
     dashboard_state.connection.message = klippy_state_label(m_klippy_state);
-    dashboard_state.connection.can_send_commands = m_klippy_state == "ready";
+    dashboard_state.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
     dashboard_state.movement.can_move = dashboard_state.connection.can_send_commands;
 
     m_dashboard_state_store.set_state(dashboard_state);
@@ -7761,27 +7969,22 @@ void PrinterWebView::apply_klippy_connection_ui(MachineObject *obj)
     DeviceDashboard::DeviceDashboardState patched = m_dashboard_state_store.state();
     patched.connection.status = connection_from_klippy(m_klippy_state);
     patched.connection.message = klippy_state_label(m_klippy_state);
-    patched.connection.can_send_commands = m_klippy_state == "ready";
+    patched.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
     patched.movement.can_move = patched.connection.can_send_commands;
     m_dashboard_state_store.set_state(patched);
     if (m_dashboard_page != nullptr)
         m_dashboard_page->apply_state(m_dashboard_state_store.state());
 
     update_dashboard_connecting_overlay(obj);
-    if (m_update_page != nullptr && m_update_page->IsShownOnScreen())
+    if (klippy_is_ready(m_klippy_state) && m_update_page != nullptr && m_update_page->IsShownOnScreen())
         refresh_update_page_from_selected_machine();
 }
 
 void PrinterWebView::update_dashboard_connecting_overlay(MachineObject *obj)
 {
-    if (m_dashboard_page == nullptr)
-        return;
-
-    const bool definite = m_klippy_state == "ready" ||
-                          m_klippy_state == "error" ||
-                          m_klippy_state == "shutdown" ||
-                          m_klippy_state == "disconnected";
-    const bool waiting = obj != nullptr && !definite && !m_has_moonraker_status;
+    const bool printer_unusable = obj != nullptr && klippy_is_unusable(m_klippy_state);
+    const bool printer_ready = obj != nullptr && klippy_is_ready(m_klippy_state);
+    const bool waiting = obj != nullptr && !printer_unusable && !printer_ready;
     if (waiting) {
         if (m_dashboard_connect_started_ms == 0)
             m_dashboard_connect_started_ms = wxGetUTCTimeMillis();
@@ -7791,10 +7994,61 @@ void PrinterWebView::update_dashboard_connecting_overlay(MachineObject *obj)
 
     const bool timed_out = waiting &&
         (wxGetUTCTimeMillis() - m_dashboard_connect_started_ms) >= 20000;
-    const wxString overlay_text = m_klippy_state == "startup"
-        ? klippy_state_label(m_klippy_state)
-        : _L("Connecting...");
-    m_dashboard_page->set_connecting_visible(waiting && !timed_out, overlay_text);
+    if (timed_out && m_klippy_state != "offline")
+        m_klippy_state = "offline";
+
+    const bool show_offline = obj != nullptr &&
+        (klippy_is_unusable(m_klippy_state) || timed_out);
+    const bool show_connecting = waiting && !show_offline;
+    if (show_connecting && obj != nullptr &&
+        m_sidebar_connect_phase == SidebarConnectPhase::None)
+        begin_sidebar_connect_attempt(obj->get_dev_id());
+
+    if (show_offline && obj != nullptr) {
+        m_has_active_printer_connection = false;
+        bool sidebar_dirty = false;
+        if (obj->is_online()) {
+            obj->set_online_state(false);
+            sidebar_dirty = true;
+        }
+        if (m_sidebar_connect_phase == SidebarConnectPhase::Connecting &&
+            obj->get_dev_id() == m_sidebar_connect_dev_id) {
+            m_sidebar_connect_phase = SidebarConnectPhase::Failed;
+            sidebar_dirty = true;
+        }
+        if (sidebar_dirty) {
+            m_sidebar_printer_list_signature.clear();
+            rebuild_sidebar_printer_list();
+        }
+    }
+
+    DeviceSessionUi session = DeviceSessionUi::None;
+    wxString session_message;
+    if (show_connecting) {
+        session = DeviceSessionUi::Connecting;
+        session_message = m_klippy_state == "startup"
+            ? klippy_state_label(m_klippy_state)
+            : _L("Connecting...");
+    } else if (show_offline && !m_connect_fail_acked) {
+        session = DeviceSessionUi::Failed;
+        session_message = _L("Could not connect to the printer.");
+    }
+    if (m_device_session_ui)
+        m_device_session_ui(session, session_message);
+
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->set_connecting_visible(false);
+
+    const bool dim_content = !show_connecting &&
+        (obj == nullptr || show_offline || !dashboard_commands_allowed(obj, m_klippy_state));
+    const wxString printer_name = obj != nullptr ? sidebar_display_name_for(obj) : _L("Printer");
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->set_offline_overlay_visible(dim_content && session != DeviceSessionUi::Failed, printer_name);
+
+    const bool show_other_offline = dim_content && session == DeviceSessionUi::None;
+    if (m_update_offline_overlay != nullptr)
+        m_update_offline_overlay->set_visible(show_other_offline, printer_name);
+    sync_media_page_connection_state(printer_ready, show_other_offline, printer_name);
 }
 
 void PrinterWebView::refresh_connected_printer_header(MachineObject *obj)
@@ -8000,22 +8254,24 @@ void PrinterWebView::refresh_layer_info_from_selected_machine()
         m_camera_stream_url.clear();
         m_dashboard_connect_started_ms = obj != nullptr ? wxGetUTCTimeMillis() : 0;
     }
+    const bool printer_connected = klippy_is_ready(m_klippy_state);
     const bool periodic_heavy_refresh = (++m_refresh_tick_counter % 5) == 0;
-    const bool has_active_job = m_dashboard_state_store.state().print_job.has_active_job;
+    const bool has_active_job = printer_connected && m_dashboard_state_store.state().print_job.has_active_job;
 
     update_sidebar_connect_attempt_state();
     refresh_moonraker_status_from_selected_machine();
     refresh_dashboard_panels(obj);
-    if (machine_changed || periodic_heavy_refresh || has_active_job)
+    if (printer_connected && (machine_changed || periodic_heavy_refresh || has_active_job))
         update_preview_thumbnail(obj, has_active_job);
-    if (machine_changed || periodic_heavy_refresh || has_active_job)
+    if (printer_connected && (machine_changed || periodic_heavy_refresh || has_active_job))
         refresh_filament_preview_from_selected_machine();
     if (machine_changed || periodic_heavy_refresh) {
         refresh_connected_printer_header(obj);
         refresh_printer_info_labels(obj);
-        refresh_camera_stream(obj);
+        if (printer_connected)
+            refresh_camera_stream(obj);
     }
-    if (m_selected_tab == PrinterWebViewTab::Update && (machine_changed || periodic_heavy_refresh))
+    if (printer_connected && m_selected_tab == PrinterWebViewTab::Update && (machine_changed || periodic_heavy_refresh))
         refresh_update_page_from_selected_machine();
 }
 
@@ -8048,14 +8304,16 @@ void PrinterWebView::invalidate_device_cache_and_refresh()
 
     if (dashboard_visible) {
         refresh_dashboard_panels(obj);
-        const bool has_active_job = m_dashboard_state_store.state().print_job.has_active_job;
-        update_preview_thumbnail(obj, has_active_job);
-        refresh_filament_preview_from_selected_machine();
+        if (klippy_is_ready(m_klippy_state)) {
+            const bool has_active_job = m_dashboard_state_store.state().print_job.has_active_job;
+            update_preview_thumbnail(obj, has_active_job);
+            refresh_filament_preview_from_selected_machine();
+        }
         refresh_connected_printer_header(obj);
         refresh_printer_info_labels(obj);
     }
 
-    if (m_update_page != nullptr && m_update_page->IsShownOnScreen())
+    if (klippy_is_ready(m_klippy_state) && m_update_page != nullptr && m_update_page->IsShownOnScreen())
         refresh_update_page_from_selected_machine();
 }
 

@@ -36,6 +36,7 @@ private:
     void set_active_tool_button(int tool_index);
     void set_available_tool_count(int tool_count);
     void set_active_distance_button(double distance_mm);
+    void set_controls_enabled(bool enabled);
 
     wxBoxSizer* m_controls_sizer{nullptr};
     wxWindow* m_status_slot{nullptr};
