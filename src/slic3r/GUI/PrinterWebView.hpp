@@ -78,7 +78,7 @@ public:
         Connecting,
         Failed
     };
-    void set_device_session_ui_handler(std::function<void(DeviceSessionUi, const wxString &)> handler);
+    void set_device_session_ui_handler(std::function<void(DeviceSessionUi, const wxString &, const wxString &)> handler);
     void acknowledge_device_connect_failure();
     void prompt_ip_connect();
     void reset_placeholder_selections();
@@ -155,7 +155,7 @@ private:
     void set_filament_assigned_tool(int model_slot_index, int ui_tool, bool send_mapping_command);
     void send_tool_map_command(int model_slot_index, int ui_tool);
     bool send_tool_select_command(int tool_index);
-    bool send_print_control_command(bool stop_print);
+    bool send_print_control_command(bool stop_print, bool resume = false);
     bool send_klipper_gcode_script(const std::string& script);
     bool show_filament_material_dialog(bool start_load_after_save, const wxPoint& anchor_screen_pos = wxDefaultPosition);
     void prompt_and_save_filament_selection_then_load();
@@ -173,6 +173,7 @@ private:
     void refresh_printer_info_labels(MachineObject *obj);
     void refresh_camera_stream(MachineObject *obj);
     void reset_dashboard_snapshot();
+    void abort_preview_thumbnail();
     void begin_filament_snapshot_fetch(MachineObject *obj);
     void reveal_dashboard_if_ready(MachineObject *obj);
     bool is_dashboard_snapshot_ready() const;
@@ -250,6 +251,8 @@ private:
     wxString m_camera_stream_url;
     wxString m_preview_thumbnail_url;
     wxString m_pending_thumbnail_url;
+    std::string m_thumbnail_request_machine_id;
+    std::string m_pending_thumbnail_machine_id;
     bool m_clear_thumbnail_after_cancel{false};
     wxPopupTransientWindow *m_printers_popup{ nullptr };
     StaticBox *m_printers_popup_panel{ nullptr };
@@ -298,8 +301,9 @@ private:
     CloudTaskManagerPage *m_media_models_page{ nullptr };
     DeviceDashboard::PrinterOfflineOverlay *m_update_offline_overlay{nullptr};
     bool m_embedded_in_monitor{false};
-    bool m_connect_fail_acked{false};
-    std::function<void(DeviceSessionUi, const wxString &)> m_device_session_ui;
+    enum class DeviceWarnAck { None, KlippyFault, Unreachable };
+    DeviceWarnAck m_device_warn_ack{DeviceWarnAck::None};
+    std::function<void(DeviceSessionUi, const wxString &, const wxString &)> m_device_session_ui;
     wxImage m_thumbnail_image;
     wxWebRequest m_thumbnail_web_request;
     wxStaticText *m_update_connection_badge{ nullptr };

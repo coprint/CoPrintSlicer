@@ -56,6 +56,7 @@ public:
 private:
     void on_parent_size(wxSizeEvent &event);
     void apply_kind();
+    void wrap_failed_labels(const wxString &title, const wxString &hint);
     wxPanel *active_card() const;
 
     Kind m_kind{Kind::Hidden};

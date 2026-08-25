@@ -136,7 +136,9 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     buttons->SetBackgroundColour(DeviceUiStyle::card_background());
     auto* btn_sizer = new wxBoxSizer(wxHORIZONTAL);
     const wxSize icon_size(FromDIP(20), FromDIP(20));
-    m_pause_icon = new wxStaticBitmap(buttons, wxID_ANY, load_png_icon(this, "pause.png", 20));
+    m_pause_bitmap = load_png_icon(this, "pause.png", 20);
+    m_resume_bitmap = load_png_icon(this, "resume.png", 20);
+    m_pause_icon = new wxStaticBitmap(buttons, wxID_ANY, m_pause_bitmap);
     m_pause_icon->SetMinSize(icon_size);
     m_pause_icon->SetMaxSize(icon_size);
     m_pause_icon->SetCursor(wxCursor(wxCURSOR_HAND));
@@ -150,8 +152,14 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
     btn_sizer->Add(m_stop_icon, 0, wxALIGN_CENTER_VERTICAL);
     buttons->SetSizer(btn_sizer);
     m_pause_icon->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
-        if (m_print_actions_enabled && m_pause_handler)
+        if (!m_print_actions_enabled)
+            return;
+        if (m_print_paused) {
+            if (m_resume_handler)
+                m_resume_handler();
+        } else if (m_pause_handler) {
             m_pause_handler();
+        }
     });
     m_stop_icon->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
         if (m_print_actions_enabled && m_stop_handler)
@@ -185,6 +193,9 @@ void PrintStatusPanel::apply_state(const PrintJobState& state)
     set_label_if_changed(m_layer_info, layer_text);
     set_label_if_changed(m_remaining_time, wxString::FromUTF8("Remaining: ") + time_text(active ? state.remaining_seconds : -1));
     set_print_actions_enabled(active);
+    set_pause_resume_icon(active && state.state == PrintCommandState::Paused);
+    if (!active)
+        reset_thumbnail_placeholder();
 
     if (file_layout_needed) {
         Freeze();
@@ -210,9 +221,25 @@ void PrintStatusPanel::set_print_actions_enabled(bool enabled)
     }
 }
 
+void PrintStatusPanel::set_pause_resume_icon(bool paused)
+{
+    if (m_pause_icon == nullptr || m_print_paused == paused)
+        return;
+    m_print_paused = paused;
+    const wxBitmap &bitmap = paused && m_resume_bitmap.IsOk() ? m_resume_bitmap : m_pause_bitmap;
+    if (bitmap.IsOk())
+        m_pause_icon->SetBitmap(bitmap);
+    m_pause_icon->Refresh();
+}
+
 void PrintStatusPanel::set_pause_handler(ActionHandler handler)
 {
     m_pause_handler = std::move(handler);
+}
+
+void PrintStatusPanel::set_resume_handler(ActionHandler handler)
+{
+    m_resume_handler = std::move(handler);
 }
 
 void PrintStatusPanel::set_stop_handler(ActionHandler handler)

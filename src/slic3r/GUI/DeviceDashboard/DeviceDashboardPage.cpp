@@ -9,6 +9,7 @@
 #include "panels/PrinterStatusPanel.hpp"
 #include "panels/PrintStatusPanel.hpp"
 #include "slic3r/GUI/Widgets/Button.hpp"
+#include "slic3r/GUI/Widgets/Label.hpp"
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "../I18N.hpp"
 
@@ -99,6 +100,11 @@ DeviceDashboardPage::DeviceDashboardPage(wxWindow* parent)
     m_print_status_panel->set_pause_handler([forward_command]() {
         DeviceCommand command;
         command.kind = DeviceCommandKind::PausePrint;
+        forward_command(command);
+    });
+    m_print_status_panel->set_resume_handler([forward_command]() {
+        DeviceCommand command;
+        command.kind = DeviceCommandKind::ResumePrint;
         forward_command(command);
     });
     m_print_status_panel->set_stop_handler([forward_command]() {
@@ -200,7 +206,7 @@ void DeviceDashboardPage::set_offline_overlay_visible(bool visible, const wxStri
 void DeviceDashboardPage::update_controls_enabled()
 {
     const bool overlay_blocks = m_offline_overlay != nullptr && m_offline_overlay->IsShown();
-    const bool interactive = m_can_send_commands && !overlay_blocks;
+    const bool interactive = !overlay_blocks;
     if (m_camera_panel != nullptr)
         m_camera_panel->Enable(interactive);
     if (m_print_status_panel != nullptr)
@@ -428,8 +434,8 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     m_failed_card->SetBackgroundStyle(wxBG_STYLE_PAINT);
     m_failed_card->Bind(wxEVT_PAINT, [](wxPaintEvent &) {});
     m_failed_card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
-    m_failed_card->SetMinSize(wxSize(FromDIP(320), FromDIP(210)));
-    m_failed_card->SetMaxSize(wxSize(FromDIP(320), FromDIP(210)));
+    m_failed_card->SetMinSize(wxSize(FromDIP(360), FromDIP(200)));
+    m_failed_card->SetMaxSize(wxSize(FromDIP(360), -1));
     m_title = new wxStaticText(m_failed_card, wxID_ANY, _L("Could not connect to the printer."),
         wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
     m_title->SetForegroundColour(DeviceUiStyle::text_primary());
@@ -443,10 +449,9 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
         wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE_HORIZONTAL);
     m_hint->SetForegroundColour(DeviceUiStyle::text_primary());
     m_hint->SetBackgroundColour(*wxWHITE);
-    m_hint->Wrap(FromDIP(270));
-    m_ok = new Button(m_failed_card, _L("OK"));
+    m_ok = new Button(m_failed_card, _L("Got it"));
     {
-        const wxSize ok_size(FromDIP(96), FromDIP(32));
+        const wxSize ok_size(FromDIP(120), FromDIP(32));
         m_ok->SetMinSize(ok_size);
         m_ok->SetMaxSize(ok_size);
         m_ok->SetCornerRadius(FromDIP(8));
@@ -474,13 +479,14 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     });
     auto *failed_sizer = new wxBoxSizer(wxVERTICAL);
     failed_sizer->AddSpacer(FromDIP(28));
-    failed_sizer->Add(m_title, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT, FromDIP(20));
+    failed_sizer->Add(m_title, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(24));
     failed_sizer->AddSpacer(FromDIP(10));
-    failed_sizer->Add(m_hint, 0, wxALIGN_CENTER_HORIZONTAL | wxLEFT | wxRIGHT, FromDIP(20));
+    failed_sizer->Add(m_hint, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(24));
     failed_sizer->AddStretchSpacer(1);
     failed_sizer->Add(m_ok, 0, wxALIGN_CENTER_HORIZONTAL);
     failed_sizer->AddSpacer(FromDIP(24));
     m_failed_card->SetSizer(failed_sizer);
+    wrap_failed_labels(m_title->GetLabel(), m_hint->GetLabel());
     m_failed_card->Hide();
 
     auto *root = new wxBoxSizer(wxVERTICAL);
@@ -573,16 +579,36 @@ void PrinterOfflineOverlay::apply_kind()
     Refresh();
 }
 
+void PrinterOfflineOverlay::wrap_failed_labels(const wxString &title, const wxString &hint)
+{
+    const int wrap_px = FromDIP(312);
+    auto apply_wrapped = [wrap_px](wxStaticText *label, const wxString &text) {
+        if (label == nullptr || text.empty())
+            return;
+        wxClientDC dc(label);
+        dc.SetFont(label->GetFont());
+        wxString wrapped;
+        const wxSize extent = Label::split_lines(dc, wrap_px, text, wrapped);
+        label->SetLabel(wrapped);
+        label->SetMinSize(wxSize(wrap_px, std::max(extent.GetHeight(), label->GetCharHeight())));
+        label->InvalidateBestSize();
+    };
+    apply_wrapped(m_title, title);
+    apply_wrapped(m_hint, hint);
+    if (m_failed_card != nullptr) {
+        m_failed_card->InvalidateBestSize();
+        if (wxSizer *sizer = m_failed_card->GetSizer()) {
+            sizer->Layout();
+            sizer->SetSizeHints(m_failed_card);
+        }
+        m_failed_card->Fit();
+    }
+}
+
 void PrinterOfflineOverlay::set_kind(Kind kind, const wxString &title, const wxString &hint)
 {
-    if (kind == Kind::Failed && m_title != nullptr && !title.empty() && m_title->GetLabelText() != title) {
-        m_title->SetLabelText(title);
-        m_title->Wrap(FromDIP(270));
-    }
-    if (kind == Kind::Failed && m_hint != nullptr && !hint.empty() && m_hint->GetLabelText() != hint) {
-        m_hint->SetLabelText(hint);
-        m_hint->Wrap(FromDIP(270));
-    }
+    if (kind == Kind::Failed)
+        wrap_failed_labels(title, hint);
     if (kind == Kind::Connecting && m_connecting_label != nullptr && !title.empty() &&
         m_connecting_label->GetLabelText() != title)
         m_connecting_label->SetLabelText(title);

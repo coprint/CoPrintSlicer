@@ -27,6 +27,7 @@ public:
 
     void apply_state(const PrintJobState& state);
     void set_pause_handler(ActionHandler handler);
+    void set_resume_handler(ActionHandler handler);
     void set_stop_handler(ActionHandler handler);
     void reset_thumbnail_placeholder();
 
@@ -36,6 +37,7 @@ private:
     static wxString time_text(int seconds);
     wxBitmap make_thumbnail_placeholder();
     void set_print_actions_enabled(bool enabled);
+    void set_pause_resume_icon(bool paused);
 
     DeviceCardFrame* m_frame{nullptr};
     wxStaticBitmap* m_thumbnail{nullptr};
@@ -46,9 +48,13 @@ private:
     ProgressBar* m_progress{nullptr};
     wxStaticBitmap* m_pause_icon{nullptr};
     wxStaticBitmap* m_stop_icon{nullptr};
+    wxBitmap m_pause_bitmap;
+    wxBitmap m_resume_bitmap;
     ActionHandler m_pause_handler;
+    ActionHandler m_resume_handler;
     ActionHandler m_stop_handler;
     bool m_print_actions_enabled{true};
+    bool m_print_paused{false};
 };
 
 } // namespace DeviceDashboard

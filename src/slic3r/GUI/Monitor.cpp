@@ -285,7 +285,7 @@ void MonitorPanel::ensure_coprint_backend()
                 m_coprint_backend->acknowledge_device_connect_failure();
         });
         m_coprint_backend->set_device_session_ui_handler(
-            [this](PrinterWebView::DeviceSessionUi ui, const wxString &message) {
+            [this](PrinterWebView::DeviceSessionUi ui, const wxString &message, const wxString &hint) {
                 if (m_coprint_session_overlay == nullptr)
                     return;
                 using Kind = DeviceDashboard::PrinterOfflineOverlay::Kind;
@@ -293,7 +293,9 @@ void MonitorPanel::ensure_coprint_backend()
                     m_coprint_session_overlay->set_kind(Kind::Connecting, message);
                 else if (ui == PrinterWebView::DeviceSessionUi::Failed)
                     m_coprint_session_overlay->set_kind(Kind::Failed, message,
-                        _L("Check that the printer is powered on and on the same network."));
+                        hint.empty()
+                            ? _L("Check that the printer is powered on and on the same network.")
+                            : hint);
                 else
                     m_coprint_session_overlay->set_kind(Kind::Hidden);
             });

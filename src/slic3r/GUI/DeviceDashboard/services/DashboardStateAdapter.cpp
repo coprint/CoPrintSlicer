@@ -170,6 +170,10 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
     }
 
     state.print_job.has_active_job = machine->is_in_printing();
+    if (machine->is_in_printing_pause())
+        state.print_job.state = PrintCommandState::Paused;
+    else if (state.print_job.has_active_job)
+        state.print_job.state = PrintCommandState::Printing;
     if (state.print_job.has_active_job) {
         state.print_job.file_name = display_file_name(machine);
         if (machine->slice_info != nullptr)
@@ -205,7 +209,8 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
         break;
     }
 
-    state.movement.can_move = state.connection.can_send_commands;
+    state.movement.can_move = state.connection.can_send_commands &&
+        state.print_job.state != PrintCommandState::Printing;
     return state;
 }
 

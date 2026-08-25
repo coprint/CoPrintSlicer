@@ -223,6 +223,14 @@ public:
             m_selected_tool = state.selected_tool;
             changed = true;
         }
+        if (m_interactive != state.can_load_unload) {
+            m_interactive = state.can_load_unload;
+            if (!m_interactive) {
+                SetCursor(wxCursor(wxCURSOR_ARROW));
+                m_hovered_tool = -1;
+            }
+            changed = true;
+        }
         if (changed)
             Refresh();
     }
@@ -258,7 +266,7 @@ private:
 
     void on_left_down(wxMouseEvent& event)
     {
-        if (!IsEnabled()) {
+        if (!IsEnabled() || !m_interactive) {
             event.Skip();
             return;
         }
@@ -292,7 +300,7 @@ private:
 
     void on_motion(wxMouseEvent& event)
     {
-        if (!IsEnabled()) {
+        if (!IsEnabled() || !m_interactive) {
             SetCursor(wxCursor(wxCURSOR_ARROW));
             event.Skip();
             return;
@@ -445,6 +453,7 @@ private:
     wxBitmap m_center_bmp;
     int m_selected_tool{0};
     int m_hovered_tool{-1};
+    bool m_interactive{true};
     wxPoint m_last_configure_anchor{wxDefaultPosition};
     ToolHandler m_tool_handler;
     ToolHandler m_configure_handler;
