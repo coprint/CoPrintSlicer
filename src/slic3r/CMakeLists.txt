@@ -631,6 +631,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/CrealityPrintAgent.hpp
     Utils/CrealityHostDiscovery.cpp
     Utils/CrealityHostDiscovery.hpp
+    Utils/CoprintMdnsDiscovery.cpp
+    Utils/CoprintMdnsDiscovery.hpp
     Utils/Duet.cpp
     Utils/Duet.hpp
     Utils/ElegooLink.cpp

@@ -7,6 +7,7 @@
 #include "MainFrame.hpp"
 #include "DeviceManager.hpp"
 #include "DeviceCore/DevManager.h"
+#include "slic3r/Utils/CoprintMdnsDiscovery.hpp"
 #include "Widgets/Button.hpp"
 #include "Widgets/Label.hpp"
 #include "Widgets/StaticBox.hpp"
@@ -348,13 +349,8 @@ void paint_bg(wxWindow* win, const wxColour& colour)
     win->SetBackgroundColour(colour);
 }
 
-wxString display_ip_only(const MachineObject* machine)
+std::string host_without_port(std::string value)
 {
-    if (machine == nullptr)
-        return {};
-    std::string value = machine->get_dev_ip();
-    if (value.empty())
-        value = machine->get_dev_id();
     const auto scheme = value.find("://");
     if (scheme != std::string::npos)
         value = value.substr(scheme + 3);
@@ -366,7 +362,48 @@ wxString display_ip_only(const MachineObject* machine)
         if (colon != std::string::npos)
             value = value.substr(0, colon);
     }
-    return from_u8(value);
+    return value;
+}
+
+wxString display_ip_only(const MachineObject* machine)
+{
+    if (machine == nullptr)
+        return {};
+    std::string value = machine->get_dev_ip();
+    if (value.empty())
+        value = machine->get_dev_id();
+    return from_u8(host_without_port(value));
+}
+
+bool machine_matches_mdns(const MachineObject* machine, const CoprintMdnsPrinter& printer)
+{
+    if (machine == nullptr || printer.ip.empty())
+        return false;
+    if (!printer.id.empty() &&
+        (machine->get_dev_id() == printer.id || machine->get_dev_ip() == printer.id))
+        return true;
+    const std::string discovered = host_without_port(printer.ip);
+    if (discovered.empty())
+        return false;
+    return host_without_port(machine->get_dev_ip()) == discovered ||
+           host_without_port(machine->get_dev_id()) == discovered;
+}
+
+bool is_already_added_mdns_printer(const CoprintMdnsPrinter& printer)
+{
+    auto* dev = wxGetApp().getDeviceManager();
+    if (dev == nullptr)
+        return false;
+    auto matches_any = [&](const std::map<std::string, MachineObject*>& machines) {
+        for (const auto& entry : machines) {
+            if (machine_matches_mdns(entry.second, printer))
+                return true;
+        }
+        return false;
+    };
+    return matches_any(dev->get_my_machine_list()) ||
+           matches_any(dev->get_local_machinelist()) ||
+           machine_matches_mdns(dev->get_selected_machine(), printer);
 }
 
 bool same_machine(const MachineObject* a, const MachineObject* b)
@@ -409,6 +446,13 @@ CoPrintPrinterPicker::CoPrintPrinterPicker(wxWindow* parent, PrinterWebView* bac
     apply_header_style();
     if (m_chevron != nullptr)
         m_chevron->SetBitmap(m_expanded && m_arrow_down.IsOk() ? m_arrow_down : m_arrow_right);
+}
+
+CoPrintPrinterPicker::~CoPrintPrinterPicker()
+{
+    m_add_mode = false;
+    m_lifetime_token.reset();
+    stop_mdns_discovery();
 }
 
 void CoPrintPrinterPicker::set_open_status_handler(std::function<void()> handler)
@@ -634,7 +678,10 @@ void CoPrintPrinterPicker::build_add_printer()
     try_ip_lbl->Bind(wxEVT_LEFT_DOWN, go_ip);
     auto_sz->Add(try_ip, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, FromDIP(8));
     auto_page->SetSizer(auto_sz);
-    refresh_btn->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) { rebuild_auto_list(true); });
+    refresh_btn->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
+        m_mdns.request_query();
+        rebuild_auto_list(true);
+    });
 
     auto* ip_page = new wxPanel(m_add_book, wxID_ANY);
     ip_page->SetBackgroundColour(kHeaderBg);
@@ -745,6 +792,7 @@ void CoPrintPrinterPicker::show_add_printer()
         m_submenu_border->Hide();
     if (m_add_panel != nullptr)
         m_add_panel->Show();
+    start_mdns_discovery();
     rebuild_auto_list(true);
     apply_add_tab(m_add_tab);
     relayout_parents();
@@ -759,6 +807,7 @@ void CoPrintPrinterPicker::hide_add_printer()
     if (!m_add_mode)
         return;
     m_add_mode = false;
+    stop_mdns_discovery();
     if (m_add_panel != nullptr)
         m_add_panel->Hide();
     if (m_header != nullptr)
@@ -793,19 +842,33 @@ void CoPrintPrinterPicker::apply_add_tab(int idx)
 
 std::string CoPrintPrinterPicker::auto_list_signature() const
 {
-    auto* dev = wxGetApp().getDeviceManager();
-    if (dev == nullptr)
-        return {};
     std::string out;
-    for (const auto& entry : dev->get_local_machinelist()) {
-        if (entry.second == nullptr)
+    for (const CoprintMdnsPrinter& printer : m_mdns_printers) {
+        if (is_already_added_mdns_printer(printer))
             continue;
-        out += entry.second->get_dev_id();
+        out += printer.service;
         out += '|';
-        out += entry.second->get_dev_name();
+        out += printer.name;
         out += '|';
-        out += entry.second->get_dev_ip();
+        out += printer.ip;
+        out += '|';
+        out += std::to_string(printer.port);
         out += ';';
+    }
+    auto* dev = wxGetApp().getDeviceManager();
+    if (dev != nullptr) {
+        auto append_known = [&](const std::map<std::string, MachineObject*>& machines) {
+            for (const auto& entry : machines) {
+                if (entry.second == nullptr)
+                    continue;
+                out += '#';
+                out += host_without_port(entry.second->get_dev_ip());
+                out += '|';
+                out += host_without_port(entry.second->get_dev_id());
+            }
+        };
+        append_known(dev->get_my_machine_list());
+        append_known(dev->get_local_machinelist());
     }
     return out;
 }
@@ -819,18 +882,12 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
         return;
     m_auto_list_signature = signature;
     m_auto_list_sizer->Clear(true);
-    auto* dev_manager = wxGetApp().getDeviceManager();
-    if (dev_manager != nullptr)
-        dev_manager->start_refresher();
-    if (m_backend != nullptr)
-        m_backend->begin_moonraker_lan_scan();
 
-    const auto locals = dev_manager ? dev_manager->get_local_machinelist() : std::map<std::string, MachineObject*>();
-    for (const auto& it : locals) {
-        MachineObject* obj = it.second;
-        if (obj == nullptr)
+    int visible_count = 0;
+    for (const CoprintMdnsPrinter& printer : m_mdns_printers) {
+        if (is_already_added_mdns_printer(printer))
             continue;
-
+        ++visible_count;
         auto* card = new StaticBox(m_auto_list, wxID_ANY);
         card->SetCornerRadius(static_cast<double>(FromDIP(8)));
         card->SetBorderWidth(1);
@@ -863,9 +920,7 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
         texts->SetBackgroundColour(kAutoCardBg);
         texts->SetCursor(wxCursor(wxCURSOR_HAND));
         auto* texts_sizer = new wxBoxSizer(wxVERTICAL);
-        wxString name = m_backend != nullptr
-            ? m_backend->sidebar_display_name_for(obj)
-            : from_u8(obj->get_dev_name());
+        const wxString name = from_u8(printer.name.empty() ? printer.ip : printer.name);
         auto* name_lbl = new wxStaticText(texts, wxID_ANY, name, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
         wxFont name_font = Label::sysFont(13, false);
         name_font.SetWeight(wxFONTWEIGHT_SEMIBOLD);
@@ -873,7 +928,8 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
         name_lbl->SetForegroundColour(kTextPrimary);
         name_lbl->SetBackgroundColour(kAutoCardBg);
         name_lbl->SetCursor(wxCursor(wxCURSOR_HAND));
-        auto* ip_lbl = new wxStaticText(texts, wxID_ANY, display_ip_only(obj), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+        const wxString ip = from_u8(printer.ip);
+        auto* ip_lbl = new wxStaticText(texts, wxID_ANY, ip, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
         wxFont ip_font = Label::sysFont(10, false);
         ip_font.SetWeight(wxFONTWEIGHT_LIGHT);
         ip_lbl->SetFont(ip_font);
@@ -890,7 +946,7 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
         ip_lbl->SetMinSize(wxSize(text_w, -1));
         ip_lbl->SetMaxSize(wxSize(text_w, -1));
         name_lbl->SetToolTip(name);
-        ip_lbl->SetToolTip(display_ip_only(obj));
+        ip_lbl->SetToolTip(ip);
         row->Add(texts, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
         row->Add(add_btn, 0, wxALIGN_CENTER_VERTICAL);
 
@@ -900,22 +956,7 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
         card->SetMinSize(wxSize(list_w, -1));
         card->SetMaxSize(wxSize(list_w, -1));
 
-        const std::string dev_id = obj->get_dev_id();
-        const std::string dev_ip = obj->get_dev_ip();
-        const std::string dev_name = obj->get_dev_name();
-        const std::string printer_type = obj->printer_type.empty() ? std::string("Moonraker") : obj->printer_type;
-        const bool local_use_ssl = obj->local_use_ssl;
-        auto add_machine = [this, dev_id, dev_ip, dev_name, printer_type, local_use_ssl]() {
-            if (m_backend == nullptr)
-                return;
-            BBLocalMachine machine;
-            machine.dev_id = dev_id;
-            machine.dev_ip = dev_ip;
-            machine.dev_name = dev_name;
-            machine.printer_type = printer_type;
-            if (m_backend->finish_add_moonraker_printer(machine, local_use_ssl))
-                hide_add_printer();
-        };
+        auto add_machine = [this, printer]() { add_discovered_printer(printer); };
         auto add_from_mouse = [add_machine](wxMouseEvent& evt) {
             evt.StopPropagation();
             add_machine();
@@ -928,8 +969,11 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
 
         m_auto_list_sizer->Add(card, 0, wxEXPAND | wxBOTTOM, FromDIP(kAutoCardGapDip));
     }
-    if (locals.empty()) {
-        auto* empty = new wxStaticText(m_auto_list, wxID_ANY, _L("No printers discovered yet. Tap Refresh."));
+    if (visible_count == 0) {
+        const wxString empty_text = m_mdns_printers.empty()
+            ? _L("No printers discovered yet. Tap Refresh.")
+            : _L("No new printers found.");
+        auto* empty = new wxStaticText(m_auto_list, wxID_ANY, empty_text);
         empty->SetForegroundColour(kTextMuted);
         empty->SetMinSize(wxSize(1, -1));
         empty->Wrap(std::max(FromDIP(80), auto_list_width()));
@@ -955,6 +999,86 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
     update_auto_scrollbar();
     if (m_add_mode)
         relayout_parents();
+}
+
+void CoPrintPrinterPicker::start_mdns_discovery()
+{
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    m_mdns.start([this, lifetime](const CoprintMdnsPrinter& printer, bool lost) {
+        wxGetApp().CallAfter([this, lifetime, printer, lost]() {
+            if (lifetime.expired())
+                return;
+            on_mdns_printer(printer, lost);
+        });
+    });
+}
+
+void CoPrintPrinterPicker::stop_mdns_discovery()
+{
+    m_mdns.stop();
+    m_mdns_printers.clear();
+    m_auto_list_signature.clear();
+}
+
+void CoPrintPrinterPicker::on_mdns_printer(const CoprintMdnsPrinter& printer, bool lost)
+{
+    if (!m_add_mode)
+        return;
+
+    auto same = [&](const CoprintMdnsPrinter& existing) {
+        if (!printer.service.empty() && existing.service == printer.service)
+            return true;
+        return !printer.ip.empty() && existing.ip == printer.ip;
+    };
+
+    if (lost) {
+        const auto it = std::remove_if(m_mdns_printers.begin(), m_mdns_printers.end(), same);
+        if (it == m_mdns_printers.end())
+            return;
+        m_mdns_printers.erase(it, m_mdns_printers.end());
+        rebuild_auto_list(true);
+        return;
+    }
+
+    auto it = std::find_if(m_mdns_printers.begin(), m_mdns_printers.end(), same);
+    if (it != m_mdns_printers.end()) {
+        if (*it == printer)
+            return;
+        *it = printer;
+    } else {
+        m_mdns_printers.push_back(printer);
+    }
+    std::sort(m_mdns_printers.begin(), m_mdns_printers.end(),
+        [](const CoprintMdnsPrinter& a, const CoprintMdnsPrinter& b) {
+            if (a.name != b.name)
+                return a.name < b.name;
+            return a.ip < b.ip;
+        });
+    rebuild_auto_list(true);
+}
+
+void CoPrintPrinterPicker::add_discovered_printer(const CoprintMdnsPrinter& printer)
+{
+    if (m_backend == nullptr || printer.ip.empty())
+        return;
+    if (is_already_added_mdns_printer(printer))
+        return;
+
+    BBLocalMachine machine;
+    // `_coprintagent._tcp` advertises the CoPrint agent HTTP port (werkzeug),
+    // not Moonraker. Probe Moonraker on 7125, same as IP Connect.
+    machine.dev_ip = printer.ip;
+    machine.dev_id = printer.id.empty() ? machine.dev_ip : printer.id;
+    machine.dev_name = printer.name.empty() ? printer.ip : printer.name;
+    machine.printer_type = printer.model.empty() ? std::string("Moonraker") : printer.model;
+
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    m_backend->add_moonraker_printer_async(machine, false,
+        [this, lifetime](bool ok, const wxString&) {
+            if (lifetime.expired() || !ok)
+                return;
+            hide_add_printer();
+        });
 }
 
 int CoPrintPrinterPicker::auto_list_width() const

@@ -4,10 +4,13 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <wx/bitmap.h>
 #include <wx/panel.h>
 #include <wx/string.h>
+
+#include "slic3r/Utils/CoprintMdnsDiscovery.hpp"
 
 class wxBoxSizer;
 class wxSimplebook;
@@ -28,6 +31,7 @@ class CoPrintPrinterPicker : public wxPanel
 {
 public:
     explicit CoPrintPrinterPicker(wxWindow* parent, PrinterWebView* backend);
+    ~CoPrintPrinterPicker() override;
 
     void set_open_status_handler(std::function<void()> handler);
     void set_status_page_active(bool active);
@@ -62,6 +66,10 @@ private:
     std::string auto_list_signature() const;
     void try_ip_add();
     std::string list_signature() const;
+    void start_mdns_discovery();
+    void stop_mdns_discovery();
+    void on_mdns_printer(const CoprintMdnsPrinter& printer, bool lost);
+    void add_discovered_printer(const CoprintMdnsPrinter& printer);
 
     PrinterWebView*         m_backend{nullptr};
     std::function<void()>   m_open_status;
@@ -96,6 +104,8 @@ private:
     std::shared_ptr<int>    m_lifetime_token{std::make_shared<int>(1)};
     std::string             m_list_signature;
     std::string             m_auto_list_signature;
+    CoprintMdnsDiscovery    m_mdns;
+    std::vector<CoprintMdnsPrinter> m_mdns_printers;
 };
 
 } // namespace GUI
