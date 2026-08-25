@@ -531,10 +531,14 @@ void Bed3D::render_texture(bool bottom, GLCanvas3D& canvas)
         m_texture.reset();
         m_texture_quad.reset();
 
-        GLint max_tex_size = OpenGLManager::get_gl_info().get_max_tex_size();
+        // Cap like PartPlate (2048). Full GL max is 8192 on Windows; SVG mipmaps
+        // at that size freeze Prepare/Preview, and async DXT5 leaves a black plate
+        // until the compressor finishes (Mac often has no S3TC so it showed sooner).
+        const GLint max_tex_size = OpenGLManager::get_gl_info().get_max_tex_size();
+        const GLint bed_tex_size = std::min(max_tex_size, 2048);
         const bool loaded = boost::algorithm::iends_with(m_texture_filename, ".svg")
-            ? m_texture.load_from_svg_file(m_texture_filename, true, true, true, max_tex_size)
-            : m_texture.load_from_file(m_texture_filename, true, GLTexture::MultiThreaded, true);
+            ? m_texture.load_from_svg_file(m_texture_filename, false, false, true, bed_tex_size)
+            : m_texture.load_from_file(m_texture_filename, false, GLTexture::None, true);
         if (!loaded) {
             BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": failed to load bed texture from %1%") % m_texture_filename;
             return;
