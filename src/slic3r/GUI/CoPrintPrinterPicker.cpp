@@ -1182,7 +1182,7 @@ void CoPrintPrinterPicker::try_ip_add()
                 m_ip_field->Enable(true);
             if (!ok) {
                 if (m_ip_status != nullptr)
-                    m_ip_status->SetLabelText(message.IsEmpty() ? _L("Could not connect to the printer.") : message);
+                    m_ip_status->SetLabelText(message);
                 return;
             }
             hide_add_printer();

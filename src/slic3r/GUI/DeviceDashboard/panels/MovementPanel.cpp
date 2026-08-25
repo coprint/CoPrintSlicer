@@ -28,6 +28,8 @@ int s(int v) { return DeviceUiStyle::scaled(v); }
 constexpr double DistanceOptions[] = {1.0, 5.0, 10.0, 50.0};
 constexpr int kHoverDarken = 18;
 constexpr int kPressDarken = 28;
+const wxColour kJoystickButtonBg(0xD6, 0xD6, 0xD6);
+const wxColour kJoystickButtonDisabled(0xEE, 0xEE, 0xEE);
 
 wxColour darken(const wxColour& colour, int amount)
 {
@@ -133,9 +135,9 @@ private:
         const double x = std::max(0, (hs.x - shape_w) / 2);
         const double y = std::max(0, (hs.y - shape_h) / 2) + press_offset;
 
-        wxColour fill(0xD6, 0xD6, 0xD6);
+        wxColour fill = kJoystickButtonBg;
         if (!IsEnabled())
-            fill = wxColour(0xEE, 0xEE, 0xEE);
+            fill = kJoystickButtonDisabled;
         else if (m_pressed)
             fill = darken(fill, kPressDarken);
         else if (m_hovered)
@@ -485,17 +487,16 @@ private:
         label_font.SetPointSize(std::max(9, s(label_font.GetPointSize() + 4)));
         label_font.SetWeight(wxFONTWEIGHT_BOLD);
 
-        const wxColour piece_bg(214, 214, 214);
         for (const auto& piece : pieces()) {
             const bool pressed = piece.action == m_pressed_action;
             const bool hovered = piece.action == m_hovered_action;
-            wxColour fill = piece_bg;
+            wxColour fill = kJoystickButtonBg;
             if (!IsEnabled())
-                fill = wxColour(238, 238, 238);
+                fill = kJoystickButtonDisabled;
             else if (pressed)
-                fill = darken(piece_bg, kPressDarken);
+                fill = darken(kJoystickButtonBg, kPressDarken);
             else if (hovered)
-                fill = darken(piece_bg, kHoverDarken);
+                fill = darken(kJoystickButtonBg, kHoverDarken);
             gc->SetBrush(wxBrush(fill));
             gc->SetPen(*wxTRANSPARENT_PEN);
             gc->DrawPath(rounded_path(gc.get(), piece.points, 15.0 * m_square / 300.0));
@@ -554,14 +555,14 @@ void set_button_active(Button* button, bool active, int8_t& cached_active, bool 
         std::pair(normal_bg, (int) StateColor::Normal))));
 }
 
-void set_button_enabled(Button* button, bool enabled)
+void set_button_enabled(Button* button, bool enabled, const wxColour& normal_bg = DeviceUiStyle::control_background(),
+                        const wxColour& disabled_bg = wxColour(240, 240, 240))
 {
     if (button == nullptr)
         return;
 
     button->Enable(enabled);
     button->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));
-    const wxColour normal_bg = DeviceUiStyle::control_background();
     button->SetBorderColor(mouse_hover_color(StateColor(
         std::pair(DeviceUiStyle::card_border(), (int) StateColor::Disabled),
         std::pair(DeviceUiStyle::accent(), (int) StateColor::Pressed),
@@ -573,7 +574,7 @@ void set_button_enabled(Button* button, bool enabled)
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal))));
     button->SetBackgroundColor(mouse_hover_color(StateColor(
-        std::pair(wxColour(240, 240, 240), (int) StateColor::Disabled),
+        std::pair(disabled_bg, (int) StateColor::Disabled),
         std::pair(darken(normal_bg, kPressDarken), (int) StateColor::Pressed),
         std::pair(darken(normal_bg, kHoverDarken), (int) StateColor::Hovered),
         std::pair(normal_bg, (int) StateColor::Normal))));
@@ -627,7 +628,7 @@ MovementPanel::MovementPanel(wxWindow* parent)
         }
     });
 
-    const wxColour home_bg(0xD6, 0xD6, 0xD7);
+    const wxColour home_bg = kJoystickButtonBg;
     auto* center_btn = new Button(xy_area, wxString(), "home", 0, 34);
     m_center_button = center_btn;
     center_btn->SetSize(wxRect(wxPoint(xy_area->center_pos(), xy_area->center_pos()), wxSize(xy_area->center_size(), xy_area->center_size())));
@@ -636,7 +637,7 @@ MovementPanel::MovementPanel(wxWindow* parent)
     center_btn->SetCornerRadius(FromDIP(7));
     center_btn->SetBorderWidth(0);
     center_btn->SetBackgroundColor(mouse_hover_color(StateColor(
-        std::pair(home_bg, (int) StateColor::Disabled),
+        std::pair(kJoystickButtonDisabled, (int) StateColor::Disabled),
         std::pair(darken(home_bg, kPressDarken), (int) StateColor::Pressed),
         std::pair(darken(home_bg, kHoverDarken), (int) StateColor::Hovered),
         std::pair(home_bg, (int) StateColor::Normal))));
@@ -816,7 +817,7 @@ void MovementPanel::set_controls_enabled(bool enabled)
         m_xy_area->Refresh();
     }
     if (m_center_button != nullptr)
-        set_button_enabled(m_center_button, enabled);
+        set_button_enabled(m_center_button, enabled, kJoystickButtonBg, kJoystickButtonDisabled);
     if (m_z_plus_host != nullptr) {
         m_z_plus_host->Enable(enabled);
         m_z_plus_host->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));

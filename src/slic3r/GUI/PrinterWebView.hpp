@@ -172,6 +172,10 @@ private:
     void refresh_connected_printer_header(MachineObject *obj);
     void refresh_printer_info_labels(MachineObject *obj);
     void refresh_camera_stream(MachineObject *obj);
+    void reset_dashboard_snapshot();
+    void begin_filament_snapshot_fetch(MachineObject *obj);
+    void reveal_dashboard_if_ready(MachineObject *obj);
+    bool is_dashboard_snapshot_ready() const;
     void start_camera_stream();
     void stop_camera_stream();
     void handle_camera_webview_title(const wxString &title);
@@ -281,6 +285,9 @@ private:
     DeviceDashboard::PrintJobState m_moonraker_print_job;
     bool m_moonraker_status_fetch_in_progress{ false };
     std::string m_moonraker_status_machine_id;
+    bool m_dashboard_snapshot_ready{ false };
+    bool m_filament_snapshot_ready{ false };
+    bool m_filament_snapshot_fetch_in_progress{ false };
     wxString m_filament_preview_fetch_key;
     bool m_filament_preview_fetch_in_progress{ false };
     wxPanel *m_preview_menu_panel{ nullptr };
