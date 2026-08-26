@@ -14,6 +14,7 @@
 #include "GLCanvas3D.hpp"
 #include "Plater.hpp"
 #include "Camera.hpp"
+#include "2DBed.hpp"
 
 #include <glad/gl.h>
 
@@ -205,8 +206,8 @@ const float Bed3D::Axes::DefaultTipLength = 5.0f;
 // ORCA make bed colors accessable for 2D bed
 ColorRGBA Bed3D::DEFAULT_MODEL_COLOR             = { 0.3255f, 0.337f, 0.337f, 1.0f };
 ColorRGBA Bed3D::DEFAULT_MODEL_COLOR_DARK        = { 0.255f, 0.255f, 0.283f, 1.0f };
-ColorRGBA Bed3D::DEFAULT_SOLID_GRID_COLOR        = { 0.9f, 0.9f, 0.9f, 1.0f };
-ColorRGBA Bed3D::DEFAULT_TRANSPARENT_GRID_COLOR  = { 0.9f, 0.9f, 0.9f, 0.6f };
+ColorRGBA Bed3D::DEFAULT_SOLID_GRID_COLOR        = { 133.0f / 255.0f, 139.0f / 255.0f, 136.0f / 255.0f, 1.0f }; // #858B88
+ColorRGBA Bed3D::DEFAULT_TRANSPARENT_GRID_COLOR  = { 133.0f / 255.0f, 139.0f / 255.0f, 136.0f / 255.0f, 1.0f }; // #858B88
 
 ColorRGBA Bed3D::AXIS_X_COLOR = ColorRGBA::X();
 ColorRGBA Bed3D::AXIS_Y_COLOR = ColorRGBA::Y();
@@ -676,14 +677,16 @@ void Bed3D::update_gridlines()
     const ExPolygon poly{ Polygon::new_scale(world_shape) };
     const BoundingBox bed_bbox = poly.contour.bounding_box();
 
+    const int step_mm = Bed_2D::calculate_grid_step(bed_bbox, scale_(1.00));
+    const coord_t step = scale_(double(step_mm));
     Polylines axes_lines;
-    for (coord_t x = bed_bbox.min.x(); x <= bed_bbox.max.x(); x += scale_(20.0)) {
+    for (coord_t x = bed_bbox.min.x(); x <= bed_bbox.max.x(); x += step) {
         Polyline line;
         line.append(Point(x, bed_bbox.min.y()));
         line.append(Point(x, bed_bbox.max.y()));
         axes_lines.push_back(line);
     }
-    for (coord_t y = bed_bbox.min.y(); y <= bed_bbox.max.y(); y += scale_(20.0)) {
+    for (coord_t y = bed_bbox.min.y(); y <= bed_bbox.max.y(); y += step) {
         Polyline line;
         line.append(Point(bed_bbox.min.x(), y));
         line.append(Point(bed_bbox.max.x(), y));
