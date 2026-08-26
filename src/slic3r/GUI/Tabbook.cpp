@@ -32,6 +32,16 @@ TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools)
     SetDoubleBuffered(true);
 #endif //__WINDOWS__
     SetBackgroundColour(TAB_BUTTON_BG);
+#ifdef __WXMSW__
+    // wxControl does not paint unused client area; without this the space
+    // below the tab buttons shows the Tabbook page background (#EEEEEF).
+    Bind(wxEVT_ERASE_BACKGROUND, [this](wxEraseEvent &event) {
+        if (wxDC *dc = event.GetDC()) {
+            dc->SetBackground(wxBrush(GetBackgroundColour()));
+            dc->Clear();
+        }
+    });
+#endif
 
     int em = em_unit(this);
     // BBS: no gap

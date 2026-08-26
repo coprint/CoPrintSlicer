@@ -82,7 +82,7 @@ public:
             mainSizer->Add(0, 0, 1, wxEXPAND, 0);
 
         m_controlSizer = new wxBoxSizer(IsVertical() ? wxHORIZONTAL : wxVERTICAL);
-        m_controlSizer->Add(m_bookctrl, wxSizerFlags(0).Expand());
+        m_controlSizer->Add(m_bookctrl, wxSizerFlags(1).Expand());
         wxSizerFlags flags;
         if (IsVertical())
             flags.Expand();

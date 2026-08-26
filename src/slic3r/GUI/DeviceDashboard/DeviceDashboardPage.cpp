@@ -290,6 +290,62 @@ void DeviceDashboardPage::set_printer_status_handlers(
 
 namespace {
 constexpr int kCardRadiusDip = 15;
+
+bool overlay_uses_dark_scrim(PrinterOfflineOverlay::Kind kind)
+{
+    return kind == PrinterOfflineOverlay::Kind::Connecting
+        || kind == PrinterOfflineOverlay::Kind::Failed;
+}
+
+wxColour overlay_scrim_colour(bool dark)
+{
+#ifdef __WXMSW__
+    // Alpha brushes on wxGraphicsContext make this HWND (and its children) look
+    // washed-out on Windows. Bake the intended 140/255 or 153/255 veil into an
+    // opaque colour so the warning card stays solid white.
+    const wxColour base = DeviceUiStyle::page_background();
+    const wxColour tint = dark ? wxColour(0, 0, 0) : wxColour(0xD9, 0xD9, 0xD9);
+    const int a = dark ? 140 : 153;
+    const auto mix = [a](int src, int dst) {
+        return (dst * a + src * (255 - a)) / 255;
+    };
+    return wxColour(mix(base.Red(), tint.Red()), mix(base.Green(), tint.Green()),
+        mix(base.Blue(), tint.Blue()));
+#else
+    return dark ? wxColour(0, 0, 0, 140) : wxColour(0xD9, 0xD9, 0xD9, 153);
+#endif
+}
+
+void bind_overlay_card(wxPanel *card, PrinterOfflineOverlay *overlay)
+{
+    card->SetBackgroundColour(*wxWHITE);
+    card->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+#ifdef __WXMSW__
+    card->SetDoubleBuffered(true);
+    card->Bind(wxEVT_PAINT, [card, overlay](wxPaintEvent &) {
+        wxAutoBufferedPaintDC dc(card);
+        const wxSize sz = card->GetClientSize();
+        if (sz.GetWidth() <= 0 || sz.GetHeight() <= 0)
+            return;
+        const wxColour scrim = overlay_scrim_colour(overlay_uses_dark_scrim(overlay->kind()));
+        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+        if (gc == nullptr) {
+            dc.SetBackground(wxBrush(*wxWHITE));
+            dc.Clear();
+            return;
+        }
+        gc->SetPen(*wxTRANSPARENT_PEN);
+        gc->SetBrush(wxBrush(scrim));
+        gc->DrawRectangle(0, 0, sz.GetWidth(), sz.GetHeight());
+        gc->SetBrush(wxBrush(*wxWHITE));
+        gc->DrawRoundedRectangle(0, 0, sz.GetWidth(), sz.GetHeight(),
+            card->FromDIP(kCardRadiusDip));
+    });
+#else
+    card->Bind(wxEVT_PAINT, [](wxPaintEvent &) {});
+#endif
+}
 }
 
 DeviceBusySpinner::DeviceBusySpinner(wxWindow *parent, const wxSize &size, const wxColour &bg)
@@ -370,15 +426,24 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     : wxPanel(parent, wxID_ANY)
 {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
+#ifdef __WXMSW__
+    SetDoubleBuffered(true);
+#endif
     Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
+#ifdef __WXMSW__
+        wxAutoBufferedPaintDC dc(this);
+        const wxSize sz = GetClientSize();
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(overlay_scrim_colour(overlay_uses_dark_scrim(m_kind))));
+        dc.DrawRectangle(0, 0, sz.GetWidth(), sz.GetHeight());
+#else
         wxPaintDC dc(this);
-        wxGraphicsContext *gc = wxGraphicsContext::Create(dc);
+        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
         if (gc == nullptr)
             return;
         const wxSize sz = GetClientSize();
         gc->SetPen(*wxTRANSPARENT_PEN);
-        const bool dark_scrim = m_kind == Kind::Connecting || m_kind == Kind::Failed;
-        gc->SetBrush(wxBrush(dark_scrim ? wxColour(0, 0, 0, 140) : wxColour(0xD9, 0xD9, 0xD9, 153)));
+        gc->SetBrush(wxBrush(overlay_scrim_colour(overlay_uses_dark_scrim(m_kind))));
         gc->DrawRectangle(0, 0, sz.GetWidth(), sz.GetHeight());
         if (wxPanel *card = active_card()) {
             const wxRect rect = card->GetRect();
@@ -386,7 +451,7 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
             gc->DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height,
                 FromDIP(kCardRadiusDip));
         }
-        delete gc;
+#endif
     });
     Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
     const auto swallow_mouse = [](wxMouseEvent &event) { event.Skip(false); };
@@ -398,9 +463,7 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     Bind(wxEVT_MOUSEWHEEL, swallow_mouse);
 
     m_connecting_card = new wxPanel(this, wxID_ANY);
-    m_connecting_card->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_connecting_card->Bind(wxEVT_PAINT, [](wxPaintEvent &) {});
-    m_connecting_card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    bind_overlay_card(m_connecting_card, this);
     m_connecting_card->SetMinSize(wxSize(FromDIP(200), FromDIP(176)));
     m_connecting_card->SetMaxSize(wxSize(FromDIP(200), FromDIP(176)));
     const int spinner_px = FromDIP(48);
@@ -431,9 +494,7 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     m_connecting_card->Hide();
 
     m_failed_card = new wxPanel(this, wxID_ANY);
-    m_failed_card->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    m_failed_card->Bind(wxEVT_PAINT, [](wxPaintEvent &) {});
-    m_failed_card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    bind_overlay_card(m_failed_card, this);
     m_failed_card->SetMinSize(wxSize(FromDIP(360), FromDIP(200)));
     m_failed_card->SetMaxSize(wxSize(FromDIP(360), -1));
     m_title = new wxStaticText(m_failed_card, wxID_ANY, _L("Could not connect to the printer."),

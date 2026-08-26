@@ -22,6 +22,7 @@
 #include "../Utils/MacDarkMode.hpp"
 #endif
 #include <wx/dcbuffer.h>
+#include <wx/dcclient.h>
 #include <wx/dcgraph.h>
 #include <wx/mstream.h>
 #include <wx/timer.h>
@@ -68,6 +69,44 @@ wxBitmap load_model_card_png(wxWindow* host, const char* filename, int dip)
         img.Rescale(px, px, wxIMAGE_QUALITY_HIGH);
     return wxBitmap(img);
 #endif
+}
+
+// GDI on Windows ignores brush alpha, so wxColour(0,0,0,135) paints solid black.
+void fill_rect_alpha(wxDC &dc, const wxRect &rect, const wxColour &colour, double radius = 0)
+{
+    if (rect.width <= 0 || rect.height <= 0)
+        return;
+#ifdef __WXMSW__
+    auto draw = [&](wxDC &target) {
+        target.SetPen(*wxTRANSPARENT_PEN);
+        target.SetBrush(wxBrush(colour));
+        if (radius > 0)
+            target.DrawRoundedRectangle(rect.x, rect.y, rect.width, rect.height, radius);
+        else
+            target.DrawRectangle(rect);
+    };
+    if (auto *mem = dynamic_cast<wxMemoryDC *>(&dc)) {
+        wxGCDC gcdc(*mem);
+        draw(gcdc);
+        return;
+    }
+    if (auto *win = dynamic_cast<wxWindowDC *>(&dc)) {
+        wxGCDC gcdc(*win);
+        draw(gcdc);
+        return;
+    }
+    const int a = colour.Alpha();
+    dc.SetPen(*wxTRANSPARENT_PEN);
+    dc.SetBrush(wxBrush(wxColour(colour.Red() * a / 255, colour.Green() * a / 255,
+        colour.Blue() * a / 255)));
+#else
+    dc.SetPen(*wxTRANSPARENT_PEN);
+    dc.SetBrush(wxBrush(colour));
+#endif
+    if (radius > 0)
+        dc.DrawRoundedRectangle(rect, radius);
+    else
+        dc.DrawRectangle(rect);
 }
 
 class ModelGridOverlayScroll : public wxWindow
@@ -1392,9 +1431,7 @@ private:
 
         if (m_hover) {
             wxRect actions = action_rect();
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(wxColour(0, 0, 0, 135)));
-            dc.DrawRectangle(actions);
+            fill_rect_alpha(dc, actions, wxColour(0, 0, 0, 135));
 
             const int divider_x = actions.x + actions.width / 2;
             dc.SetPen(wxPen(wxColour("#59616B"), FromDIP(1)));
@@ -1791,9 +1828,7 @@ private:
         if (m_selected) {
             const int overlay_h = FromDIP(40);
             wxRect overlay(FromDIP(2), size.y - overlay_h - FromDIP(2), size.x - FromDIP(4), overlay_h);
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(wxColour(0, 0, 0, 170)));
-            dc.DrawRoundedRectangle(overlay.x, overlay.y, overlay.width, overlay.height, FromDIP(6));
+            fill_rect_alpha(dc, overlay, wxColour(0, 0, 0, 170), FromDIP(6));
 
             dc.SetFont(Label::Head_13);
             dc.SetTextForeground(*wxWHITE);
