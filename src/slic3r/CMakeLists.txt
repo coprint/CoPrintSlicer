@@ -381,6 +381,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/PlateSettingsDialog.hpp
     GUI/Preferences.cpp
     GUI/Preferences.hpp
+    GUI/CoprintSettingsDialog.cpp
+    GUI/CoprintSettingsDialog.hpp
     GUI/PresetBundleDialog.cpp
     GUI/PresetBundleDialog.hpp
     GUI/ExportPresetBundleDialog.cpp

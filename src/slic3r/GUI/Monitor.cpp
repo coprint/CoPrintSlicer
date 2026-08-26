@@ -43,6 +43,24 @@ namespace GUI {
 
 #define REFRESH_INTERVAL       1000
 
+namespace {
+void rehost_expand(wxWindow *win, wxWindow *new_parent, wxSizer *new_sizer)
+{
+    if (win == nullptr || new_parent == nullptr || new_sizer == nullptr)
+        return;
+    if (win->GetParent() == new_parent && win->GetContainingSizer() == new_sizer)
+        return;
+    if (wxSizer *old = win->GetContainingSizer())
+        old->Detach(win);
+    if (win->GetParent() != new_parent)
+        win->Reparent(new_parent);
+    if (new_sizer->GetItem(win) == nullptr)
+        new_sizer->Add(win, 1, wxEXPAND);
+    win->Show();
+    new_parent->Layout();
+}
+} // namespace
+
 AddMachinePanel::AddMachinePanel(wxWindow* parent, wxWindowID id, const wxPoint& pos, const wxSize& size, long style, const wxString& name)
     : wxPanel(parent, id, pos, size, style)
 {
@@ -177,13 +195,13 @@ void MonitorPanel::init_tabpanel()
     sizer_side_tools->Add(m_side_tools, 1, wxEXPAND, 0);
     m_tabpanel             = new Tabbook(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, sizer_side_tools, wxNB_LEFT | wxTAB_TRAVERSAL | wxNB_NOPAGETHEME);
     m_side_tools->set_table_panel(m_tabpanel);
-    m_tabpanel->SetBackgroundColour(wxColour("#EEEEEF"));
+    m_tabpanel->SetBackgroundColour(wxColour("#FEFFFF"));
     m_tabpanel->Bind(wxEVT_BOOKCTRL_PAGE_CHANGED, [this](wxBookCtrlEvent& e) {
         auto page = m_tabpanel->GetCurrentPage();
         if (page == m_media_file_panel) {
             auto title = m_tabpanel->GetPageText(m_tabpanel->GetSelection());
             m_media_file_panel->SwitchStorage(title == _L("Storage"));
-        } else if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+        } else if (is_quadro_device_ui()) {
             if (m_coprint_printer_picker != nullptr)
                 m_coprint_printer_picker->set_status_page_active(page == m_coprint_status_panel);
             if (page == m_coprint_print_models_page)
@@ -233,7 +251,6 @@ void MonitorPanel::init_tabpanel()
     m_coprint_update_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
 
     m_initialized = true;
-    configure_device_ui(DeviceUiMode::CoPrint);
     show_status((int)MonitorStatus::MONITOR_NO_PRINTER);
 }
 
@@ -243,38 +260,9 @@ void MonitorPanel::ensure_coprint_backend()
         return;
 
     m_coprint_backend = new PrinterWebView(this);
-    m_coprint_backend->set_embedded_in_monitor(true);
     m_coprint_backend->Hide();
-
-    if (wxPanel* status_host = m_coprint_backend->coprint_status_host()) {
-        if (m_coprint_status_panel != nullptr && status_host->GetParent() != m_coprint_status_panel) {
-            wxSizer* host_sizer = m_coprint_status_panel->GetSizer();
-            if (host_sizer == nullptr) {
-                host_sizer = new wxBoxSizer(wxVERTICAL);
-                m_coprint_status_panel->SetSizer(host_sizer);
-            }
-            if (wxSizer* old_sizer = status_host->GetContainingSizer())
-                old_sizer->Detach(status_host);
-            status_host->Reparent(m_coprint_status_panel);
-            status_host->Show();
-            host_sizer->Add(status_host, 1, wxEXPAND);
-            m_coprint_status_panel->Layout();
-        }
-    }
-
-    if (m_coprint_update_page != nullptr && m_coprint_backend->coprint_update_page() != nullptr) {
-        wxSizer* sizer = m_coprint_update_page->GetSizer();
-        if (sizer == nullptr) {
-            sizer = new wxBoxSizer(wxVERTICAL);
-            m_coprint_update_page->SetSizer(sizer);
-        }
-        wxWindow* update_content = m_coprint_backend->coprint_update_page();
-        if (update_content != nullptr && update_content->GetParent() != m_coprint_update_page) {
-            update_content->Reparent(m_coprint_update_page);
-            sizer->Add(update_content, 1, wxEXPAND);
-            m_coprint_update_page->Layout();
-        }
-    }
+    if (m_main_sizer != nullptr && m_main_sizer->GetItem(m_coprint_backend) == nullptr)
+        m_main_sizer->Add(m_coprint_backend, 1, wxEXPAND);
 
     m_coprint_controller = std::make_unique<DeviceDashboard::MoonrakerDeviceController>(m_coprint_backend);
 
@@ -304,15 +292,64 @@ void MonitorPanel::ensure_coprint_backend()
     m_coprint_backend->attach_media_pages(m_coprint_storage_page, m_coprint_print_models_page);
 }
 
+void MonitorPanel::sync_coprint_page_hosting(bool embedded)
+{
+    if (m_coprint_backend == nullptr)
+        return;
+
+    m_coprint_backend->set_embedded_in_monitor(embedded);
+
+    wxPanel *status = m_coprint_backend->coprint_status_host();
+    wxPanel *update = m_coprint_backend->coprint_update_page();
+    wxPanel *content = m_coprint_backend->content_host();
+
+    if (embedded) {
+        if (status != nullptr && m_coprint_status_panel != nullptr) {
+            wxSizer *host_sizer = m_coprint_status_panel->GetSizer();
+            if (host_sizer == nullptr) {
+                host_sizer = new wxBoxSizer(wxVERTICAL);
+                m_coprint_status_panel->SetSizer(host_sizer);
+            }
+            rehost_expand(status, m_coprint_status_panel, host_sizer);
+        }
+        if (update != nullptr && m_coprint_update_page != nullptr) {
+            wxSizer *sizer = m_coprint_update_page->GetSizer();
+            if (sizer == nullptr) {
+                sizer = new wxBoxSizer(wxVERTICAL);
+                m_coprint_update_page->SetSizer(sizer);
+            }
+            rehost_expand(update, m_coprint_update_page, sizer);
+        }
+        return;
+    }
+
+    if (content == nullptr)
+        return;
+    if (wxSizer *cs = content->GetSizer()) {
+        if (status != nullptr)
+            rehost_expand(status, content, cs);
+        if (update != nullptr)
+            rehost_expand(update, content, cs);
+    }
+    m_coprint_backend->select_tab(PrinterWebViewTab::Status);
+}
+
 void MonitorPanel::configure_device_ui(DeviceUiMode mode)
 {
     if (!m_initialized)
         return;
-    if (mode == DeviceUiMode::CoPrint)
+    if (mode == DeviceUiMode::CoPrint || mode == DeviceUiMode::CoPrintLegacy)
         ensure_coprint_backend();
 
     m_device_ui_mode = mode;
-    const bool coprint = mode == DeviceUiMode::CoPrint;
+    const bool quadro = mode == DeviceUiMode::CoPrint;
+    const bool legacy = mode == DeviceUiMode::CoPrintLegacy;
+    const bool coprint = quadro || legacy;
+
+    if (coprint)
+        sync_coprint_page_hosting(quadro);
+    else if (m_coprint_session_overlay != nullptr)
+        m_coprint_session_overlay->set_kind(DeviceDashboard::PrinterOfflineOverlay::Kind::Hidden);
 
     auto show_tab = [this](int index, bool show) {
         if (index < 0)
@@ -327,16 +364,15 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
     show_tab(2, !coprint); // BBL Update
     show_tab(m_bbl_hms_tab_index, !coprint);
 
-    // Status is opened from the Printers accordion; hide only the tab button.
     if (m_coprint_status_tab_index >= 0)
         m_tabpanel->GetBtnsListCtrl()->showPage(static_cast<size_t>(m_coprint_status_tab_index), false);
-    if (!coprint)
+    if (!quadro)
         show_tab(m_coprint_status_tab_index, false);
-    show_tab(m_coprint_storage_tab_index, false); // Timelapse — hidden in CoPrint sidebar
-    show_tab(m_coprint_models_tab_index, coprint);
-    show_tab(m_coprint_update_tab_index, coprint);
+    show_tab(m_coprint_storage_tab_index, false);
+    show_tab(m_coprint_models_tab_index, quadro);
+    show_tab(m_coprint_update_tab_index, quadro);
 
-    if (m_coprint_printer_picker == nullptr && coprint) {
+    if (m_coprint_printer_picker == nullptr && quadro) {
         wxWindow* side_parent = m_side_tools->GetParent();
         if (side_parent != nullptr) {
             wxSizer* side_sizer = side_parent->GetSizer();
@@ -348,12 +384,24 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
         }
     }
     if (m_coprint_printer_picker != nullptr)
-        m_coprint_printer_picker->Show(coprint);
+        m_coprint_printer_picker->Show(quadro);
 
     if (m_side_tools != nullptr)
-        m_side_tools->Show(!coprint);
+        m_side_tools->Show(mode == DeviceUiMode::Bambu);
 
-    if (coprint && m_coprint_status_tab_index >= 0) {
+    if (m_main_sizer != nullptr) {
+        if (m_tabpanel != nullptr)
+            m_main_sizer->Show(m_tabpanel, !legacy);
+        if (m_coprint_backend != nullptr)
+            m_main_sizer->Show(m_coprint_backend, legacy);
+    } else {
+        if (m_tabpanel != nullptr)
+            m_tabpanel->Show(!legacy);
+        if (m_coprint_backend != nullptr)
+            m_coprint_backend->Show(legacy);
+    }
+
+    if (quadro && m_coprint_status_tab_index >= 0) {
         m_tabpanel->SetSelection(m_coprint_status_tab_index);
         if (m_coprint_printer_picker != nullptr)
             m_coprint_printer_picker->set_status_page_active(true);
@@ -461,8 +509,8 @@ void MonitorPanel::on_select_printer(wxCommandEvent& event)
     if (!dev->set_selected_machine(event.GetString().ToStdString()))
         return;
 
-    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
-        if (m_coprint_printer_picker != nullptr)
+    if (is_coprint_device_ui()) {
+        if (is_quadro_device_ui() && m_coprint_printer_picker != nullptr)
             m_coprint_printer_picker->update_selection();
         if (m_coprint_controller)
             m_coprint_controller->refresh();
@@ -488,7 +536,7 @@ void MonitorPanel::on_select_printer(wxCommandEvent& event)
 
 void MonitorPanel::on_printer_clicked(wxMouseEvent &event)
 {
-    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+    if (is_quadro_device_ui()) {
         if (m_coprint_backend != nullptr)
             m_coprint_backend->toggle_printers_popup_at(m_side_tools);
         return;
@@ -515,14 +563,16 @@ void MonitorPanel::on_printer_clicked(wxMouseEvent &event)
 
 void MonitorPanel::on_size(wxSizeEvent &event)
 {
+    if (m_in_on_size)
+        return;
+    m_in_on_size = true;
     Layout();
-    //event.Skip();
-    //Refresh();
+    m_in_on_size = false;
 }
 
 void MonitorPanel::refresh_coprint_printer_names()
 {
-    if (m_device_ui_mode != DeviceUiMode::CoPrint || m_coprint_backend == nullptr)
+    if (!is_coprint_device_ui() || m_coprint_backend == nullptr)
         return;
 
     m_coprint_backend->refresh_coprint_device_names([this]() {
@@ -538,16 +588,18 @@ void MonitorPanel::force_refresh_device()
     if (!m_initialized)
         return;
 
-    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
+    if (is_coprint_device_ui()) {
         if (m_coprint_backend != nullptr)
             m_coprint_backend->invalidate_device_cache_and_refresh();
-        if (m_coprint_print_models_page != nullptr)
-            m_coprint_print_models_page->invalidate_media_cache_and_reload();
-        if (m_coprint_storage_page != nullptr)
-            m_coprint_storage_page->invalidate_media_cache_and_reload();
-        if (m_coprint_printer_picker != nullptr) {
-            m_coprint_printer_picker->refresh_list(true);
-            m_coprint_printer_picker->update_selection();
+        if (is_quadro_device_ui()) {
+            if (m_coprint_print_models_page != nullptr)
+                m_coprint_print_models_page->invalidate_media_cache_and_reload();
+            if (m_coprint_storage_page != nullptr)
+                m_coprint_storage_page->invalidate_media_cache_and_reload();
+            if (m_coprint_printer_picker != nullptr) {
+                m_coprint_printer_picker->refresh_list(true);
+                m_coprint_printer_picker->update_selection();
+            }
         }
         refresh_coprint_printer_names();
         return;
@@ -570,12 +622,13 @@ void MonitorPanel::update_all()
         show_status((int)MONITOR_NO_PRINTER);
         m_hms_panel->clear_hms_tag();
         m_tabpanel->GetBtnsListCtrl()->showNewTag(PT_HMS, false);
-        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_controller &&
-            m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_status_panel)
+        if (is_coprint_device_ui() && m_coprint_controller &&
+            (is_quadro_device_ui() ? (m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_status_panel)
+                                   : true))
             m_coprint_controller->refresh();
-        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_printer_picker != nullptr)
+        if (is_quadro_device_ui() && m_coprint_printer_picker != nullptr)
             m_coprint_printer_picker->update_selection();
-        else if (m_status_info_panel->IsShown()) {
+        else if (!is_coprint_device_ui() && m_status_info_panel->IsShown()) {
             m_status_info_panel->m_media_play_ctrl->SetMachineObject(obj);
             m_status_info_panel->update(obj);
         }
@@ -589,20 +642,24 @@ void MonitorPanel::update_all()
     // CoPrint dashboard talks to Moonraker over HTTP, not Bambu push_status.
     // is_connecting()/is_connected() stay stuck after a picker click (reset()
     // zeroes m_push_count), so those gates must not skip the Status refresh.
-    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
-        auto current_page = m_tabpanel->GetCurrentPage();
-        // Media/System tab switches must not layout the Device dashboard.
-        // That re-entered wxSizer::Layout until CalcMin crashed, and cancelled
-        // in-flight wxWebRequest objects on the NSURLSession thread.
-        if (current_page == m_coprint_status_panel && m_coprint_controller)
+    if (is_coprint_device_ui()) {
+        if (is_quadro_device_ui()) {
+            auto current_page = m_tabpanel->GetCurrentPage();
+            // Media/System tab switches must not layout the Device dashboard.
+            // That re-entered wxSizer::Layout until CalcMin crashed, and cancelled
+            // in-flight wxWebRequest objects on the NSURLSession thread.
+            if (current_page == m_coprint_status_panel && m_coprint_controller)
+                m_coprint_controller->refresh();
+            if (m_coprint_printer_picker != nullptr)
+                m_coprint_printer_picker->update_selection();
+            if (current_page == m_coprint_storage_page)
+                m_coprint_storage_page->update_page();
+            else if (current_page == m_coprint_print_models_page) {
+                m_coprint_print_models_page->update_page();
+                m_coprint_print_models_page->ensure_media_models_for_selected_machine();
+            }
+        } else if (m_coprint_controller) {
             m_coprint_controller->refresh();
-        if (m_coprint_printer_picker != nullptr)
-            m_coprint_printer_picker->update_selection();
-        if (current_page == m_coprint_storage_page)
-            m_coprint_storage_page->update_page();
-        else if (current_page == m_coprint_print_models_page) {
-            m_coprint_print_models_page->update_page();
-            m_coprint_print_models_page->ensure_media_models_for_selected_machine();
         }
         if (obj->is_connecting())
             show_status(MONITOR_CONNECTING);
@@ -694,10 +751,11 @@ bool MonitorPanel::Show(bool show)
         m_refresh_timer->SetOwner(this);
         m_refresh_timer->Start(REFRESH_INTERVAL);
         if (update_flag) { update_all(); }
-        if (m_device_ui_mode == DeviceUiMode::CoPrint && m_coprint_controller &&
-            m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_status_panel)
+        if (is_coprint_device_ui() && m_coprint_controller &&
+            (is_quadro_device_ui() ? (m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_status_panel)
+                                   : true))
             m_coprint_controller->refresh();
-        if (m_device_ui_mode == DeviceUiMode::CoPrint)
+        if (is_coprint_device_ui())
             refresh_coprint_printer_names();
     } else {
         stop_update();
@@ -725,14 +783,15 @@ void MonitorPanel::show_status(int status)
 
     BOOST_LOG_TRIVIAL(info) << "monitor: show_status = " << status;
 
-    if (m_device_ui_mode == DeviceUiMode::CoPrint) {
-        if (m_coprint_printer_picker != nullptr) {
+    if (is_coprint_device_ui()) {
+        if (is_quadro_device_ui() && m_coprint_printer_picker != nullptr) {
             m_coprint_printer_picker->refresh_list();
             m_coprint_printer_picker->update_selection();
         }
         if ((status & (int)MonitorStatus::MONITOR_NO_PRINTER) != 0) {
             set_default();
-            m_tabpanel->Layout();
+            if (m_tabpanel != nullptr && m_tabpanel->IsShown())
+                m_tabpanel->Layout();
         }
         return;
     }

@@ -84,7 +84,8 @@ class MonitorPanel : public wxPanel
 public:
     enum class DeviceUiMode {
         Bambu,
-        CoPrint
+        CoPrint,
+        CoPrintLegacy
     };
 
 private:
@@ -133,6 +134,7 @@ private:
     int last_status;
     bool m_initialized { false };
     bool update_flag{false};
+    bool m_in_on_size{false};
     wxTimer* m_refresh_timer = nullptr;
 
 public:
@@ -153,6 +155,13 @@ public:
     void init_tabpanel();
     void configure_device_ui(DeviceUiMode mode);
     void ensure_coprint_backend();
+    void sync_coprint_page_hosting(bool embedded);
+    bool is_coprint_device_ui() const
+    {
+        return m_device_ui_mode == DeviceUiMode::CoPrint
+            || m_device_ui_mode == DeviceUiMode::CoPrintLegacy;
+    }
+    bool is_quadro_device_ui() const { return m_device_ui_mode == DeviceUiMode::CoPrint; }
     void show_coprint_status_page();
     Tabbook* get_tabpanel() { return m_tabpanel; };
     DeviceDashboard::MoonrakerDeviceController* coprint_device_controller() { return m_coprint_controller.get(); }

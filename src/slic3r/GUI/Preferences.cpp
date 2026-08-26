@@ -48,6 +48,7 @@ private:
     wxString      m_url;
     wxArrayString m_lines;
     bool          m_hovered = false;
+    bool          m_in_size = false;
     wxFont        m_font;
     int           m_last_wrap_width = -1;
 
@@ -208,8 +209,12 @@ private:
  
     void OnSize(wxSizeEvent& evt)
     {
+        if (m_in_size)
+            return;
+        m_in_size = true;
         ReflowText();
         Refresh();
+        m_in_size = false;
         evt.Skip();
     }
 
@@ -1435,12 +1440,12 @@ void PreferencesDialog::create()
     for (size_t i = 0; i < m_pref_tabs->GetCount(); ++i)
         m_pref_tabs->SetItemTextColour(i, item_color);
 
-    m_pref_tabs->SelectItem(0);
-
     m_sizer_body->Add(m_pref_tabs, 0, wxEXPAND | wxBOTTOM | wxTOP, FromDIP(5));
     m_sizer_body->Add(m_parent, 1, wxEXPAND);
 
     SetSizer(m_sizer_body);
+    Layout();
+    m_pref_tabs->SelectItem(0);
     Layout();
     Fit();
     CenterOnParent();

@@ -21,11 +21,6 @@
       "temp_max": 240,
       "pressure_advance": 0.04
     },
-    "ASA": {
-      "temp_min": 190,
-      "temp_max": 240,
-      "pressure_advance": 0.04
-    },
     "TPU": {
       "temp_min": 190,
       "temp_max": 240,

@@ -627,9 +627,7 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
         if (evt.CmdDown() && evt.GetKeyCode() == 'P')
 #endif
         {
-            // Orca: Use GUI_App::open_preferences instead of direct call so windows associations are updated on exit
-            wxGetApp().open_preferences();
-            plater()->get_current_canvas3D()->force_set_focus();
+            wxGetApp().CallAfter([] { wxGetApp().open_preferences(); });
             return;
         }
 
@@ -1298,8 +1296,11 @@ void MainFrame::init_tabpanel() {
 // SoftFever: Device tab is always MonitorPanel. Toggle BBL-only auxiliary tabs and CoPrint UI mode.
 void MainFrame::show_device(bool bBBLPrinter) {
     if (m_monitor != nullptr) {
-        m_monitor->configure_device_ui(bBBLPrinter ? MonitorPanel::DeviceUiMode::Bambu
-                                                 : MonitorPanel::DeviceUiMode::CoPrint);
+        MonitorPanel::DeviceUiMode mode = MonitorPanel::DeviceUiMode::Bambu;
+        if (!bBBLPrinter)
+            mode = is_chromaset_printer() ? MonitorPanel::DeviceUiMode::CoPrintLegacy
+                                          : MonitorPanel::DeviceUiMode::CoPrint;
+        m_monitor->configure_device_ui(mode);
     }
 
     if (bBBLPrinter) {
@@ -3173,20 +3174,11 @@ void MainFrame::init_menubar_as_editor()
         [this](wxCommandEvent &) { Slic3r::GUI::about();},
         "", nullptr, []() { return true; }, this, 0);
     append_menu_item(
-        parent_menu, wxID_ANY, _L("Preferences") + "\t" + ctrl + ",", "",
-        [this](wxCommandEvent &) {
-            PreferencesDialog dlg(this);
-            dlg.ShowModal();
-            plater()->get_current_canvas3D()->force_set_focus();
-#if ENABLE_GCODE_LINES_ID_IN_H_SLIDER
-            if (dlg.seq_top_layer_only_changed() || dlg.seq_seq_top_gcode_indices_changed())
-#else
-            if (dlg.seq_top_layer_only_changed())
-#endif
-                plater()->reload_print();
+        parent_menu, wxID_ANY, _L("Settings") + "\t" + ctrl + ",", "",
+        [](wxCommandEvent &) {
+            wxGetApp().CallAfter([] { wxGetApp().open_preferences(); });
         },
         "", nullptr, []() { return true; }, this, 1);
-    //parent_menu->Insert(1, preference_item);
 #endif
     // Help menu
     auto helpMenu = generate_help_menu();
@@ -3200,11 +3192,10 @@ void MainFrame::init_menubar_as_editor()
     //BBS add Preference
 
     append_menu_item(
-        m_topbar->GetTopMenu(), wxID_ANY, _L("Preferences") + "\t" + ctrl + "P", "",
+        m_topbar->GetTopMenu(), wxID_ANY, _L("Settings") + "\t" + ctrl + "P", "",
         [this](wxCommandEvent &) {
             // Orca: Use GUI_App::open_preferences instead of direct call so windows associations are updated on exit
             wxGetApp().open_preferences();
-            plater()->get_current_canvas3D()->force_set_focus();
         },
         "", nullptr, []() { return true; }, this);
     //m_topbar->AddDropDownMenuItem(preference_item);
@@ -3448,6 +3439,30 @@ void MainFrame::init_menubar_as_editor()
     // wx bug: https://trac.wxwidgets.org/ticket/18328
     wxMenu* apple_menu = m_menubar->OSXGetAppleMenu();
     if (apple_menu != nullptr) {
+        auto open_prefs = [](wxCommandEvent &) {
+            wxGetApp().CallAfter([] { wxGetApp().open_preferences(); });
+        };
+        bool has_prefs_row = false;
+        for (size_t i = 0; i < apple_menu->GetMenuItemCount(); ++i) {
+            wxMenuItem *it = apple_menu->FindItemByPosition(i);
+            if (it == nullptr || it->IsSeparator())
+                continue;
+            const wxString label = it->GetItemLabelText();
+            if (label.Find(_L("Preferences")) != wxNOT_FOUND || label.Find(_L("Settings")) != wxNOT_FOUND) {
+                has_prefs_row = true;
+                it->Enable(true);
+                break;
+            }
+        }
+        // wxID_PREFERENCES may already exist as a hidden Cocoa stub; that must
+        // not stop us from adding a real visible row.
+        if (!has_prefs_row) {
+            wxMenuItem *item = apple_menu->Insert(1, wxID_ANY, _L("Settings") + "\t" + ctrl + ",");
+            if (item != nullptr)
+                apple_menu->Bind(wxEVT_MENU, open_prefs, item->GetId());
+        }
+        apple_menu->Bind(wxEVT_MENU, open_prefs, wxID_PREFERENCES);
+        Bind(wxEVT_MENU, open_prefs, wxID_PREFERENCES);
         apple_menu->Bind(wxEVT_MENU, [this](wxCommandEvent &) {
             Close();
         }, wxID_EXIT);
@@ -4264,6 +4279,12 @@ SettingsDialog::SettingsDialog(MainFrame* mainframe)
 #else
     SetIcon(wxIcon(var("CoPrintSlicer_128px.png"), wxBITMAP_TYPE_PNG));
 #endif // _WIN32
+
+#ifdef __APPLE__
+    // Hidden print-settings frame is titled "... Settings". macOS 13+ Settings
+    // menu targets it and aborts the process with no crash log.
+    macos_exclude_from_system_settings(this);
+#endif
 
     //just hide the Frame on closing
     this->Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& evt) { this->Hide(); });

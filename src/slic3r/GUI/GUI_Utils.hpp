@@ -93,6 +93,7 @@ void macos_attach_dialog_to_parent(wxDialog *dialog);
 void macos_detach_dialog_from_parent(wxDialog *dialog);
 void macos_install_dialog_zorder_filter();
 void macos_remove_dialog_zorder_filter();
+void macos_exclude_from_system_settings(wxWindow *window);
 
 struct MacDialogAttachGuard
 {

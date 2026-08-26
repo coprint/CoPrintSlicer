@@ -4816,6 +4816,8 @@ void GLCanvas3D::on_paint(wxPaintEvent& evt)
 }
 
 void GLCanvas3D::force_set_focus() {
+    if (m_canvas == nullptr || !m_canvas->IsShownOnScreen())
+        return;
     m_canvas->SetFocus();
 };
 

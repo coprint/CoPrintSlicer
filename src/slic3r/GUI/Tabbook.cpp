@@ -64,6 +64,8 @@ TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools)
     m_buttons_sizer = new wxFlexGridSizer(1, m_btn_margin, m_btn_margin);
     m_sizer->Add(m_buttons_sizer, 0, wxLEFT | wxTOP, m_btn_margin);
     m_sizer->AddStretchSpacer(1);
+    if (wxWindow *host = GetParent())
+        host->SetBackgroundColour(TAB_BUTTON_BG);
 }
 
 void TabButtonsListCtrl::OnPaint(wxPaintEvent &)

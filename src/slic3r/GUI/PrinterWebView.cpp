@@ -2085,6 +2085,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
 
 
     auto *content_host = new wxPanel(this, wxID_ANY);
+    m_content_host = content_host;
     content_host->SetBackgroundColour(wxColour("#EEEEEF"));
     auto *content_host_sizer = new wxBoxSizer(wxVERTICAL);
 

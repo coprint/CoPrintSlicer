@@ -38,6 +38,10 @@ bool macos_should_manage_dialog(wxDialog *dialog)
         return false;
     if (dialog->HasFlag(wxSTAY_ON_TOP))
         return false;
+    if (dialog->GetName() == "settings_dialog")
+        return false;
+    if (dialog->GetName() == "coprint_preferences")
+        return false;
     if (wxDynamicCast(dialog, wxFileDialog) != nullptr)
         return false;
     if (wxDynamicCast(dialog, wxDirDialog) != nullptr)
@@ -99,6 +103,19 @@ void macos_remove_dialog_zorder_filter()
     g_dialog_zorder_filter = nullptr;
 }
 
+void macos_exclude_from_system_settings(wxWindow *window)
+{
+    NSWindow *nsw = ns_window_from_wx(window);
+    if (nsw == nil)
+        return;
+    nsw.excludedFromWindowsMenu = YES;
+    nsw.hidesOnDeactivate = YES;
+    NSWindowCollectionBehavior behavior = nsw.collectionBehavior;
+    behavior |= NSWindowCollectionBehaviorTransient;
+    behavior |= NSWindowCollectionBehaviorIgnoresCycle;
+    nsw.collectionBehavior = behavior;
+}
+
 void macos_attach_dialog_to_parent(wxDialog *dialog)
 {
     if (!macos_should_manage_dialog(dialog))
@@ -107,15 +124,6 @@ void macos_attach_dialog_to_parent(wxDialog *dialog)
     NSWindow *dlg_window = ns_window_from_wx(dialog);
     if (dlg_window == nil)
         return;
-
-    wxWindow *parent = wxGetTopLevelParent(dialog->GetParent());
-    NSWindow *parent_window = ns_window_from_wx(parent);
-    if (parent_window == nil) {
-        wxWindow *top = wxTheApp != nullptr ? wxTheApp->GetTopWindow() : nullptr;
-        parent_window = ns_window_from_wx(top);
-    }
-    if (parent_window == dlg_window)
-        parent_window = nil;
 
     dlg_window.hidesOnDeactivate = NO;
     if ([dlg_window isKindOfClass:[NSPanel class]]) {
@@ -134,12 +142,10 @@ void macos_attach_dialog_to_parent(wxDialog *dialog)
 
     [dlg_window setLevel:NSModalPanelWindowLevel];
 
-    if (parent_window != nil && dlg_window.parentWindow != parent_window) {
-        if (dlg_window.parentWindow != nil)
-            [dlg_window.parentWindow removeChildWindow:dlg_window];
-        [parent_window addChildWindow:dlg_window ordered:NSWindowAbove];
-    }
-
+    // Do not call addChildWindow: here. A child NSWindow cannot enter
+    // runModalForWindow: — on macOS 13+ that aborts the process with no
+    // DiagnosticReport, which is exactly how Preferences/Settings dies.
+    // Window level is enough to keep the dialog above the main frame.
     [dlg_window makeKeyAndOrderFront:nil];
 }
 

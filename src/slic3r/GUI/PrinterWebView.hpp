@@ -127,7 +127,8 @@ public:
 
     void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
     void toggle_camera_timelapse();
-    wxPanel* coprint_status_host() const { return m_status_page; }
+    wxPanel * coprint_status_host() const { return m_status_page; }
+    wxPanel * content_host() const { return m_content_host; }
     void show_add_printer_dialog();
     wxString sidebar_display_name_for(const MachineObject *machine) const;
     bool edit_sidebar_printer_name(MachineObject *machine);
@@ -294,6 +295,7 @@ private:
     wxString m_filament_preview_fetch_key;
     bool m_filament_preview_fetch_in_progress{ false };
     wxPanel *m_preview_menu_panel{ nullptr };
+    wxPanel *m_content_host{ nullptr };
     wxPanel *m_status_page{ nullptr };
     DeviceDashboard::DeviceDashboardPage* m_dashboard_page{nullptr};
     CloudTaskManagerPage *m_storage_page{ nullptr };
