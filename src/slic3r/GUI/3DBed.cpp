@@ -736,6 +736,10 @@ void Bed3D::update_texture_quad()
             max.x() = model_bb.max.x();
             max.y() = model_bb.max.y();
         }
+        // Shift the SVG 4 mm toward the printer front (Y=0, Co Print handle tab).
+        constexpr double k_svg_front_offset_mm = 4.0;
+        min.y() -= k_svg_front_offset_mm;
+        max.y() -= k_svg_front_offset_mm;
     }
 
     const std::vector<Vec2d> rect = { { min.x(), min.y() }, { max.x(), min.y() }, { max.x(), max.y() }, { min.x(), max.y() } };
