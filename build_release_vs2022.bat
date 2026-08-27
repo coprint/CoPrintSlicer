@@ -1,4 +1,6 @@
-@REM CoPrintSlicer build script for Windows
+@REM Co Print Slicer Windows build for Visual Studio 2022.
+@REM Prefer build_release_vs.bat (auto-detects VS version).
+@REM Output: build\CoPrintSlicer\coprintslicer.exe
 @echo off
 set WP=%CD%
 
@@ -52,7 +54,7 @@ if defined ORCA_UPDATER_SIG_KEY set "SIG_FLAG=-DORCA_UPDATER_SIG_KEY=%ORCA_UPDAT
 if "%1"=="slicer" (
     GOTO :slicer
 )
-echo "building deps.."
+echo building deps..
 
 echo on
 REM Set minimum CMake policy to avoid <3.5 errors
@@ -64,7 +66,7 @@ cmake --build . --config %build_type% --target deps -- -m
 if "%1"=="deps" exit /b 0
 
 :slicer
-echo "building CoPrintSlicer..."
+echo building Co Print Slicer...
 cd %WP%
 mkdir %build_dir%
 cd %build_dir%
@@ -78,3 +80,5 @@ cd ..
 call scripts/run_gettext.bat
 cd %build_dir%
 cmake --build . --target install --config %build_type%
+echo.
+echo Co Print Slicer output: %WP%\%build_dir%\CoPrintSlicer\coprintslicer.exe

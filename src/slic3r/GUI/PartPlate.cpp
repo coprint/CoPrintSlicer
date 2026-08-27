@@ -80,9 +80,9 @@ ColorRGBA PartPlate::SELECT_COLOR		= { 0.2666f, 0.2784f, 0.2784f, 1.0f }; //{ 0.
 ColorRGBA PartPlate::UNSELECT_COLOR		= { 0.82f, 0.82f, 0.82f, 1.0f };
 ColorRGBA PartPlate::UNSELECT_DARK_COLOR		= { 0.384f, 0.384f, 0.412f, 1.0f };
 ColorRGBA PartPlate::DEFAULT_COLOR		= { 0.5f, 0.5f, 0.5f, 1.0f };
-ColorRGBA PartPlate::LINE_TOP_COLOR		= { 0.89f, 0.89f, 0.89f, 1.0f };
+ColorRGBA PartPlate::LINE_TOP_COLOR		= { 133.0f / 255.0f, 139.0f / 255.0f, 136.0f / 255.0f, 1.0f }; // #858B88
 ColorRGBA PartPlate::LINE_TOP_DARK_COLOR		= { 0.431f, 0.431f, 0.463f, 1.0f };
-ColorRGBA PartPlate::LINE_TOP_SEL_COLOR  = { 0.5294f, 0.5451, 0.5333f, 1.0f};
+ColorRGBA PartPlate::LINE_TOP_SEL_COLOR  = { 133.0f / 255.0f, 139.0f / 255.0f, 136.0f / 255.0f, 1.0f }; // #858B88
 ColorRGBA PartPlate::LINE_TOP_SEL_DARK_COLOR = { 0.298f, 0.298f, 0.3333f, 1.0f};
 ColorRGBA PartPlate::LINE_BOTTOM_COLOR	= { 0.8f, 0.8f, 0.8f, 0.4f };
 ColorRGBA PartPlate::HEIGHT_LIMIT_TOP_COLOR		= { 0.6f, 0.6f, 1.0f, 1.0f };
@@ -980,7 +980,17 @@ void PartPlate::render_grid(bool bottom) {
     const Transform3d& view_matrix = camera.get_view_matrix();
     const Transform3d& projection_matrix = camera.get_projection_matrix();
 
-    shader->set_uniform("view_model_matrix", view_matrix);
+    // Plate grid geometry sits at GROUND_Z_GRIDLINE (-0.26), below the unselected fill
+    // (-0.03). Overlay so the lines stay visible on every profile's selected top view;
+    // SVG lettering is drawn afterwards (Bed3D::render_svg_overlay) so it sits on top.
+    const bool overlay_grid = true;
+    Transform3d grid_view = view_matrix;
+    if (overlay_grid) {
+        glsafe(::glDisable(GL_DEPTH_TEST));
+        grid_view = view_matrix * Eigen::Translation3d(0.0, 0.0, bottom ? -0.08 : 0.08);
+    }
+
+    shader->set_uniform("view_model_matrix", grid_view);
     shader->set_uniform("projection_matrix", projection_matrix);
 
 #if !SLIC3R_OPENGL_ES
@@ -991,12 +1001,8 @@ void PartPlate::render_grid(bool bottom) {
     ColorRGBA color;
 	if (bottom)
         color = LINE_BOTTOM_COLOR;
-	else {
-		if (m_selected)
-            color = m_partplate_list->m_is_dark ? LINE_TOP_SEL_DARK_COLOR : LINE_TOP_SEL_COLOR;
-		else
-            color = m_partplate_list->m_is_dark ? LINE_TOP_DARK_COLOR : LINE_TOP_COLOR;
-	}
+	else
+        color = m_partplate_list && m_partplate_list->m_is_dark ? LINE_TOP_DARK_COLOR : LINE_TOP_COLOR;
     m_gridlines.set_color(color);
     m_gridlines.render();
 
@@ -1013,7 +1019,7 @@ void PartPlate::render_grid(bool bottom) {
     }
     shader->start_using();
 
-    shader->set_uniform("view_model_matrix", view_matrix);
+    shader->set_uniform("view_model_matrix", grid_view);
     shader->set_uniform("projection_matrix", projection_matrix);
 
 #if !SLIC3R_OPENGL_ES
@@ -1031,6 +1037,9 @@ void PartPlate::render_grid(bool bottom) {
     m_gridlines_bolder.render();
 
     shader->stop_using();
+
+    if (overlay_grid)
+        glsafe(::glEnable(GL_DEPTH_TEST));
 }
 
 void PartPlate::render_height_limit(PartPlate::HeightLimitMode mode)
@@ -3383,7 +3392,9 @@ void PartPlate::render(const Transform3d& view_matrix, const Transform3d& projec
         shader->stop_using();
     }
 
-    if (wxGetApp().show_plate_gridlines() && show_grid)
+    // Keep the plate grid visible from above on every profile (selected plate included).
+    const bool draw_grid = show_grid;
+    if (draw_grid)
         render_grid(bottom);
 
     if (!bottom && m_selected && !force_background_color) {

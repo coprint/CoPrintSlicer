@@ -170,6 +170,10 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
     }
 
     state.print_job.has_active_job = machine->is_in_printing();
+    if (machine->is_in_printing_pause())
+        state.print_job.state = PrintCommandState::Paused;
+    else if (state.print_job.has_active_job)
+        state.print_job.state = PrintCommandState::Printing;
     if (state.print_job.has_active_job) {
         state.print_job.file_name = display_file_name(machine);
         if (machine->slice_info != nullptr)
@@ -198,14 +202,15 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
         state.movement.print_speed_percent = 125;
         break;
     case SPEED_LEVEL_RAMPAGE:
-        state.movement.print_speed_percent = 166;
+        state.movement.print_speed_percent = 150;
         break;
     default:
         state.movement.print_speed_percent = machine->printing_speed_mag > 0 ? machine->printing_speed_mag : 100;
         break;
     }
 
-    state.movement.can_move = state.connection.can_send_commands;
+    state.movement.can_move = state.connection.can_send_commands &&
+        state.print_job.state != PrintCommandState::Printing;
     return state;
 }
 

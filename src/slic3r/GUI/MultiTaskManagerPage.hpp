@@ -16,12 +16,18 @@
 #include <wx/image.h>
 #include <wx/webrequest.h>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace Slic3r { 
 namespace GUI {
+
+namespace DeviceDashboard {
+class PrinterOfflineOverlay;
+}
 
 #define CLOUD_TASK_ITEM_MAX_WIDTH 1100
 #define TASK_ITEM_MAX_WIDTH    900
@@ -163,6 +169,12 @@ public:
     void update_page();
     void refresh_user_device(bool clear = false);
     void set_media_presentation(MediaPresentation presentation);
+    void reload_media_models();
+    void ensure_media_models_for_selected_machine();
+    void invalidate_media_cache_and_reload();
+    void set_allow_moonraker_fetch(bool allow);
+    void set_offline_overlay_visible(bool visible, const wxString &printer_name = wxEmptyString);
+    void set_offline_retry_handler(std::function<void()> handler);
     std::string utc_time_to_date(std::string utc_time);
     bool Show(bool show);
     void update_page_number();
@@ -186,6 +198,11 @@ private:
     void select_all_timelapse_cards();
     void refresh_moonraker_model_status();
     void render_moonraker_model_files(const std::vector<MoonrakerModelFileView>& files);
+    int  model_grid_column_count() const;
+    void relayout_model_file_grid();
+    void sync_model_grid_overlay(bool reveal = true);
+    void load_visible_model_thumbnails();
+    void apply_model_file_metadata(const MoonrakerModelFileView& file);
 
     SortItem                    m_sort;
     bool                        device_name_big{ true };
@@ -220,7 +237,15 @@ private:
     wxStaticText* m_model_status_text{ nullptr };
     wxScrolledWindow* m_model_file_grid{ nullptr };
     wxGridSizer* m_model_file_grid_sizer{ nullptr };
+    wxWindow* m_model_grid_scroll{ nullptr };
     std::shared_ptr<int> m_model_status_lifetime{ std::make_shared<int>(0) };
+    std::map<std::string, wxImage> m_model_thumbnail_cache;
+    std::string m_last_model_probe_machine_id;
+    bool m_model_probe_in_flight{ false };
+    bool m_last_model_probe_ok{ false };
+    long long m_last_model_probe_started_ms{ 0 };
+    bool m_allow_moonraker_fetch{ true };
+    DeviceDashboard::PrinterOfflineOverlay *m_offline_overlay{ nullptr };
 
     // Flipping pages
     int                         m_current_page{ 0 };
@@ -264,6 +289,7 @@ private:
     wxStaticText*               m_loading_text{ nullptr };
 };
 
+void stop_moonraker_model_file_probes();
 
 } // namespace GUI
 } // namespace Slic3r

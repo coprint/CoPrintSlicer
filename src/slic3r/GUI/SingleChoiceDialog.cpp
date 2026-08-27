@@ -43,4 +43,8 @@ SingleChoiceDialog::~SingleChoiceDialog() {}
 int SingleChoiceDialog::GetSingleChoiceIndex() { return this->ShowModal() == wxID_OK ? GetTypeComboBox()->GetSelection() : -1; }
 
 void SingleChoiceDialog::on_dpi_changed(const wxRect &suggested_rect) {}
+
 }} // namespace Slic3r::GUI
+
+// Compiled here so incremental `-b` builds pick up the dialog without a CMake reconfigure.
+#include "SelectCoPrintPrinterDialog.cpp"

@@ -12,11 +12,11 @@
 #include <cmath>
 #include <utility>
 
-#include <wx/button.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
 #include <wx/filename.h>
-#include <wx/frame.h>
+#include <wx/graphics.h>
+#include <wx/image.h>
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
 #include <wx/stattext.h>
@@ -36,8 +36,9 @@ public:
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
     {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
-        SetMinSize(wxSize(FromDIP(86), FromDIP(30)));
+        SetMinSize(wxSize(FromDIP(92), FromDIP(30)));
         SetCursor(wxCursor(wxCURSOR_HAND));
+        m_stop_icon = load_stop_icon();
         Bind(wxEVT_PAINT, &CameraPlayButton::on_paint, this);
         Bind(wxEVT_LEFT_UP, [this](wxMouseEvent&) {
             if (m_click_handler)
@@ -47,7 +48,51 @@ public:
 
     void set_click_handler(ClickHandler handler) { m_click_handler = std::move(handler); }
 
+    void set_playing(bool playing)
+    {
+        if (m_playing == playing)
+            return;
+        m_playing = playing;
+        Refresh();
+    }
+
 private:
+    wxBitmap load_stop_icon()
+    {
+        const char* names[] = { "print_control_stop", "media_stop" };
+        for (const char* name : names) {
+            wxBitmap bitmap = create_scaled_bitmap(name, this, 10);
+            if (!bitmap.IsOk())
+                continue;
+            wxImage image = bitmap.ConvertToImage();
+            if (!image.IsOk() || image.GetWidth() <= 0 || image.GetHeight() <= 0)
+                continue;
+            unsigned char* data = image.GetData();
+            if (data == nullptr)
+                continue;
+            const unsigned char* alpha = image.HasAlpha() ? image.GetAlpha() : nullptr;
+            const int pixels = image.GetWidth() * image.GetHeight();
+            for (int i = 0; i < pixels; ++i) {
+                if (alpha != nullptr && alpha[i] == 0)
+                    continue;
+                const int offset = i * 3;
+                data[offset + 0] = 255;
+                data[offset + 1] = 255;
+                data[offset + 2] = 255;
+            }
+            const double scale = bitmap.GetScaleFactor();
+#ifdef __APPLE__
+            return wxBitmap(image, -1, scale > 0.01 ? scale : 1.0);
+#else
+            wxBitmap tinted(image);
+            if (scale > 0.01)
+                tinted.SetScaleFactor(scale);
+            return tinted;
+#endif
+        }
+        return wxBitmap();
+    }
+
     void on_paint(wxPaintEvent&)
     {
         wxAutoBufferedPaintDC raw_dc(this);
@@ -57,10 +102,10 @@ private:
         const wxSize size = GetClientSize();
         wxGCDC dc(raw_dc);
         dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(DeviceUiStyle::accent()));
+        dc.SetBrush(wxBrush(m_playing ? DeviceUiStyle::danger() : DeviceUiStyle::accent()));
         dc.DrawRoundedRectangle(wxRect(0, 0, size.GetWidth(), size.GetHeight()), FromDIP(8));
 
-        const wxString label = wxString::FromUTF8("Play");
+        const wxString label = wxString::FromUTF8(m_playing ? "Stop" : "Play");
         wxCoord text_w = 0;
         wxCoord text_h = 0;
         dc.SetTextForeground(*wxWHITE);
@@ -71,30 +116,43 @@ private:
         const int icon_h = FromDIP(10);
         const int total_w = icon_w + gap + text_w;
         int x = (size.GetWidth() - total_w) / 2;
-
         const int icon_y = (size.GetHeight() - icon_h) / 2;
-        wxGraphicsContext* gc = dc.GetGraphicsContext();
-        if (gc != nullptr) {
-            wxGraphicsPath play_shape = gc->CreatePath();
-            play_shape.MoveToPoint(x + 0.5, icon_y + 0.5);
-            play_shape.AddLineToPoint(x + 0.5, icon_y + icon_h - 0.5);
-            play_shape.AddLineToPoint(x + icon_w + 0.5, icon_y + icon_h / 2.0);
-            play_shape.CloseSubpath();
-            gc->SetPen(*wxTRANSPARENT_PEN);
-            gc->SetBrush(wxBrush(*wxWHITE));
-            gc->FillPath(play_shape);
+
+        if (m_playing && m_stop_icon.IsOk()) {
+            const wxSize icon_size = m_stop_icon.GetScaledSize();
+            const int draw_x = x + (icon_w - icon_size.GetWidth()) / 2;
+            const int draw_y = (size.GetHeight() - icon_size.GetHeight()) / 2;
+            dc.DrawBitmap(m_stop_icon, draw_x, draw_y, true);
+        } else {
+            wxGraphicsContext* gc = dc.GetGraphicsContext();
+            if (gc != nullptr) {
+                wxGraphicsPath shape = gc->CreatePath();
+                if (m_playing) {
+                    const double r = FromDIP(1);
+                    shape.AddRoundedRectangle(x + 0.5, icon_y + 0.5, icon_w, icon_h, r);
+                } else {
+                    shape.MoveToPoint(x + 0.5, icon_y + 0.5);
+                    shape.AddLineToPoint(x + 0.5, icon_y + icon_h - 0.5);
+                    shape.AddLineToPoint(x + icon_w + 0.5, icon_y + icon_h / 2.0);
+                    shape.CloseSubpath();
+                }
+                gc->SetPen(*wxTRANSPARENT_PEN);
+                gc->SetBrush(wxBrush(*wxWHITE));
+                gc->FillPath(shape);
+            }
         }
         x += icon_w + gap;
-
         dc.DrawText(label, x, (size.GetHeight() - text_h) / 2);
     }
 
     ClickHandler m_click_handler;
+    wxBitmap m_stop_icon;
+    bool m_playing{false};
 };
 
 wxColour camera_header_background()
 {
-    return DeviceUiStyle::page_background();
+    return DeviceUiStyle::card_header_background();
 }
 
 wxColour camera_idle_background()
@@ -112,28 +170,47 @@ wxBitmap create_header_icon_bitmap(const std::string& bitmap_name, wxWindow* win
     if (!image.IsOk() || image.GetWidth() <= 0 || image.GetHeight() <= 0)
         return bitmap;
 
-    wxImage flattened(image.GetWidth(), image.GetHeight(), false);
-    unsigned char* dst = flattened.GetData();
-    const unsigned char* src = image.GetData();
-    const unsigned char* alpha = image.HasAlpha() ? image.GetAlpha() : nullptr;
-    if (dst == nullptr || src == nullptr)
+    unsigned char* data = image.GetData();
+    if (data == nullptr)
         return bitmap;
 
-    const wxColour bg = camera_header_background();
-    const int bg_r = bg.Red();
-    const int bg_g = bg.Green();
-    const int bg_b = bg.Blue();
+    const wxColour fg = DeviceUiStyle::text_primary();
+    const unsigned char* alpha = image.HasAlpha() ? image.GetAlpha() : nullptr;
     const int pixels = image.GetWidth() * image.GetHeight();
     for (int i = 0; i < pixels; ++i) {
-        const int a = alpha != nullptr ? alpha[i] : 255;
-        const int inv = 255 - a;
+        if (alpha != nullptr && alpha[i] == 0)
+            continue;
         const int offset = i * 3;
-        dst[offset + 0] = static_cast<unsigned char>((src[offset + 0] * a + bg_r * inv) / 255);
-        dst[offset + 1] = static_cast<unsigned char>((src[offset + 1] * a + bg_g * inv) / 255);
-        dst[offset + 2] = static_cast<unsigned char>((src[offset + 2] * a + bg_b * inv) / 255);
+        data[offset + 0] = fg.Red();
+        data[offset + 1] = fg.Green();
+        data[offset + 2] = fg.Blue();
     }
 
-    return wxBitmap(flattened);
+    // Recolouring goes through wxImage, which drops the backing scale.
+    // Rebuild with the original factor so Retina icons stay 18/16 DIP
+    // instead of using the 2x pixel size as the widget size.
+    const double scale = bitmap.GetScaleFactor();
+#ifdef __APPLE__
+    return wxBitmap(image, -1, scale > 0.01 ? scale : 1.0);
+#else
+    wxBitmap tinted(image);
+    if (scale > 0.01)
+        tinted.SetScaleFactor(scale);
+    return tinted;
+#endif
+}
+
+void pin_header_icon(wxStaticBitmap* icon, int dip_size)
+{
+    if (icon == nullptr)
+        return;
+    wxSize size = ScalableBitmap::GetBmpSize(icon->GetBitmap());
+    if (size.x <= 0 || size.y <= 0) {
+        const int side = icon->FromDIP(dip_size);
+        size = wxSize(side, side);
+    }
+    icon->SetMinSize(size);
+    icon->SetMaxSize(size);
 }
 
 wxImage try_load_image_file(const boost::filesystem::path& path, wxBitmapType type)
@@ -244,11 +321,11 @@ CameraPanel::CameraPanel(wxWindow* parent)
     : wxPanel(parent, wxID_ANY)
 {
     SetBackgroundColour(DeviceUiStyle::page_background());
-    SetMinSize(wxSize(FromDIP(460), FromDIP(555)));
+    SetMinSize(wxSize(FromDIP(460), FromDIP(320)));
 
     auto* root = new wxBoxSizer(wxVERTICAL);
-    m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Live Camera"));
-    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
+    m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Live Camera"), -1, -1, 0, 0, 0);
+    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::card_background());
     auto* content_sizer = new wxBoxSizer(wxVERTICAL);
 
     auto* header_actions = new wxPanel(m_frame, wxID_ANY);
@@ -256,6 +333,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
     auto* header_actions_sizer = new wxBoxSizer(wxHORIZONTAL);
     m_timelapse_btn = new wxStaticBitmap(header_actions, wxID_ANY,
         create_header_icon_bitmap("camera_timelapse_white", header_actions, 18));
+    pin_header_icon(m_timelapse_btn, 18);
     m_timelapse_btn->SetBackgroundColour(camera_header_background());
     m_timelapse_btn->SetCursor(wxCursor(wxCURSOR_HAND));
     m_timelapse_btn->SetToolTip(wxString::FromUTF8("Timelapse"));
@@ -264,19 +342,9 @@ CameraPanel::CameraPanel(wxWindow* parent)
     });
     header_actions_sizer->Add(m_timelapse_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
 
-    m_fullscreen_btn = new wxStaticBitmap(header_actions, wxID_ANY,
-        create_header_icon_bitmap("camera_fullscreen_white", header_actions, 18));
-    m_fullscreen_btn->SetBackgroundColour(camera_header_background());
-    m_fullscreen_btn->SetCursor(wxCursor(wxCURSOR_HAND));
-    m_fullscreen_btn->SetToolTip(wxString::FromUTF8("Fullscreen"));
-    m_fullscreen_btn->Bind(wxEVT_LEFT_UP, [this](wxMouseEvent &) {
-        toggle_fullscreen();
-        if (m_fullscreen_handler) m_fullscreen_handler();
-    });
-    header_actions_sizer->Add(m_fullscreen_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
-
     m_refresh_btn = new wxStaticBitmap(header_actions, wxID_ANY,
         create_header_icon_bitmap("camera_refresh_white", header_actions, 16));
+    pin_header_icon(m_refresh_btn, 16);
     m_refresh_btn->SetBackgroundColour(camera_header_background());
     m_refresh_btn->SetCursor(wxCursor(wxCURSOR_HAND));
     m_refresh_btn->SetToolTip(wxString::FromUTF8("Refresh"));
@@ -289,7 +357,9 @@ CameraPanel::CameraPanel(wxWindow* parent)
 
     m_viewport = new wxPanel(m_frame->content_parent(), wxID_ANY);
     m_viewport->SetBackgroundColour(camera_idle_background());
-    m_viewport->SetMinSize(wxSize(FromDIP(420), FromDIP(390)));
+    const int preview_min_w = FromDIP(420);
+    const int preview_min_h = std::max(1, static_cast<int>(std::lround(preview_min_w * 9.0 / 16.0)));
+    m_viewport->SetMinSize(wxSize(preview_min_w, preview_min_h));
     // Absolute stacking: idle placeholder and stream host share the same rect.
     m_viewport->SetSizer(nullptr);
 
@@ -311,7 +381,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
 
     m_stream_host = new wxPanel(m_viewport, wxID_ANY);
     m_stream_host->SetBackgroundColour(*wxBLACK);
-    m_stream_host->SetMinSize(wxSize(FromDIP(420), FromDIP(360)));
+    m_stream_host->SetMinSize(wxSize(preview_min_w, preview_min_h));
     m_stream_host->Hide();
 
     m_viewport->Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
@@ -326,7 +396,13 @@ CameraPanel::CameraPanel(wxWindow* parent)
             m_play_handler();
     });
     m_play_btn = play_btn;
-    control_sizer->Add(m_play_btn, 0, wxLEFT | wxTOP | wxBOTTOM, FromDIP(8));
+    m_status_label = new wxStaticText(m_frame->content_parent(), wxID_ANY, wxEmptyString);
+    m_status_label->SetForegroundColour(DeviceUiStyle::text_muted());
+    m_status_label->SetBackgroundColour(DeviceUiStyle::card_background());
+    m_status_label->Hide();
+    control_sizer->Add(m_play_btn, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxTOP | wxBOTTOM, FromDIP(8));
+    control_sizer->AddStretchSpacer(1);
+    control_sizer->Add(m_status_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
 
     content_sizer->Add(m_viewport, 1, wxEXPAND);
     content_sizer->Add(control_sizer, 0, wxEXPAND);
@@ -334,7 +410,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
     root->Add(m_frame, 1, wxEXPAND);
     SetSizer(root);
 
-    update_idle_visibility(false);
+    update_from_load_state();
     CallAfter([this]() { layout_viewport_layers(); });
 }
 
@@ -359,10 +435,61 @@ void CameraPanel::layout_viewport_layers()
     }
 }
 
-void CameraPanel::update_idle_visibility(bool stream_available)
+int CameraPanel::chrome_height() const
 {
-    m_stream_available = stream_available;
-    const bool show_stream = m_stream_started && stream_available;
+    const int fallback = FromDIP(98);
+    if (m_frame == nullptr || m_frame->GetSizer() == nullptr || m_viewport == nullptr)
+        return fallback;
+
+    const int viewport_h = std::max(1, m_viewport->GetMinSize().GetHeight());
+    const int frame_h = m_frame->GetSizer()->CalcMin().GetHeight();
+    if (frame_h > viewport_h)
+        return frame_h - viewport_h;
+    return fallback;
+}
+
+void CameraPanel::fit_preview(int max_width, int max_height)
+{
+    if (m_fitting_preview || m_viewport == nullptr || max_width <= 0 || max_height <= 0)
+        return;
+
+    const int min_w = FromDIP(240);
+    const int min_h = FromDIP(135);
+    const int chrome = chrome_height();
+    int preview_w = std::max(min_w, max_width);
+    if (m_frame != nullptr && m_frame->content_parent() != nullptr) {
+        const int content_w = m_frame->content_parent()->GetClientSize().GetWidth();
+        if (content_w > 0)
+            preview_w = std::max(min_w, content_w);
+    }
+
+    const int max_preview_h = std::max(min_h, max_height - chrome);
+    int preview_h = static_cast<int>(std::lround(preview_w * 9.0 / 16.0));
+    if (preview_h > max_preview_h)
+        preview_h = max_preview_h;
+    preview_h = std::max(min_h, preview_h);
+
+    const int panel_h = preview_h + chrome;
+    const wxSize next(preview_w, preview_h);
+    if (m_fitted_preview == next && GetMaxSize().GetHeight() == panel_h)
+        return;
+
+    m_fitting_preview = true;
+    m_fitted_preview = next;
+    m_viewport->SetMinSize(wxSize(min_w, preview_h));
+    m_viewport->SetMaxSize(wxDefaultSize);
+    if (m_stream_host != nullptr)
+        m_stream_host->SetMinSize(wxSize(min_w, min_h));
+    SetMinSize(wxSize(FromDIP(460), panel_h));
+    SetMaxSize(wxSize(-1, panel_h));
+    Layout();
+    layout_viewport_layers();
+    m_fitting_preview = false;
+}
+
+void CameraPanel::update_from_load_state()
+{
+    const bool show_stream = m_load_state == CameraLoadState::Live;
     if (m_stream_host != nullptr)
         m_stream_host->Show(show_stream);
     if (m_idle_placeholder != nullptr) {
@@ -371,16 +498,30 @@ void CameraPanel::update_idle_visibility(bool stream_available)
             m_idle_placeholder->Raise();
     }
     if (m_empty_state != nullptr)
-        m_empty_state->Show(m_stream_started && !stream_available);
+        m_empty_state->Hide();
+    if (auto* play_btn = static_cast<CameraPlayButton*>(m_play_btn))
+        play_btn->set_playing(show_stream);
+    if (m_status_label != nullptr) {
+        if (m_load_state == CameraLoadState::Initializing) {
+            m_status_label->SetLabelText(wxString::FromUTF8("Initializing"));
+            m_status_label->SetForegroundColour(DeviceUiStyle::text_muted());
+            m_status_label->Show();
+        } else if (m_load_state == CameraLoadState::Failed) {
+            m_status_label->SetLabelText(wxString::FromUTF8("Camera could not be opened"));
+            m_status_label->SetForegroundColour(DeviceUiStyle::danger());
+            m_status_label->Show();
+        } else {
+            m_status_label->Hide();
+        }
+    }
     layout_viewport_layers();
+    Layout();
     if (m_viewport != nullptr)
         m_viewport->Refresh(false);
 }
 
-void CameraPanel::apply_state(const CameraState& state)
+void CameraPanel::apply_state(const CameraState&)
 {
-    const bool available = state.available && !state.stream_url.IsEmpty();
-    update_idle_visibility(available);
 }
 
 void CameraPanel::set_refresh_handler(RefreshHandler handler)
@@ -393,104 +534,17 @@ void CameraPanel::set_play_handler(PlayHandler handler)
     m_play_handler = std::move(handler);
 }
 
-void CameraPanel::set_fullscreen_handler(FullscreenHandler handler)
-{
-    m_fullscreen_handler = std::move(handler);
-}
-
-void CameraPanel::toggle_fullscreen()
-{
-    if (m_fullscreen_frame != nullptr) {
-        // Already fullscreen -- treat a second click the same as Esc/close box.
-        m_fullscreen_frame->Close();
-        return;
-    }
-    if (m_stream_host == nullptr || m_viewport == nullptr)
-        return;
-
-    auto* frame = new wxFrame(nullptr, wxID_ANY, wxString::FromUTF8("Live Camera"));
-    frame->SetBackgroundColour(*wxBLACK);
-    m_fullscreen_frame = frame;
-
-    m_stream_host->Reparent(frame);
-    m_stream_host->Show(true);
-    m_stream_host->Lower();
-
-    // Plain wxButton, not a bare styled label: guaranteed visible against any
-    // background regardless of font glyph support, no custom paint needed.
-    auto* close_btn = new wxButton(frame, wxID_ANY, wxString::FromUTF8("X"),
-        wxDefaultPosition, wxSize(FromDIP(36), FromDIP(36)));
-    close_btn->SetBackgroundColour(wxColour(60, 60, 60));
-    close_btn->SetForegroundColour(*wxWHITE);
-    close_btn->SetCursor(wxCursor(wxCURSOR_HAND));
-    close_btn->SetToolTip(wxString::FromUTF8("Close (Esc)"));
-    {
-        wxFont f = close_btn->GetFont();
-        f.SetPointSize(f.GetPointSize() + 2);
-        f.SetWeight(wxFONTWEIGHT_BOLD);
-        close_btn->SetFont(f);
-    }
-
-    // Returns the stream host to the Device tab and tears down the fullscreen
-    // window. Guarded by the m_fullscreen_frame nullptr check so it's safe to
-    // call more than once (close button click + the frame's own close event).
-    auto close_fullscreen = [this]() {
-        if (m_fullscreen_frame == nullptr)
-            return;
-        wxFrame* frame_to_close = m_fullscreen_frame;
-        m_fullscreen_frame = nullptr;
-        if (m_stream_host != nullptr && m_viewport != nullptr) {
-            m_stream_host->Reparent(m_viewport);
-            layout_viewport_layers();
-            update_idle_visibility(m_stream_available);
-        }
-        frame_to_close->Destroy();
-    };
-
-    close_btn->Bind(wxEVT_BUTTON, [close_fullscreen](wxCommandEvent&) { close_fullscreen(); });
-    frame->Bind(wxEVT_CHAR_HOOK, [close_fullscreen](wxKeyEvent& evt) {
-        if (evt.GetKeyCode() == WXK_ESCAPE)
-            close_fullscreen();
-        else
-            evt.Skip();
-    });
-    frame->Bind(wxEVT_CLOSE_WINDOW, [close_fullscreen](wxCloseEvent&) { close_fullscreen(); });
-
-    auto reposition = [this, frame, close_btn]() {
-        const wxSize client = frame->GetClientSize();
-        if (client.GetWidth() <= 0 || client.GetHeight() <= 0)
-            return;
-        if (m_stream_host != nullptr)
-            m_stream_host->SetSize(0, 0, client.GetWidth(), client.GetHeight());
-        close_btn->SetPosition(wxPoint(client.GetWidth() - close_btn->GetSize().GetWidth() - FromDIP(24), FromDIP(20)));
-        close_btn->Raise();
-    };
-    frame->Bind(wxEVT_SIZE, [reposition](wxSizeEvent& evt) {
-        evt.Skip();
-        reposition();
-    });
-
-    frame->Maximize(true);
-    frame->Show(true);
-    frame->SendSizeEvent();
-    reposition();
-    // Maximize can settle a frame later than the same-turn SendSizeEvent on
-    // some window managers; correct the button position once more next idle.
-    CallAfter([reposition]() { reposition(); });
-    frame->SetFocus();
-}
-
 void CameraPanel::set_timelapse_handler(TimelapseHandler handler)
 {
     m_timelapse_handler = std::move(handler);
 }
 
-void CameraPanel::set_stream_started(bool started)
+void CameraPanel::set_load_state(CameraLoadState state)
 {
-    if (m_stream_started == started)
+    if (m_load_state == state)
         return;
-    m_stream_started = started;
-    update_idle_visibility(m_stream_available);
+    m_load_state = state;
+    update_from_load_state();
 }
 
 } // namespace DeviceDashboard

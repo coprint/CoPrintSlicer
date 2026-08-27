@@ -1310,7 +1310,12 @@ void PlaterPresetComboBox::update()
         selected_in_ams = add_ams_filaments(into_u8(selected_user_preset.empty() ? selected_system_preset : selected_user_preset), true);
     }
 
-    std::vector<std::string> filament_orders = {"CoPrint Generic PLA", "CoPrint Generic PETG", "CoPrint Generic ABS", "CoPrint Generic TPU"};
+    std::vector<std::string> filament_orders = {
+        "Co Print PLA (ChromaSet)", "Co Print PLA (Quadro)",
+        "Co Print PETG (ChromaSet)", "Co Print PETG (Quadro)",
+        "Co Print ABS (ChromaSet)", "Co Print ABS (Quadro)",
+        "Co Print TPU (ChromaSet)", "Co Print TPU (Quadro)"
+    };
     std::vector<std::string> first_vendors     = {"", "Co Print", "CoPrint", "Generic"}; // Empty vendor for non-system presets
     std::vector<std::string> first_types     = {"PLA", "PETG", "ABS", "TPU"};
     auto  add_presets       = [this, &preset_descriptions, &filament_orders, &preset_filament_vendors, &first_vendors, &preset_filament_types, &preset_aliases, &preset_bundle_ids, &preset_bundle_names, &first_types, &selected_in_ams]

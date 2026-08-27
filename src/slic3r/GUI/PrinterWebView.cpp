@@ -17,11 +17,13 @@
 #include "slic3r/GUI/DeviceManager.hpp"
 #include "slic3r/GUI/DeviceDashboard/services/DashboardStateAdapter.hpp"
 #include "slic3r/GUI/DeviceDashboard/DeviceUiStyle.hpp"
-#include "slic3r/GUI/DeviceDashboard/panels/MovementPanel.hpp"
-#include "slic3r/GUI/DeviceDashboard/panels/PrintStatusPanel.hpp"
-#include "slic3r/GUI/DeviceDashboard/panels/PrinterStatusPanel.hpp"
-#include "slic3r/GUI/DeviceDashboard/panels/FilamentPanel.hpp"
+#include "slic3r/GUI/DeviceDashboard/DeviceDashboardPage.hpp"
+#include "slic3r/GUI/DeviceDashboard/PrinterOfflineOverlay.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/CameraPanel.hpp"
+#include "slic3r/GUI/DeviceDashboard/FilamentSelectDialog.hpp"
+#include "slic3r/GUI/DeviceDashboard/panels/FilamentPanel.hpp"
+#include "slic3r/GUI/DeviceDashboard/panels/PrinterStatusPanel.hpp"
+#include "slic3r/GUI/DeviceDashboard/panels/PrintStatusPanel.hpp"
 #include "slic3r/GUI/Widgets/Button.hpp"
 #include "slic3r/GUI/Widgets/ProgressBar.hpp"
 #include "slic3r/GUI/Widgets/StaticBox.hpp"
@@ -43,9 +45,7 @@
 #include <wx/textctrl.h>
 #include <wx/dialog.h>
 #include <wx/button.h>
-#include <wx/colordlg.h>
 #include <wx/combobox.h>
-#include <wx/display.h>
 #include <wx/filedlg.h>
 #include <wx/filefn.h>
 #include <wx/file.h>
@@ -124,9 +124,15 @@ public:
 
             const int thumb_w = FromDIP(4);
             const int thumb_x = (GetClientSize().GetWidth() - thumb_w) / 2;
+            const int track_h = GetClientSize().GetHeight();
+            const double radius = thumb_w / 2.0;
             dc.SetPen(*wxTRANSPARENT_PEN);
+            if (track_h > 0) {
+                dc.SetBrush(wxBrush(wxColour("#E4E6E8")));
+                dc.DrawRoundedRectangle(thumb_x, 0, thumb_w, track_h, radius);
+            }
             dc.SetBrush(wxBrush(wxColour("#7A8088")));
-            dc.DrawRoundedRectangle(thumb_x, m_thumb_y, thumb_w, m_thumb_height, thumb_w / 2.0);
+            dc.DrawRoundedRectangle(thumb_x, m_thumb_y, thumb_w, m_thumb_height, radius);
         });
     }
 
@@ -196,14 +202,103 @@ static std::string to_lower_ascii(std::string value)
     return value;
 }
 
+static bool is_generic_coprint_product_name(const std::string &name)
+{
+    const std::string lower = to_lower_ascii(name);
+    return lower == "co print quadro" ||
+           lower == "co-print quadro" ||
+           lower == "co-print-quadro" ||
+           lower == "co_print_quadro" ||
+           lower == "co print chromaset" ||
+           lower == "co-print chromaset" ||
+           lower == "co-print-chromaset" ||
+           lower == "co_print_chromaset";
+}
+
 static bool is_placeholder_printer_name(const std::string &name)
 {
     const std::string lower = to_lower_ascii(name);
     return lower.empty() ||
+           lower == "unknown" ||
            lower == "unknown printer" ||
            lower == "moonraker printer" ||
            lower == "moonraker" ||
            looks_like_network_identifier(name);
+}
+
+static std::string compact_alnum_lower(const std::string &name)
+{
+    std::string out;
+    out.reserve(name.size());
+    for (unsigned char ch : name) {
+        if (std::isalnum(ch))
+            out += static_cast<char>(std::tolower(ch));
+    }
+    return out;
+}
+
+static bool manufacturer_is_coprint(const std::string &manufacturer)
+{
+    return compact_alnum_lower(manufacturer).find("coprint") != std::string::npos;
+}
+
+static bool coprint_manufacturer_from_info(const nlohmann::json &info)
+{
+    if (!info.is_object())
+        return false;
+    nlohmann::json payload = info;
+    if (payload.contains("result") && payload["result"].is_object())
+        payload = payload["result"];
+    if (!payload.contains("manufacturer") || !payload["manufacturer"].is_string())
+        return false;
+    return manufacturer_is_coprint(payload["manufacturer"].get<std::string>());
+}
+
+enum class MoonrakerProbeStatus {
+    Unreachable,
+    Unsupported,
+    Ok
+};
+
+static void show_unsupported_printer_dialog(wxWindow *parent)
+{
+    wxMessageBox(_L("This printer is not compatible with CoPrintSlicer."),
+                 _L("Add Printer"),
+                 wxOK | wxICON_INFORMATION,
+                 parent);
+}
+
+// Factory slugs from GET /machine/coprint/info become "Co Print Quadro".
+// Custom names such as "Atolye-1" are kept as returned.
+static std::string slicer_name_from_coprint_device_name(const std::string &device_name, const std::string &printer_type)
+{
+    if (!device_name.empty()) {
+        const std::string compact = compact_alnum_lower(device_name);
+        if (compact == "coprintquadro" || compact == "quadro")
+            return "Co Print Quadro";
+        if (compact == "coprintchromaset" || compact == "chromaset" || compact == "chromahead")
+            return "Co Print ChromaSet";
+        return device_name;
+    }
+    if (printer_type == "Co_Print_Quadro")
+        return "Co Print Quadro";
+    if (printer_type == "Co_Print_ChromaSet")
+        return "Co Print ChromaSet";
+    return {};
+}
+
+static std::string friendly_host_from_address(const std::string &addr)
+{
+    std::string value = addr;
+    const auto scheme_pos = value.find("://");
+    if (scheme_pos != std::string::npos)
+        value = value.substr(scheme_pos + 3);
+    const auto slash_pos = value.find('/');
+    if (slash_pos != std::string::npos)
+        value = value.substr(0, slash_pos);
+    if (value.size() > 5 && value.compare(value.size() - 5, 5, ":7125") == 0)
+        value.resize(value.size() - 5);
+    return value;
 }
 
 static bool hostname_looks_like_quadro(const std::string &lower)
@@ -302,21 +397,84 @@ static bool coprint_identity_from_info_json(const nlohmann::json &info, std::str
 
     if (hostname_looks_like_quadro(identity) ||
         identity.find("quadro") != std::string::npos) {
-        // Prefer the product label for the sidebar, not a raw hostname like "quadorya".
-        dev_name = "Co Print Quadro";
         printer_type = "Co_Print_Quadro";
+        dev_name = slicer_name_from_coprint_device_name(device_name, printer_type);
         return true;
     }
     if (identity.find("chromaset") != std::string::npos ||
         identity.find("chroma set") != std::string::npos ||
         identity.find("chromahead") != std::string::npos ||
         identity.find("chroma") != std::string::npos) {
-        dev_name = "Co Print ChromaSet";
         printer_type = "Co_Print_ChromaSet";
+        dev_name = slicer_name_from_coprint_device_name(device_name, printer_type);
         return true;
     }
 
     return false;
+}
+
+static std::string trim_ascii(const std::string &value)
+{
+    size_t begin = 0;
+    size_t end = value.size();
+    while (begin < end && std::isspace(static_cast<unsigned char>(value[begin])))
+        ++begin;
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])))
+        --end;
+    return value.substr(begin, end - begin);
+}
+
+static std::string display_name_from_coprint_info_body(const std::string &body)
+{
+    if (body.empty())
+        return {};
+
+    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
+    if (parsed.is_discarded())
+        return {};
+    if (parsed.contains("result") && parsed["result"].is_object())
+        parsed = parsed["result"];
+    if (!parsed.is_object())
+        return {};
+
+    std::string device_name;
+    if (parsed.contains("device_name") && parsed["device_name"].is_string())
+        device_name = trim_ascii(parsed["device_name"].get<std::string>());
+
+    std::string detected_name;
+    std::string printer_type;
+    coprint_identity_from_info_json(parsed, detected_name, printer_type);
+
+    if (!device_name.empty())
+        return slicer_name_from_coprint_device_name(device_name, printer_type);
+    if (!detected_name.empty())
+        return detected_name;
+    return slicer_name_from_coprint_device_name({}, printer_type);
+}
+
+static MachineObject *find_machine_for_coprint_name(DeviceManager *dev, const std::string &dev_id)
+{
+    if (dev == nullptr || dev_id.empty())
+        return nullptr;
+    if (MachineObject *obj = dev->get_selected_machine()) {
+        if (obj->get_dev_id() == dev_id || obj->get_dev_ip() == dev_id)
+            return obj;
+    }
+    if (MachineObject *obj = dev->get_local_machine(dev_id))
+        return obj;
+    if (MachineObject *obj = dev->get_my_machine(dev_id))
+        return obj;
+    for (const auto &entry : dev->get_local_machinelist()) {
+        if (entry.second != nullptr &&
+            (entry.first == dev_id || entry.second->get_dev_id() == dev_id || entry.second->get_dev_ip() == dev_id))
+            return entry.second;
+    }
+    for (const auto &entry : dev->get_my_machine_list()) {
+        if (entry.second != nullptr &&
+            (entry.first == dev_id || entry.second->get_dev_id() == dev_id))
+            return entry.second;
+    }
+    return nullptr;
 }
 
 struct LocalIpv4Subnet {
@@ -488,7 +646,7 @@ static bool sanitize_moonraker_address(std::string input, std::string &out_host_
     return true;
 }
 
-static bool probe_moonraker_host(const std::string &ip, BBLocalMachine &machine)
+static MoonrakerProbeStatus probe_moonraker_host(const std::string &ip, BBLocalMachine &machine)
 {
     auto moonraker_base_url = [](std::string host) {
         auto trim = [](std::string &s) {
@@ -556,19 +714,7 @@ static bool probe_moonraker_host(const std::string &ip, BBLocalMachine &machine)
     machine.printer_type = "Moonraker";
 
     bool any_endpoint = false;
-
-    // Prefer CoPrint identity endpoint first, then hostname hints, then tool layout.
-    const auto coprint_info = fetch_json("/machine/coprint/info");
-    if (coprint_info.is_object()) {
-        any_endpoint = true;
-        std::string detected_name;
-        std::string detected_type;
-        if (coprint_identity_from_info_json(coprint_info, detected_name, detected_type)) {
-            machine.dev_name = detected_name;
-            machine.printer_type = detected_type;
-            return true;
-        }
-    }
+    bool has_coprint_device_name = false;
 
     for (const char *path : {"/server/info", "/printer/info", "/machine/system_info"}) {
         const auto info = fetch_json(path);
@@ -578,14 +724,8 @@ static bool probe_moonraker_host(const std::string &ip, BBLocalMachine &machine)
         const std::string host_name = extract_hostname(info);
         if (host_name.empty())
             continue;
-        machine.dev_name = host_name;
-        std::string mapped_name;
-        std::string mapped_type;
-        if (apply_coprint_name_from_hostname(host_name, mapped_name, mapped_type)) {
-            machine.dev_name = mapped_name;
-            machine.printer_type = mapped_type;
-            return true;
-        }
+        if (!is_placeholder_printer_name(host_name))
+            machine.dev_name = host_name;
         break;
     }
 
@@ -595,35 +735,84 @@ static bool probe_moonraker_host(const std::string &ip, BBLocalMachine &machine)
         any_endpoint = true;
         if (objects_payload.contains("result") && objects_payload["result"].is_object())
             objects_payload = objects_payload["result"];
-        if (objects_payload.contains("objects") && objects_payload["objects"].is_array()) {
-            bool has_extruder = false;
-            bool has_extra_hotend = false;
-            for (const auto &object_name : objects_payload["objects"]) {
-                if (!object_name.is_string())
-                    continue;
-                const std::string name = object_name.get<std::string>();
-                if (name == "extruder")
-                    has_extruder = true;
-                else if (name == "extruder1" || name == "extruder2" || name == "extruder3")
-                    has_extra_hotend = true;
-            }
-            if (has_extruder && !has_extra_hotend) {
-                machine.dev_name = "Co Print ChromaSet";
-                machine.printer_type = "Co_Print_ChromaSet";
-            } else if (has_extra_hotend) {
-                machine.dev_name = "Co Print Quadro";
-                machine.printer_type = "Co_Print_Quadro";
+    }
+
+    const auto coprint_info = fetch_json("/machine/coprint/info");
+    const bool coprint_supported = coprint_manufacturer_from_info(coprint_info);
+    if (coprint_info.is_object()) {
+        any_endpoint = true;
+        if (coprint_supported) {
+            std::string detected_name;
+            std::string detected_type;
+            if (coprint_identity_from_info_json(coprint_info, detected_name, detected_type)) {
+                if (!detected_type.empty())
+                    machine.printer_type = detected_type;
+                if (!detected_name.empty()) {
+                    machine.dev_name = detected_name;
+                    has_coprint_device_name = true;
+                }
             }
         }
     }
 
-    return any_endpoint;
+    if (coprint_supported && objects_payload.is_object() &&
+        objects_payload.contains("objects") && objects_payload["objects"].is_array()) {
+        bool has_extruder = false;
+        bool has_extra_hotend = false;
+        for (const auto &object_name : objects_payload["objects"]) {
+            if (!object_name.is_string())
+                continue;
+            const std::string name = object_name.get<std::string>();
+            if (name == "extruder")
+                has_extruder = true;
+            else if (name == "extruder1" || name == "extruder2" || name == "extruder3")
+                has_extra_hotend = true;
+        }
+        if (has_extruder && !has_extra_hotend)
+            machine.printer_type = "Co_Print_ChromaSet";
+        else if (has_extra_hotend)
+            machine.printer_type = "Co_Print_Quadro";
+    }
+
+    if (!has_coprint_device_name && coprint_supported) {
+        std::string mapped_name;
+        std::string mapped_type;
+        if (apply_coprint_name_from_hostname(machine.dev_name, mapped_name, mapped_type) &&
+            machine.printer_type == "Moonraker")
+            machine.printer_type = mapped_type;
+    }
+
+    if (!any_endpoint)
+        return MoonrakerProbeStatus::Unreachable;
+    if (!coprint_supported)
+        return MoonrakerProbeStatus::Unsupported;
+    return MoonrakerProbeStatus::Ok;
 }
 
-static bool is_coprint_discovered_machine(const BBLocalMachine &machine)
+static bool klippy_is_ready(const std::string &state)
 {
-    const std::string normalized_name = to_lower_ascii(machine.dev_name);
-    return normalized_name == "co-print" || normalized_name == "coprint";
+    return state == "ready";
+}
+
+static bool klippy_is_faulted(const std::string &state)
+{
+    return state == "error" || state == "shutdown" || state == "disconnected";
+}
+
+static bool dashboard_commands_allowed(MachineObject *obj, const std::string &klippy_state)
+{
+    return obj != nullptr && obj->is_online() && klippy_is_ready(klippy_state);
+}
+
+static bool print_blocks_manual_controls(const DeviceDashboard::PrintJobState &job)
+{
+    return job.state == DeviceDashboard::PrintCommandState::Printing;
+}
+
+static bool dashboard_manual_controls_allowed(MachineObject *obj, const std::string &klippy_state,
+    const DeviceDashboard::PrintJobState &job)
+{
+    return dashboard_commands_allowed(obj, klippy_state) && !print_blocks_manual_controls(job);
 }
 
 
@@ -864,14 +1053,15 @@ wxString camera_stream_page(const std::vector<wxString> &stream_urls)
            "const img=document.getElementById('camera-stream');"
            "const msg=document.querySelector('.message');"
            "function withCacheBuster(url){return url+(url.indexOf('?')>=0?'&':'?')+'_='+(Date.now());}"
-           "function fail(){document.body.className='failed';msg.textContent='Camera stream unavailable';}"
+           "function fail(){document.title='coprint-camera-fail';document.body.className='failed';msg.textContent='Camera stream unavailable';}"
            "function next(){"
            "if(index>=urls.length){fail();return;}"
            "document.body.className='loading';"
+           "document.title='coprint-camera-loading';"
            "msg.textContent='Trying camera stream...';"
            "img.src=withCacheBuster(urls[index++]);"
            "}"
-           "img.onload=function(){document.body.className='';};"
+           "img.onload=function(){document.title='coprint-camera-ok';document.body.className='';};"
            "img.onerror=function(){setTimeout(next,250);};"
            "if(urls.length){next();}else{fail();}"
            "</script></body></html>";
@@ -1006,6 +1196,8 @@ struct FilamentMetadataResult {
 struct LoadedFilamentResult {
     std::array<wxColour, 4> assigned_colors;
     std::array<wxString, 4> materials;
+    std::array<wxString, 4> brands;
+    std::array<std::string, 4> item_json;
     std::array<bool, 4> tool_has_color{};
     bool has_colors{false};
 };
@@ -1105,31 +1297,65 @@ static FilamentMetadataResult parse_filament_metadata(nlohmann::json metadata)
 
 bool is_valid_loaded_filament_colour(const wxColour &colour);
 
-static LoadedFilamentResult parse_filament_db(nlohmann::json db)
+static nlohmann::json unwrap_filament_db_value(nlohmann::json db)
 {
-    LoadedFilamentResult result;
-    result.materials.fill(wxString::FromUTF8("Empty"));
-
     if (db.contains("result"))
         db = db["result"];
     if (db.is_object() && db.contains("value"))
         db = db["value"];
     if (db.is_object() && db.contains("filament_selections"))
         db = db["filament_selections"];
-    if (!db.is_object())
-        return result;
+    return db.is_object() ? db : nlohmann::json::object();
+}
 
+// Canonical keys are toolhead_1..4 (T1..T4). Older dumps used toolhead_0..3.
+// Never treat toolhead_N as both "T{N}" and "T{N+1}" — that stole T1 when T2 saved.
+static nlohmann::json canonical_filament_toolheads(nlohmann::json db)
+{
+    db = unwrap_filament_db_value(std::move(db));
+    const bool has_legacy_t1 = db.contains("toolhead_0") && db["toolhead_0"].is_object();
+    const bool has_t4 = db.contains("toolhead_4") && db["toolhead_4"].is_object();
+    const bool use_1based = has_t4 || !has_legacy_t1;
+
+    nlohmann::json out = nlohmann::json::object();
+    for (int ui_tool = 1; ui_tool <= 4; ++ui_tool) {
+        const std::string key_1 = "toolhead_" + std::to_string(ui_tool);
+        const std::string key_0 = "toolhead_" + std::to_string(ui_tool - 1);
+        if (use_1based) {
+            if (db.contains(key_1) && db[key_1].is_object())
+                out[key_1] = db[key_1];
+        } else if (db.contains(key_0) && db[key_0].is_object()) {
+            out[key_1] = db[key_0];
+        }
+    }
+    return out;
+}
+
+static nlohmann::json filament_item_from_selection(const DeviceDashboard::FilamentSelection &selection)
+{
+    nlohmann::json item = nlohmann::json::object();
+    item["brand"] = into_u8(selection.brand);
+    item["color"] = into_u8(selection.color);
+    item["color_hex"] = into_u8(selection.color_hex);
+    item["pressure_advance"] = selection.pressure_advance;
+    item["temp_max"] = selection.temp_max;
+    item["temp_min"] = selection.temp_min;
+    item["type"] = into_u8(selection.type);
+    return item;
+}
+
+static LoadedFilamentResult parse_filament_db(nlohmann::json db)
+{
+    LoadedFilamentResult result;
+    result.materials.fill(wxString::FromUTF8("Empty"));
+
+    const nlohmann::json tools = canonical_filament_toolheads(std::move(db));
     for (int ui_tool = 1; ui_tool <= 4; ++ui_tool) {
         const std::string key_name = "toolhead_" + std::to_string(ui_tool);
-        const std::string zero_key = "toolhead_" + std::to_string(ui_tool - 1);
-        const nlohmann::json *tool_ptr = nullptr;
-        if (db.contains(key_name) && db[key_name].is_object())
-            tool_ptr = &db[key_name];
-        else if (db.contains(zero_key) && db[zero_key].is_object())
-            tool_ptr = &db[zero_key];
-        if (tool_ptr == nullptr)
+        if (!tools.contains(key_name) || !tools[key_name].is_object())
             continue;
-        const auto &tool = *tool_ptr;
+        const auto &tool = tools[key_name];
+        result.item_json[ui_tool - 1] = tool.dump();
         if (auto it = tool.find("color_hex"); it != tool.end() && it->is_string()) {
             const wxColour parsed = colour_from_hex(it->get<std::string>(), wxColour());
             if (is_valid_loaded_filament_colour(parsed)) {
@@ -1140,6 +1366,8 @@ static LoadedFilamentResult parse_filament_db(nlohmann::json db)
         }
         if (auto it = tool.find("type"); it != tool.end() && it->is_string())
             result.materials[ui_tool - 1] = wxString::FromUTF8(it->get<std::string>());
+        if (auto it = tool.find("brand"); it != tool.end() && it->is_string())
+            result.brands[ui_tool - 1] = wxString::FromUTF8(it->get<std::string>());
     }
 
     return result;
@@ -1155,6 +1383,99 @@ bool is_empty_filament_material(const wxString &material)
     return material.IsEmpty()
         || material.CmpNoCase(wxString::FromUTF8("Empty")) == 0
         || material.CmpNoCase(wxString::FromUTF8("N/A")) == 0;
+}
+
+static std::string parse_klippy_state(const std::string &body)
+{
+    if (body.empty())
+        return {};
+    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
+    if (parsed.is_discarded())
+        return {};
+    if (parsed.contains("result") && parsed["result"].is_object())
+        parsed = parsed["result"];
+    if (!parsed.is_object())
+        return {};
+
+    bool connected = true;
+    if (parsed.contains("klippy_connected") && parsed["klippy_connected"].is_boolean())
+        connected = parsed["klippy_connected"].get<bool>();
+
+    std::string state;
+    if (parsed.contains("klippy_state") && parsed["klippy_state"].is_string())
+        state = to_lower_ascii(parsed["klippy_state"].get<std::string>());
+
+    if (!connected && (state.empty() || state == "ready"))
+        return "disconnected";
+    return state;
+}
+
+static wxString klippy_state_label(const std::string &state)
+{
+    if (state == "ready")
+        return _L("Ready");
+    if (state == "error")
+        return _L("Error");
+    if (state == "shutdown")
+        return _L("Shutdown");
+    if (state == "startup")
+        return _L("Starting");
+    if (state == "disconnected")
+        return _L("Disconnected");
+    if (state == "offline")
+        return _L("Printer offline");
+    if (state.empty())
+        return _L("Connecting");
+    std::string titled = state;
+    titled[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(titled[0])));
+    return wxString::FromUTF8(titled.c_str());
+}
+
+static wxColour klippy_state_colour(const std::string &state)
+{
+    if (state == "ready")
+        return wxColour("#35CE82");
+    if (state == "error" || state == "offline")
+        return wxColour("#E24C4B");
+    if (state == "shutdown" || state == "disconnected")
+        return wxColour("#AAB2BD");
+    if (state == "startup")
+        return wxColour("#E6A817");
+    return wxColour("#AAB2BD");
+}
+
+static wxString klippy_fault_warning_title(const std::string &state)
+{
+    if (state == "error")
+        return _L("The printer reported an error.");
+    if (state == "shutdown")
+        return _L("The printer firmware is shut down.");
+    if (state == "disconnected")
+        return _L("The printer firmware is disconnected.");
+    return _L("The printer is not ready.");
+}
+
+static wxString klippy_fault_warning_hint()
+{
+    return _L("The printer is reachable.") + "\n" +
+           _L("Checking in the background until it is ready.");
+}
+
+static DeviceDashboard::ConnectionStatus connection_from_klippy(const std::string &state)
+{
+    if (state == "ready")
+        return DeviceDashboard::ConnectionStatus::Online;
+    if (state == "error")
+        return DeviceDashboard::ConnectionStatus::Error;
+    if (state == "shutdown")
+        return DeviceDashboard::ConnectionStatus::Shutdown;
+    if (state == "startup")
+        return DeviceDashboard::ConnectionStatus::Connecting;
+    if (state == "offline" || state == "disconnected")
+        return DeviceDashboard::ConnectionStatus::Offline;
+    if (state.empty())
+        return DeviceDashboard::ConnectionStatus::Connecting;
+    return DeviceDashboard::ConnectionStatus::Offline;
 }
 
 bool looks_like_hex_colour(wxString value)
@@ -1189,497 +1510,6 @@ wxString short_filament_type_from_preset(const wxString &preset)
     if (upper.Contains("PA"))
         return "PA";
     return "PLA";
-}
-
-std::pair<int, int> nozzle_temperature_range_for_material(const wxString &material)
-{
-    const wxString upper = material.Upper();
-    if (upper.Contains("PETG"))
-        return {260, 220};
-    if (upper.Contains("ABS"))
-        return {280, 240};
-    if (upper.Contains("ASA"))
-        return {280, 240};
-    if (upper.Contains("TPU"))
-        return {240, 210};
-    if (upper.Contains("PA"))
-        return {300, 260};
-    return {240, 190};
-}
-
-class RoundedSelect : public StaticBox
-{
-public:
-    RoundedSelect(wxWindow *parent, const wxArrayString &choices, int selection, const wxColour &bg,
-                  const wxColour &border, const wxColour &text, const wxColour &muted, int radius)
-        : StaticBox(parent, wxID_ANY)
-        , m_choices(choices)
-        , m_bg(bg)
-        , m_border(border)
-        , m_text(text)
-        , m_muted(muted)
-    {
-        SetMinSize(wxSize(FromDIP(250), FromDIP(40)));
-        SetCornerRadius(radius);
-        SetBorderWidth(FromDIP(1));
-        SetBorderColorNormal(border);
-        SetBackgroundColorNormal(bg);
-        SetBackgroundColour(parent->GetBackgroundColour());
-        SetCursor(wxCursor(wxCURSOR_HAND));
-
-        auto *sizer = new wxBoxSizer(wxHORIZONTAL);
-        m_value = new wxStaticText(this, wxID_ANY, wxEmptyString);
-        m_value->SetForegroundColour(text);
-        m_arrow = new wxStaticText(this, wxID_ANY, wxString::FromUTF8("v"));
-        m_arrow->SetForegroundColour(muted);
-        sizer->Add(m_value, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(12));
-        sizer->Add(m_arrow, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
-        SetSizer(sizer);
-
-        SetSelection(selection);
-        Bind(wxEVT_LEFT_DOWN, &RoundedSelect::on_left_down, this);
-        m_value->Bind(wxEVT_LEFT_DOWN, &RoundedSelect::on_left_down, this);
-        m_arrow->Bind(wxEVT_LEFT_DOWN, &RoundedSelect::on_left_down, this);
-    }
-
-    void SetSelection(int selection)
-    {
-        if (m_choices.IsEmpty())
-            return;
-        m_selection = std::clamp(selection, 0, static_cast<int>(m_choices.size()) - 1);
-        m_value->SetLabel(m_choices[m_selection]);
-        Layout();
-    }
-
-    wxString GetValue() const
-    {
-        return !m_choices.IsEmpty() && m_selection >= 0 ? m_choices[m_selection] : wxString();
-    }
-
-    void SetChangeHandler(std::function<void()> handler)
-    {
-        m_change_handler = std::move(handler);
-    }
-
-private:
-    void on_left_down(wxMouseEvent &)
-    {
-        if (m_choices.IsEmpty())
-            return;
-
-        wxMenu menu;
-        constexpr int base_id = wxID_HIGHEST + 4300;
-        for (size_t i = 0; i < m_choices.size(); ++i)
-            menu.Append(base_id + static_cast<int>(i), m_choices[i]);
-
-        const int result = GetPopupMenuSelectionFromUser(menu, wxPoint(0, GetSize().y + FromDIP(4)));
-        if (result < base_id)
-            return;
-
-        const int next_selection = result - base_id;
-        if (next_selection < 0 || next_selection >= static_cast<int>(m_choices.size()))
-            return;
-
-        SetSelection(next_selection);
-        if (m_change_handler)
-            m_change_handler();
-    }
-
-    wxArrayString m_choices;
-    int m_selection{0};
-    wxStaticText *m_value{nullptr};
-    wxStaticText *m_arrow{nullptr};
-    wxColour m_bg;
-    wxColour m_border;
-    wxColour m_text;
-    wxColour m_muted;
-    std::function<void()> m_change_handler;
-};
-
-class RoundedValueBox : public StaticBox
-{
-public:
-    RoundedValueBox(wxWindow *parent, const wxString &value, const wxSize &min_size, const wxColour &bg,
-                    const wxColour &border, const wxColour &text, int radius, const wxString &suffix = wxEmptyString)
-        : StaticBox(parent, wxID_ANY)
-    {
-        SetMinSize(min_size);
-        SetCornerRadius(radius);
-        SetBorderWidth(FromDIP(1));
-        SetBorderColorNormal(border);
-        SetBackgroundColorNormal(bg);
-        SetBackgroundColour(parent->GetBackgroundColour());
-
-        auto *sizer = new wxBoxSizer(wxHORIZONTAL);
-        m_value = new wxStaticText(this, wxID_ANY, value);
-        m_value->SetForegroundColour(text);
-        sizer->Add(m_value, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(12));
-        if (!suffix.IsEmpty()) {
-            auto *suffix_label = new wxStaticText(this, wxID_ANY, suffix);
-            suffix_label->SetForegroundColour(text);
-            sizer->Add(suffix_label, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(12));
-        }
-        SetSizer(sizer);
-    }
-
-    void SetValue(const wxString &value)
-    {
-        if (m_value == nullptr)
-            return;
-        m_value->SetLabel(value);
-        Layout();
-    }
-
-private:
-    wxStaticText *m_value{nullptr};
-};
-
-class RoundedColorSwatch : public wxWindow
-{
-public:
-    RoundedColorSwatch(wxWindow *parent, const wxColour &colour, const wxColour &border, int radius)
-        : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxSize(parent->FromDIP(32), parent->FromDIP(32)))
-        , m_colour(colour)
-        , m_border(border)
-        , m_radius(radius)
-    {
-        SetMinSize(wxSize(FromDIP(32), FromDIP(32)));
-        SetMaxSize(wxSize(FromDIP(32), FromDIP(32)));
-        SetBackgroundColour(parent->GetBackgroundColour());
-        SetCursor(wxCursor(wxCURSOR_HAND));
-        Bind(wxEVT_PAINT, &RoundedColorSwatch::on_paint, this);
-    }
-
-    void SetColour(const wxColour &colour)
-    {
-        m_colour = colour;
-        Refresh();
-    }
-
-private:
-    void on_paint(wxPaintEvent &)
-    {
-        wxPaintDC raw_dc(this);
-        wxGCDC dc(raw_dc);
-        dc.SetBackground(wxBrush(GetBackgroundColour()));
-        dc.Clear();
-        dc.SetPen(wxPen(m_border, FromDIP(1)));
-        dc.SetBrush(wxBrush(m_colour.IsOk() ? m_colour : wxColour(214, 45, 214)));
-        const wxSize size = GetClientSize();
-        dc.DrawRoundedRectangle(0, 0, size.x, size.y, m_radius);
-    }
-
-    wxColour m_colour;
-    wxColour m_border;
-    int m_radius{8};
-};
-
-class FilamentMaterialDialog : public wxDialog
-{
-public:
-    FilamentMaterialDialog(wxWindow *parent, int ui_tool, const wxString &initial_material, const wxColour &initial_color)
-        : wxDialog(parent, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
-        , m_colour(initial_color.IsOk() ? initial_color : wxColour(214, 45, 214))
-    {
-        namespace Style = DeviceDashboard;
-
-        const wxColour page_bg = Style::DeviceUiStyle::page_background();
-        const wxColour card_bg = Style::DeviceUiStyle::card_background();
-        const wxColour control_bg = Style::DeviceUiStyle::control_background();
-        const wxColour border = Style::DeviceUiStyle::card_border();
-        const wxColour text = Style::DeviceUiStyle::text_primary();
-        const wxColour muted = Style::DeviceUiStyle::text_muted();
-        const wxColour accent = Style::DeviceUiStyle::accent();
-        const int shell_radius = FromDIP(18);
-        const int control_radius = FromDIP(14);
-        const int button_radius = FromDIP(14);
-
-        SetBackgroundColour(page_bg);
-
-        auto *root = new wxBoxSizer(wxVERTICAL);
-        auto *shell = new StaticBox(this, wxID_ANY);
-        shell->SetCornerRadius(shell_radius);
-        shell->SetBorderWidth(FromDIP(1));
-        shell->SetBorderColorNormal(border);
-        shell->SetBackgroundColorNormal(page_bg);
-        shell->SetBackgroundColour(page_bg);
-        auto *outer = new wxBoxSizer(wxVERTICAL);
-
-        auto *header = new wxPanel(shell, wxID_ANY);
-        header->SetBackgroundColour(card_bg);
-        auto *header_sizer = new wxBoxSizer(wxVERTICAL);
-
-        auto *title_row = new wxBoxSizer(wxHORIZONTAL);
-        auto *title = new wxStaticText(header, wxID_ANY, wxString::Format("Tool %d Filament", ui_tool));
-        wxFont title_font = title->GetFont();
-        title_font.SetWeight(wxFONTWEIGHT_BOLD);
-        title_font.SetPointSize(title_font.GetPointSize() + 2);
-        title->SetFont(title_font);
-        title->SetForegroundColour(text);
-        title_row->Add(title, 1, wxALIGN_CENTER_VERTICAL);
-
-        auto *close_x = new Button(header, wxString::FromUTF8("\u00D7"));
-        close_x->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
-        close_x->SetCornerRadius(FromDIP(8));
-        close_x->SetMinSize(wxSize(FromDIP(34), FromDIP(34)));
-        close_x->SetPaddingSize(wxSize(FromDIP(6), FromDIP(2)));
-        wxFont close_font = close_x->GetFont();
-        close_font.SetPointSize(close_font.GetPointSize() + 4);
-        close_font.SetWeight(wxFONTWEIGHT_BOLD);
-        close_x->SetFont(close_font);
-        close_x->SetBackgroundColour(card_bg);
-        close_x->SetBackgroundColor(StateColor(
-            std::pair(wxColour(53, 57, 65), (int) StateColor::Pressed),
-            std::pair(wxColour(60, 64, 72), (int) StateColor::Hovered),
-            std::pair(card_bg, (int) StateColor::Normal)));
-        close_x->SetBorderWidth(0);
-        close_x->SetTextColor(StateColor(std::pair(text, (int) StateColor::Normal)));
-        title_row->Add(close_x, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(8));
-
-        auto *subtitle = new wxStaticText(header, wxID_ANY, wxString::FromUTF8("Edit material, color, and flow settings from the CoPrint device panel"));
-        subtitle->SetForegroundColour(muted);
-
-        auto *accent_line = new StaticBox(header, wxID_ANY);
-        accent_line->SetMinSize(wxSize(-1, FromDIP(3)));
-        accent_line->SetMaxSize(wxSize(-1, FromDIP(3)));
-        accent_line->SetCornerRadius(FromDIP(2));
-        accent_line->SetBorderWidth(0);
-        accent_line->SetBackgroundColorNormal(accent);
-        accent_line->SetBackgroundColour(accent);
-
-        header_sizer->Add(title_row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
-        header_sizer->Add(subtitle, 0, wxLEFT | wxRIGHT | wxTOP | wxBOTTOM, FromDIP(20));
-        header_sizer->Add(accent_line, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(2));
-        header->SetSizer(header_sizer);
-        outer->Add(header, 0, wxEXPAND);
-
-        auto *body = new wxPanel(shell, wxID_ANY);
-        body->SetBackgroundColour(page_bg);
-        auto *body_sizer = new wxBoxSizer(wxVERTICAL);
-
-        auto *grid = new wxFlexGridSizer(0, 2, FromDIP(12), FromDIP(16));
-        grid->AddGrowableCol(1, 1);
-
-        auto add_label = [&](const wxString &label_text) {
-            auto *label = new wxStaticText(body, wxID_ANY, label_text);
-            label->SetForegroundColour(muted);
-            grid->Add(label, 0, wxALIGN_CENTER_VERTICAL);
-            return label;
-        };
-
-        add_label(wxString::FromUTF8("Filament"));
-        wxArrayString presets;
-        presets.Add("CoPrint Generic PLA");
-        presets.Add("CoPrint Generic PETG");
-        presets.Add("CoPrint Generic ABS");
-        presets.Add("CoPrint Generic ASA");
-        presets.Add("CoPrint Generic TPU");
-        presets.Add("CoPrint Generic PA");
-        const wxString initial_type = is_empty_filament_material(initial_material) ? wxString("PLA") : initial_material;
-        const int initial_selection = initial_type.CmpNoCase("PLA") == 0 ? 0 : std::max(0, presets.Index(initial_type, false));
-        m_filament_combo = new RoundedSelect(body, presets, initial_selection == wxNOT_FOUND ? 0 : initial_selection,
-                                             control_bg, border, text, muted, control_radius);
-        grid->Add(m_filament_combo, 1, wxEXPAND);
-
-        add_label(wxString::FromUTF8("Color"));
-        m_colour_swatch = new RoundedColorSwatch(body, m_colour, border, FromDIP(10));
-        m_colour_swatch->SetCursor(wxCursor(wxCURSOR_HAND));
-        grid->Add(m_colour_swatch, 0, wxALIGN_CENTER_VERTICAL);
-
-        add_label(wxString::FromUTF8("Nozzle\nTemp."));
-        auto *temp_row = new wxBoxSizer(wxHORIZONTAL);
-        auto *max_col = new wxBoxSizer(wxVERTICAL);
-        auto *min_col = new wxBoxSizer(wxVERTICAL);
-        auto *max_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("max"));
-        auto *min_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("min"));
-        max_label->SetForegroundColour(muted);
-        min_label->SetForegroundColour(muted);
-        max_col->Add(max_label, 0, wxBOTTOM, FromDIP(4));
-        min_col->Add(min_label, 0, wxBOTTOM, FromDIP(4));
-        m_temp_max = new RoundedValueBox(body, wxEmptyString, wxSize(FromDIP(88), FromDIP(38)), control_bg, border, text, control_radius, wxString::FromUTF8("C"));
-        m_temp_min = new RoundedValueBox(body, wxEmptyString, wxSize(FromDIP(88), FromDIP(38)), control_bg, border, text, control_radius, wxString::FromUTF8("C"));
-        max_col->Add(m_temp_max, 0);
-        min_col->Add(m_temp_min, 0);
-        temp_row->Add(max_col, 0, wxRIGHT, FromDIP(10));
-        temp_row->Add(min_col, 0);
-        grid->Add(temp_row, 0, wxEXPAND);
-
-        body_sizer->Add(grid, 0, wxEXPAND | wxALL, FromDIP(20));
-
-        auto *calibration = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("Flow Dynamics Calibration"));
-        wxFont cal_font = calibration->GetFont();
-        cal_font.SetWeight(wxFONTWEIGHT_BOLD);
-        calibration->SetFont(cal_font);
-        calibration->SetForegroundColour(accent);
-        body_sizer->Add(calibration, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(20));
-
-        auto *pa_grid = new wxFlexGridSizer(0, 2, FromDIP(10), FromDIP(16));
-        pa_grid->AddGrowableCol(1, 1);
-        auto *pa_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("PA Profile"));
-        pa_label->SetForegroundColour(muted);
-        pa_grid->Add(pa_label, 0, wxALIGN_CENTER_VERTICAL);
-        wxArrayString pa_profiles;
-        pa_profiles.Add("Default");
-        m_pa_combo = new RoundedSelect(body, pa_profiles, 0, control_bg, border, text, muted, control_radius);
-        pa_grid->Add(m_pa_combo, 1, wxEXPAND);
-        auto *factor_label = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("Factor K"));
-        factor_label->SetForegroundColour(muted);
-        pa_grid->Add(factor_label, 0, wxALIGN_CENTER_VERTICAL);
-        m_factor_k = new wxStaticText(body, wxID_ANY, wxString::FromUTF8("0.020"));
-        m_factor_k->SetForegroundColour(text);
-        pa_grid->Add(m_factor_k, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(10));
-        body_sizer->Add(pa_grid, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(20));
-
-        auto *buttons = new wxBoxSizer(wxHORIZONTAL);
-        m_confirm = new Button(body, wxString::FromUTF8("Confirm"));
-        m_confirm->SetStyle(ButtonStyle::Confirm, ButtonType::Choice);
-        style_dialog_button(m_confirm, true, accent, control_bg, border, text, page_bg, button_radius);
-        m_reset = new Button(body, wxString::FromUTF8("Reset"));
-        m_reset->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
-        style_dialog_button(m_reset, false, accent, control_bg, border, text, page_bg, button_radius);
-        m_close = new Button(body, wxString::FromUTF8("Close"));
-        m_close->SetStyle(ButtonStyle::Regular, ButtonType::Choice);
-        style_dialog_button(m_close, false, accent, control_bg, border, text, page_bg, button_radius);
-        buttons->AddStretchSpacer(1);
-        buttons->Add(m_confirm, 0, wxRIGHT, FromDIP(14));
-        buttons->Add(m_reset, 0, wxRIGHT, FromDIP(14));
-        buttons->Add(m_close, 0);
-        body_sizer->Add(buttons, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(26));
-        body->SetSizer(body_sizer);
-        outer->Add(body, 0, wxEXPAND);
-
-        shell->SetSizer(outer);
-        root->Add(shell, 1, wxEXPAND | wxALL, FromDIP(2));
-        SetSizerAndFit(root);
-        SetMinSize(GetSize());
-        apply_rounded_window_shape(shell_radius);
-
-        m_colour_swatch->SetToolTip(wxString::FromUTF8("Select color"));
-
-        m_filament_combo->SetChangeHandler([this]() { update_temperature_fields(); });
-        m_colour_swatch->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &) { choose_colour(); });
-        m_confirm->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_OK); });
-        m_reset->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
-            m_filament_combo->SetSelection(0);
-            m_colour = wxColour(214, 45, 214);
-            m_colour_swatch->SetColour(m_colour);
-            m_factor_k->SetLabel(wxString::FromUTF8("0.020"));
-            update_temperature_fields();
-        });
-        m_close->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
-        close_x->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { EndModal(wxID_CANCEL); });
-        update_temperature_fields();
-
-        BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament material dialog opened for T" << ui_tool;
-    }
-
-    wxString material() const
-    {
-        return short_filament_type_from_preset(m_filament_combo->GetValue());
-    }
-
-    wxString color_hex() const
-    {
-        return hex_from_colour(m_colour);
-    }
-
-private:
-    void style_dialog_button(Button *button, bool primary, const wxColour &accent, const wxColour &control_bg,
-                             const wxColour &border, const wxColour &text, const wxColour &page_bg, int radius)
-    {
-        if (button == nullptr)
-            return;
-
-        button->SetCornerRadius(radius);
-        button->SetMinSize(wxSize(FromDIP(92), FromDIP(34)));
-        button->SetPaddingSize(wxSize(FromDIP(14), FromDIP(8)));
-        button->SetBackgroundColour(page_bg);
-        button->SetBorderWidth(FromDIP(1));
-        button->SetBackgroundColor(StateColor(
-            std::pair(primary ? wxColour(33, 141, 97) : wxColour(37, 40, 46), (int) StateColor::Pressed),
-            std::pair(primary ? wxColour(53, 198, 136) : wxColour(53, 57, 65), (int) StateColor::Hovered),
-            std::pair(primary ? accent : control_bg, (int) StateColor::Normal)));
-        button->SetBorderColor(StateColor(
-            std::pair(primary ? accent : wxColour(76, 82, 92), (int) StateColor::Hovered),
-            std::pair(primary ? accent : border, (int) StateColor::Normal)));
-        button->SetTextColor(StateColor(
-            std::pair(wxColour(255, 255, 255), (int) StateColor::Hovered),
-            std::pair(primary ? wxColour(255, 255, 255) : text, (int) StateColor::Normal)));
-    }
-
-    void apply_rounded_window_shape(int radius)
-    {
-        const wxSize size = GetSize();
-        if (size.x <= 0 || size.y <= 0)
-            return;
-
-        wxBitmap mask(size.x, size.y);
-        wxMemoryDC dc(mask);
-        dc.SetBackground(wxBrush(*wxBLACK));
-        dc.Clear();
-        {
-            wxGCDC gc(dc);
-            gc.SetPen(*wxTRANSPARENT_PEN);
-            gc.SetBrush(wxBrush(*wxWHITE));
-            gc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
-        }
-        dc.SelectObject(wxNullBitmap);
-        wxRegion region(mask, *wxBLACK);
-        SetShape(region);
-    }
-
-    void update_temperature_fields()
-    {
-        const auto [max_temp, min_temp] = nozzle_temperature_range_for_material(material());
-        m_temp_max->SetValue(wxString::Format("%d", max_temp));
-        m_temp_min->SetValue(wxString::Format("%d", min_temp));
-    }
-
-    void choose_colour()
-    {
-        static wxColourData data;
-        data.SetChooseFull(true);
-        data.SetColour(m_colour);
-        wxColourDialog dialog(this, &data);
-        if (dialog.ShowModal() != wxID_OK)
-            return;
-        data = dialog.GetColourData();
-        m_colour = data.GetColour();
-        m_colour_swatch->SetColour(m_colour);
-    }
-
-    RoundedSelect *m_filament_combo{nullptr};
-    RoundedSelect *m_pa_combo{nullptr};
-    RoundedValueBox *m_temp_max{nullptr};
-    RoundedValueBox *m_temp_min{nullptr};
-    wxStaticText *m_factor_k{nullptr};
-    RoundedColorSwatch *m_colour_swatch{nullptr};
-    Button *m_confirm{nullptr};
-    Button *m_reset{nullptr};
-    Button *m_close{nullptr};
-    wxColour m_colour;
-};
-
-void position_dialog_near_anchor(wxDialog& dialog, wxWindow *fallback_parent, const wxPoint& anchor_screen_pos)
-{
-    if (anchor_screen_pos == wxDefaultPosition)
-        return;
-
-    const wxSize size = dialog.GetSize();
-    wxPoint pos(anchor_screen_pos.x - size.x / 2, anchor_screen_pos.y - size.y - 16);
-
-    int display_index = wxDisplay::GetFromPoint(anchor_screen_pos);
-    if (display_index == wxNOT_FOUND && fallback_parent != nullptr)
-        display_index = wxDisplay::GetFromWindow(fallback_parent);
-    wxRect area = display_index != wxNOT_FOUND ? wxDisplay(display_index).GetClientArea() : wxRect(wxPoint(0, 0), wxGetDisplaySize());
-
-    const int min_x = area.GetLeft() + 8;
-    const int min_y = area.GetTop() + 8;
-    const int max_x = std::max(min_x, area.GetRight() - size.x - 8);
-    const int max_y = std::max(min_y, area.GetBottom() - size.y - 8);
-    pos.x = std::clamp(pos.x, min_x, max_x);
-    pos.y = std::clamp(pos.y, min_y, max_y);
-    dialog.SetPosition(pos);
 }
 
 std::string url_encode_component(const wxString &text)
@@ -1727,6 +1557,8 @@ std::string moonraker_base_url(const MachineObject *obj)
     if (obj == nullptr)
         return {};
     std::string host = obj->get_dev_ip();
+    if (host.empty())
+        host = obj->get_dev_id();
     if (host.empty())
         return {};
     if (host.rfind("http://", 0) == 0 || host.rfind("https://", 0) == 0)
@@ -2043,12 +1875,14 @@ wxString remaining_minutes_text(int remaining_seconds)
 PrinterWebView::PrinterWebView(wxWindow *parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
  {
-    SetBackgroundColour(wxColour(28, 30, 34));
+    SetBackgroundColour(wxColour("#EEEEEF"));
     m_filament_loaded_tool_materials.fill(wxString::FromUTF8("Empty"));
+    m_filament_loaded_tool_brands.fill(wxString());
 
     auto *main_sizer = new wxBoxSizer(wxHORIZONTAL);
     auto *preview_menu_panel = new wxPanel(this, wxID_ANY);
-    preview_menu_panel->SetBackgroundColour(wxColour("#2A2C2E"));
+    m_preview_menu_panel = preview_menu_panel;
+    preview_menu_panel->SetBackgroundColour(wxColour(255, 255, 255));
     preview_menu_panel->SetMinSize(wxSize(FromDIP(298), FromDIP(360)));
     preview_menu_panel->SetMaxSize(wxSize(FromDIP(298), -1));
     auto *preview_menu_sizer = new wxBoxSizer(wxVERTICAL);
@@ -2056,12 +1890,12 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     {
         auto *header_panel = new wxPanel(preview_menu_panel, wxID_ANY);
         m_sidebar_header_panel = header_panel;
-        header_panel->SetBackgroundColour(wxColour("#2A2C2E"));
+        header_panel->SetBackgroundColour(wxColour(255, 255, 255));
         header_panel->SetMinSize(wxSize(-1, FromDIP(50)));
         header_panel->SetMaxSize(wxSize(-1, FromDIP(50)));
         auto *header_sizer = new wxBoxSizer(wxHORIZONTAL);
         m_sidebar_header_back = new wxStaticText(header_panel, wxID_ANY, wxString::FromUTF8("\xC3\x97"));
-        m_sidebar_header_back->SetForegroundColour(wxColour(235, 235, 235));
+        m_sidebar_header_back->SetForegroundColour(wxColour("#232527"));
         m_sidebar_header_back->SetCursor(wxCursor(wxCURSOR_HAND));
         {
             wxFont f = m_sidebar_header_back->GetFont();
@@ -2073,7 +1907,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
         header_sizer->AddStretchSpacer(1);
         auto *printers_label = new wxStaticText(header_panel, wxID_ANY, "Printers");
         m_sidebar_header_title = printers_label;
-        printers_label->SetForegroundColour(wxColour(235, 235, 235));
+        printers_label->SetForegroundColour(wxColour("#232527"));
         {
             wxFont f = printers_label->GetFont();
             f.SetPointSize(14);
@@ -2110,22 +1944,22 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     }
 
     m_sidebar_root_panel = new wxPanel(preview_menu_panel, wxID_ANY);
-    m_sidebar_root_panel->SetBackgroundColour(wxColour("#2A2C2E"));
+    m_sidebar_root_panel->SetBackgroundColour(wxColour(255, 255, 255));
     m_sidebar_root_sizer = new wxBoxSizer(wxVERTICAL);
     m_sidebar_root_panel->SetSizer(m_sidebar_root_sizer);
     preview_menu_sizer->Add(m_sidebar_root_panel, 1, wxEXPAND);
 
     m_sidebar_add_printer_panel = new wxPanel(preview_menu_panel, wxID_ANY);
-    m_sidebar_add_printer_panel->SetBackgroundColour(wxColour("#2A2C2E"));
+    m_sidebar_add_printer_panel->SetBackgroundColour(wxColour(255, 255, 255));
     m_sidebar_add_printer_panel->Hide();
     preview_menu_sizer->Add(m_sidebar_add_printer_panel, 1, wxEXPAND);
 
     m_sidebar_printer_list_container = new wxPanel(m_sidebar_root_panel, wxID_ANY);
-    m_sidebar_printer_list_container->SetBackgroundColour(wxColour("#2A2C2E"));
+    m_sidebar_printer_list_container->SetBackgroundColour(wxColour(255, 255, 255));
     auto *printer_list_row = new wxBoxSizer(wxHORIZONTAL);
 
     m_sidebar_printer_list_panel = new wxScrolledWindow(m_sidebar_printer_list_container, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    m_sidebar_printer_list_panel->SetBackgroundColour(wxColour("#2A2C2E"));
+    m_sidebar_printer_list_panel->SetBackgroundColour(wxColour(255, 255, 255));
     m_sidebar_printer_list_panel->SetMinSize(wxSize(-1, FromDIP(390)));
     m_sidebar_printer_list_panel->SetMaxSize(wxSize(-1, FromDIP(390)));
     if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(m_sidebar_printer_list_panel)) {
@@ -2177,7 +2011,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
                                       const std::string &icon_name,
                                       const std::function<void()> &on_activate) {
         auto *row = new wxPanel(parent, wxID_ANY);
-        row->SetBackgroundColour(wxColour("#2A2C2E"));
+        row->SetBackgroundColour(wxColour(255, 255, 255));
         row->SetMinSize(wxSize(-1, FromDIP(37)));
         row->SetMaxSize(wxSize(-1, FromDIP(37)));
         row->SetCursor(wxCursor(wxCURSOR_HAND));
@@ -2189,10 +2023,10 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
         auto *icon = new wxStaticBitmap(
             row,
             wxID_ANY,
-            force_white_icon ? create_scaled_bitmap(icon_name, row, 16, false, "#F1F3F4")
+            force_white_icon ? create_scaled_bitmap(icon_name, row, 16, false, "#232527")
                              : create_scaled_bitmap(icon_name, row, 14));
         auto *text = new wxStaticText(row, wxID_ANY, label);
-        text->SetForegroundColour(wxColour("#E1E3E5"));
+        text->SetForegroundColour(wxColour("#232527"));
         auto *chev = new wxStaticText(row, wxID_ANY, wxString::FromUTF8("\xE2\x80\xBA"));
         chev->SetForegroundColour(wxColour("#B7BCC2"));
         chev->SetMinSize(wxSize(FromDIP(18), -1));
@@ -2218,196 +2052,113 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("Printers"), k_cprint_printer_nav_bitmap,
                         [this]() { show_sidebar_printers_view(); });
     m_sidebar_root_sizer->Add(m_sidebar_printer_list_container, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(3));
-    // Explicit Device entry so users can leave System Upgrade / Media pages.
+    // Explicit Device entry so users can leave System / Media pages.
     add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("Device"), "tab_monitor_active",
                         [this]() { select_tab(PrinterWebViewTab::Status); });
-    add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("System Upgrade"), "monitor_upgrade_online",
+    add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("System"), "monitor_upgrade_online",
                         [this]() { select_tab(PrinterWebViewTab::Update); });
     auto *sidebar_divider = new wxPanel(m_sidebar_root_panel, wxID_ANY);
     sidebar_divider->SetMinSize(wxSize(-1, FromDIP(1)));
     sidebar_divider->SetMaxSize(wxSize(-1, FromDIP(1)));
-    sidebar_divider->SetBackgroundColour(wxColour("#34373A"));
+    sidebar_divider->SetBackgroundColour(wxColour("#C7C7C7"));
     m_sidebar_root_sizer->Add(sidebar_divider, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(3));
     add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("Timelapse"), "device_sidebar_timelapse_clapperboard",
                         [this]() { select_tab(PrinterWebViewTab::Storage); });
-    add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("Print Models"), "device_sidebar_print_models",
+    add_sidebar_nav_row(m_sidebar_root_panel, m_sidebar_root_sizer, _L("Media"), "device_sidebar_print_models",
                         [this]() { select_tab(PrinterWebViewTab::PrintModels); });
     preview_menu_sizer->AddStretchSpacer(1);
     preview_menu_panel->SetSizer(preview_menu_sizer);
 
     m_printers_popup = new wxPopupTransientWindow(this, wxBORDER_NONE);
-    m_printers_popup_panel = new wxPanel(m_printers_popup, wxID_ANY);
+    m_printers_popup_panel = new StaticBox(m_printers_popup, wxID_ANY);
+    m_printers_popup_panel->SetCornerRadius(0);
+    m_printers_popup_panel->SetBorderWidth(FromDIP(2));
+    m_printers_popup_panel->SetBorderColorNormal(wxColour("#C7C7C7"));
+    m_printers_popup_panel->SetBackgroundColorNormal(wxColour(255, 255, 255));
     m_printers_popup_panel->SetBackgroundColour(wxColour(255, 255, 255));
+    auto *popup_sizer = new wxBoxSizer(wxVERTICAL);
+    popup_sizer->Add(m_printers_popup_panel, 1, wxEXPAND);
+    m_printers_popup->SetSizer(popup_sizer);
     rebuild_printers_popup();
     rebuild_sidebar_printer_list();
     show_sidebar_printers_view();
 
 
     auto *content_host = new wxPanel(this, wxID_ANY);
-    content_host->SetBackgroundColour(wxColour(28, 30, 34));
+    m_content_host = content_host;
+    content_host->SetBackgroundColour(wxColour("#EEEEEF"));
     auto *content_host_sizer = new wxBoxSizer(wxVERTICAL);
 
     m_status_page = new wxPanel(content_host, wxID_ANY);
-    m_status_page->SetBackgroundColour(wxColour(28, 30, 34));
-    auto *status_page_sizer = new wxBoxSizer(wxHORIZONTAL);
+    m_status_page->SetBackgroundColour(wxColour("#EEEEEF"));
+    auto *status_page_sizer = new wxBoxSizer(wxVERTICAL);
 
-    auto *status_content = new wxPanel(m_status_page, wxID_ANY);
-    status_content->SetBackgroundColour(wxColour(28, 30, 34));
-    auto *status_content_sizer = new wxBoxSizer(wxVERTICAL);
+    m_dashboard_page = new DeviceDashboard::DeviceDashboardPage(m_status_page);
+    m_dashboard_page->set_command_handler([this](const DeviceDashboard::DeviceCommand& command) {
+        handle_dashboard_command(command);
+    });
+    m_preview_thumbnail = m_dashboard_page->thumbnail_widget();
+    m_camera_webview_host = m_dashboard_page->camera_webview_host();
 
-    auto *left_container = new wxPanel(status_content, wxID_ANY);
-    left_container->SetBackgroundColour(wxColour(28, 30, 34));
-    auto *left_sizer = new wxBoxSizer(wxVERTICAL);
-    m_dashboard_camera_panel = new DeviceDashboard::CameraPanel(left_container);
-    auto start_camera_stream = [this]() {
-        auto *dev_manager = wxGetApp().getDeviceManager();
-        MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-        const std::string dev_id = obj != nullptr ? obj->get_dev_id() : "";
-        if (dev_id != m_camera_machine_id)
-            m_camera_machine_id = dev_id;
-        m_camera_stream_url.clear();
-        m_camera_stream_requested = true;
-        refresh_camera_stream(obj);
-    };
-    m_dashboard_camera_panel->set_refresh_handler(start_camera_stream);
-    m_dashboard_camera_panel->set_play_handler(start_camera_stream);
-    m_dashboard_camera_panel->set_timelapse_handler([this]() {
-        toggle_camera_timelapse();
-    });
-    m_dashboard_camera_panel->set_fullscreen_handler([this]() {
-        show_camera_fullscreen();
-    });
-    // Stream host is provided by CameraPanel (idle CoPrint logo sits behind it).
-    // Creating WebView2 while MainFrame / tabs are still constructing has been observed
-    // to crash (ACCESS_VIOLATION in ntdll); defer until Play / stream URL.
-    m_camera_webview_host = m_dashboard_camera_panel->webview_host();
-    if (m_camera_webview_host == nullptr) {
-        BOOST_LOG_TRIVIAL(error) << "PrinterWebView: camera stream host is null";
-    } else {
-        m_camera_webview_host->SetMinSize(wxSize(FromDIP(420), FromDIP(360)));
-        m_camera_webview_host->SetBackgroundColour(wxColour(0, 0, 0));
-    }
-    auto update_camera_host_responsive_size = [this]() {
-        if (m_dashboard_camera_panel == nullptr || m_camera_webview_host == nullptr)
+    m_dashboard_page->set_camera_refresh_handler([this]() {
+        if (m_dashboard_page == nullptr || m_dashboard_page->camera_panel() == nullptr)
             return;
-        wxWindow *const box = m_camera_webview_host->GetParent();
-        const int box_w = box != nullptr ? box->GetClientSize().GetWidth() : 0;
-        if (box_w <= 0)
+        const auto state = m_dashboard_page->camera_panel()->load_state();
+        if (state == DeviceDashboard::CameraLoadState::Live ||
+            state == DeviceDashboard::CameraLoadState::Initializing)
+            start_camera_stream();
+    });
+    m_dashboard_page->set_offline_retry_handler([this]() { retry_selected_printer_connection(); });
+    m_dashboard_page->set_camera_play_handler([this]() {
+        if (m_dashboard_page == nullptr || m_dashboard_page->camera_panel() == nullptr)
             return;
-        const int host_w = std::max(FromDIP(320), box_w - FromDIP(30));
-        const int host_h = std::clamp(static_cast<int>(host_w * 0.72), FromDIP(320), FromDIP(520));
-        m_camera_webview_host->SetMinSize(wxSize(host_w, host_h));
-        if (box != nullptr)
-            box->Layout();
-        m_camera_webview_host->Layout();
-    };
+        const auto state = m_dashboard_page->camera_panel()->load_state();
+        if (state == DeviceDashboard::CameraLoadState::Live ||
+            state == DeviceDashboard::CameraLoadState::Initializing)
+            stop_camera_stream();
+        else
+            start_camera_stream();
+    });
+    m_dashboard_page->set_camera_timelapse_handler([this]() { toggle_camera_timelapse(); });
+
     if (m_camera_webview_host != nullptr) {
+        m_camera_webview_host->SetMinSize(wxSize(FromDIP(420), FromDIP(236)));
+        m_camera_webview_host->SetBackgroundColour(wxColour(0, 0, 0));
         if (wxWindow *const viewport = m_camera_webview_host->GetParent()) {
             viewport->Bind(wxEVT_SIZE,
-                [update_camera_host_responsive_size, last_w = -1, last_h = -1](wxSizeEvent &event) mutable {
+                [this, last_w = -1, last_h = -1](wxSizeEvent &event) mutable {
                     event.Skip();
                     const wxSize sz = event.GetSize();
                     if (sz.x == last_w && sz.y == last_h) return;
                     last_w = sz.x; last_h = sz.y;
                     auto *win = event.GetEventObject() ? dynamic_cast<wxWindow*>(event.GetEventObject()) : nullptr;
                     if (win) win->Freeze();
-                    update_camera_host_responsive_size();
+                    if (m_dashboard_page != nullptr)
+                        m_dashboard_page->update_camera_host_responsive_size();
                     if (win) win->Thaw();
                 });
         }
     }
     {
         std::weak_ptr<int> lifetime = m_lifetime_token;
-        wxGetApp().CallAfter([this, lifetime, update_camera_host_responsive_size]() {
-            if (lifetime.expired() || m_destroying)
+        wxGetApp().CallAfter([this, lifetime]() {
+            if (lifetime.expired() || m_destroying || m_dashboard_page == nullptr)
                 return;
-            update_camera_host_responsive_size();
+            m_dashboard_page->update_camera_host_responsive_size();
         });
     }
 
-    auto *content_columns = new wxBoxSizer(wxHORIZONTAL);
+    m_dashboard_page->set_printer_status_handlers(
+        [this](int idx) { apply_printer_status_tool_selection(idx); },
+        [this](int idx, int temp) { apply_nozzle_target_temperature(idx, temp); },
+        [this](int tool, int percent) { send_toolhead_fan_speed_command(tool, percent); },
+        [this](int temp) { apply_bed_target_temperature(temp); });
 
-    // PrintStatusPanel replaces the old progress_box. Thumbnail is loaded through
-    // m_preview_thumbnail which now points at the panel's internal bitmap widget.
-    m_dashboard_print_status_panel = new DeviceDashboard::PrintStatusPanel(left_container);
-    m_preview_thumbnail = m_dashboard_print_status_panel->thumbnail_widget();
-    m_dashboard_print_status_panel->set_pause_handler([this]() {
-        DeviceDashboard::DeviceCommand cmd;
-        cmd.kind = DeviceDashboard::DeviceCommandKind::PausePrint;
-        handle_dashboard_command(cmd);
-    });
-    m_dashboard_print_status_panel->set_stop_handler([this]() {
-        DeviceDashboard::DeviceCommand cmd;
-        cmd.kind = DeviceDashboard::DeviceCommandKind::StopPrint;
-        handle_dashboard_command(cmd);
-    });
-
-    auto *left_main_column = new wxBoxSizer(wxVERTICAL);
-    left_main_column->Add(m_dashboard_camera_panel, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(5));
-    left_main_column->AddSpacer(FromDIP(8));
-    left_main_column->Add(m_dashboard_print_status_panel, 0, wxEXPAND);
-
-    m_dashboard_movement_panel = new DeviceDashboard::MovementPanel(left_container);
-    m_dashboard_movement_panel->set_command_handler([this](const DeviceDashboard::DeviceCommand& command) {
-        handle_dashboard_command(command);
-    });
-
-    // printer_status_box â†’ PrinterStatusPanel ile deÄŸiÅŸtirildi
-    m_dashboard_printer_status_panel = new DeviceDashboard::PrinterStatusPanel(left_container);
-    m_dashboard_printer_status_panel->set_tool_select_handler([this](int idx) {
-        apply_printer_status_tool_selection(idx);
-    });
-    m_dashboard_printer_status_panel->set_nozzle_temp_handler([this](int idx) {
-        prompt_ps_target_temperature(false, idx);
-    });
-    m_dashboard_printer_status_panel->set_fan_speed_handler([this](int idx) {
-        show_toolhead_fan_dialog(idx);
-    });
-    m_dashboard_printer_status_panel->set_bed_temp_handler([this]() {
-        prompt_ps_target_temperature(true, 0);
-    });
-    m_dashboard_filament_panel = new DeviceDashboard::FilamentPanel(left_container);
-    m_dashboard_filament_panel->set_command_handler([this](const DeviceDashboard::DeviceCommand& command) {
-        handle_dashboard_command(command);
-    });
-
-    auto *right_main_column = new wxBoxSizer(wxVERTICAL);
-    right_main_column->Add(m_dashboard_movement_panel, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(5));
-    right_main_column->AddSpacer(FromDIP(3));
-    right_main_column->Add(m_dashboard_printer_status_panel, 0, wxEXPAND);
-    right_main_column->AddSpacer(FromDIP(3));
-    right_main_column->Add(m_dashboard_filament_panel, 0, wxEXPAND);
-
-    content_columns->Add(left_main_column, 46, wxEXPAND);
-    content_columns->AddSpacer(FromDIP(20));
-    content_columns->Add(right_main_column, 54, wxEXPAND | wxRIGHT, FromDIP(5));
-
-    left_sizer->Add(content_columns, 1, wxEXPAND);
-
-    left_container->SetSizer(left_sizer);
-
-    status_content_sizer->Add(left_container, 1, wxEXPAND | wxRIGHT, FromDIP(20));
-    status_content->SetSizer(status_content_sizer);
-    status_content->Bind(wxEVT_SIZE, [this, status_content, left_container, last_width = -1](wxSizeEvent &event) mutable {
-        event.Skip();
-        if (status_content == nullptr || left_container == nullptr)
-            return;
-        const int width = status_content->GetClientSize().GetWidth();
-        if (width <= 0 || width == last_width)
-            return;
-        last_width = width;
-        if (m_dashboard_movement_panel != nullptr)
-            m_dashboard_movement_panel->set_compact_mode(width < FromDIP(1180));
-        left_container->SetMinSize(wxSize(width, -1));
-        status_content->Freeze();
-        status_content->Layout();
-        status_content->Thaw();
-    });
-    status_page_sizer->Add(status_content, 1, wxEXPAND);
+    status_page_sizer->Add(m_dashboard_page, 1, wxEXPAND);
     m_status_page->SetSizer(status_page_sizer);
 
     m_storage_placeholder = new wxPanel(content_host, wxID_ANY);
-    m_storage_placeholder->SetBackgroundColour(wxColour(28, 30, 34));
+    m_storage_placeholder->SetBackgroundColour(wxColour("#EEEEEF"));
     m_storage_placeholder->Hide();
     m_update_page = create_update_page(content_host);
     m_assistant_page = create_placeholder_page(content_host, "Asistan", "Asistan paneli icin gecici yer tutucu.");
@@ -2496,10 +2247,125 @@ void PrinterWebView::update_mode()
     return;
 }
 
+void PrinterWebView::toggle_printers_popup_at(wxWindow* anchor)
+{
+    if (m_printers_popup == nullptr || anchor == nullptr)
+        return;
+
+    int width = anchor->GetSize().GetWidth();
+    if (width < 1 && anchor->GetParent() != nullptr)
+        width = anchor->GetParent()->GetSize().GetWidth();
+    m_printers_popup_max_width = (std::max)(1, width);
+
+    rebuild_printers_popup();
+
+    if (m_printers_popup->IsShown()) {
+        m_printers_popup->Dismiss();
+        return;
+    }
+
+    const wxPoint screen_pos = anchor->ClientToScreen(wxPoint(0, anchor->GetSize().GetHeight()));
+    m_printers_popup->Position(screen_pos, wxSize(0, 0));
+    m_printers_popup->Popup(anchor);
+}
+
+void PrinterWebView::set_embedded_in_monitor(bool embedded)
+{
+    m_embedded_in_monitor = embedded;
+    set_sidebar_visible(!embedded);
+}
+
+void PrinterWebView::set_sidebar_visible(bool visible)
+{
+    if (m_preview_menu_panel != nullptr)
+        m_preview_menu_panel->Show(visible);
+    Layout();
+}
+
+void PrinterWebView::attach_media_pages(CloudTaskManagerPage *timelapse, CloudTaskManagerPage *models)
+{
+    m_media_timelapse_page = timelapse;
+    m_media_models_page = models;
+    auto retry = [this]() { retry_selected_printer_connection(); };
+    if (timelapse != nullptr)
+        timelapse->set_offline_retry_handler(retry);
+    if (models != nullptr)
+        models->set_offline_retry_handler(retry);
+
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    update_dashboard_connecting_overlay(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+}
+
+void PrinterWebView::set_device_session_ui_handler(std::function<void(DeviceSessionUi, const wxString &, const wxString &)> handler)
+{
+    m_device_session_ui = std::move(handler);
+}
+
+void PrinterWebView::acknowledge_device_connect_failure()
+{
+    if (klippy_is_faulted(m_klippy_state))
+        m_device_warn_ack = DeviceWarnAck::KlippyFault;
+    else
+        m_device_warn_ack = DeviceWarnAck::Unreachable;
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    apply_klippy_connection_ui(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+}
+
+void PrinterWebView::retry_selected_printer_connection()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr;
+    if (obj != nullptr && !obj->is_online()) {
+        begin_sidebar_connect_attempt(obj->get_dev_id());
+        obj->connect(obj->local_use_ssl);
+    }
+    invalidate_device_cache_and_refresh();
+}
+
+void PrinterWebView::sync_media_page_connection_state(bool printer_ready, bool show_offline, const wxString &printer_name)
+{
+    auto apply = [&](CloudTaskManagerPage *page) {
+        if (page == nullptr)
+            return;
+        page->set_allow_moonraker_fetch(printer_ready);
+        page->set_offline_overlay_visible(show_offline, printer_name);
+    };
+    apply(m_storage_page);
+    apply(m_media_timelapse_page);
+    apply(m_media_models_page);
+}
+
+void PrinterWebView::ensure_coprint_storage_page()
+{
+    ensure_storage_page_created();
+}
+
+void PrinterWebView::set_coprint_storage_mode(bool print_models)
+{
+    // Monitor already owns the Media/Timelapse pages. Creating a second
+    // CloudTaskManagerPage inside this hidden backend crashes on macOS
+    // (CheckBox SVG load + in-flight wxWebRequest).
+    if (m_embedded_in_monitor)
+        return;
+
+    ensure_storage_page_created();
+    if (m_storage_page != nullptr) {
+        m_storage_page->set_media_presentation(
+            print_models ? CloudTaskManagerPage::MediaPresentation::ModelOnly
+                         : CloudTaskManagerPage::MediaPresentation::TimelapseOnly);
+        m_storage_page->refresh_user_device();
+        m_storage_page->update_page();
+    }
+}
+
 void PrinterWebView::toggle_printers_popup()
 {
     if (m_printers_popup == nullptr || m_preview_printers_button == nullptr)
         return;
+
+    const int width = m_preview_printers_button->GetSize().GetWidth();
+    if (width > 0)
+        m_printers_popup_max_width = width;
 
     rebuild_printers_popup();
 
@@ -2547,24 +2413,28 @@ bool PrinterWebView::finish_add_moonraker_printer(const BBLocalMachine &machine,
 
     if (run_probe) {
         BBLocalMachine detected_machine;
-        if (probe_moonraker_host(machine_to_add.dev_ip, detected_machine)) {
-            // Always prefer probed identity over the temporary "Unknown Printer" seed.
-            if (!detected_machine.dev_name.empty())
-                machine_to_add.dev_name = detected_machine.dev_name;
-            if (!detected_machine.printer_type.empty())
-                machine_to_add.printer_type = detected_machine.printer_type;
-            if (!detected_machine.dev_id.empty()) {
-                std::string sanitized_id;
-                std::string unused;
-                if (sanitize_moonraker_address(detected_machine.dev_id, sanitized_id, unused))
-                    machine_to_add.dev_id = sanitized_id;
-            }
-            if (!detected_machine.dev_ip.empty()) {
-                std::string sanitized_ip;
-                std::string unused;
-                if (sanitize_moonraker_address(detected_machine.dev_ip, sanitized_ip, unused))
-                    machine_to_add.dev_ip = sanitized_ip;
-            }
+        const MoonrakerProbeStatus probed = probe_moonraker_host(machine_to_add.dev_ip, detected_machine);
+        if (probed == MoonrakerProbeStatus::Unreachable)
+            return false;
+        if (probed == MoonrakerProbeStatus::Unsupported) {
+            show_unsupported_printer_dialog(this);
+            return false;
+        }
+        if (!detected_machine.dev_name.empty())
+            machine_to_add.dev_name = detected_machine.dev_name;
+        if (!detected_machine.printer_type.empty())
+            machine_to_add.printer_type = detected_machine.printer_type;
+        if (!detected_machine.dev_id.empty()) {
+            std::string sanitized_id;
+            std::string unused;
+            if (sanitize_moonraker_address(detected_machine.dev_id, sanitized_id, unused))
+                machine_to_add.dev_id = sanitized_id;
+        }
+        if (!detected_machine.dev_ip.empty()) {
+            std::string sanitized_ip;
+            std::string unused;
+            if (sanitize_moonraker_address(detected_machine.dev_ip, sanitized_ip, unused))
+                machine_to_add.dev_ip = sanitized_ip;
         }
     }
 
@@ -2572,10 +2442,8 @@ bool PrinterWebView::finish_add_moonraker_printer(const BBLocalMachine &machine,
     if (machine_to_add.printer_type == "Moonraker" || is_placeholder_printer_name(machine_to_add.dev_name)) {
         std::string mapped_name;
         std::string mapped_type = machine_to_add.printer_type;
-        if (apply_coprint_name_from_hostname(machine_to_add.dev_name, mapped_name, mapped_type)) {
-            machine_to_add.dev_name = mapped_name;
+        if (apply_coprint_name_from_hostname(machine_to_add.dev_name, mapped_name, mapped_type))
             machine_to_add.printer_type = mapped_type;
-        }
     }
 
     auto *dev_manager = wxGetApp().getDeviceManager();
@@ -2669,25 +2537,77 @@ bool PrinterWebView::finish_add_moonraker_printer(const BBLocalMachine &machine,
     return true;
 }
 
+void PrinterWebView::add_moonraker_printer_async(const BBLocalMachine &machine, bool use_ssl,
+                                                 std::function<void(bool ok, const wxString &message)> on_done)
+{
+    auto finish_ui = [on_done](bool ok, const wxString &message) {
+        if (on_done)
+            on_done(ok, message);
+    };
+
+    BBLocalMachine work = machine;
+    std::string sanitized;
+    std::string sanitize_error;
+    const std::string raw = !work.dev_ip.empty() ? work.dev_ip : work.dev_id;
+    if (!sanitize_moonraker_address(raw, sanitized, sanitize_error)) {
+        finish_ui(false, from_u8(sanitize_error));
+        return;
+    }
+    work.dev_id = sanitized;
+    work.dev_ip = sanitized;
+
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, work, use_ssl, finish_ui]() {
+        BBLocalMachine resolved = work;
+        BBLocalMachine detected;
+        const MoonrakerProbeStatus probed = probe_moonraker_host(work.dev_ip, detected);
+        if (probed == MoonrakerProbeStatus::Ok) {
+            if (!detected.dev_name.empty())
+                resolved.dev_name = detected.dev_name;
+            if (!detected.printer_type.empty())
+                resolved.printer_type = detected.printer_type;
+            std::string sanitized_detected;
+            std::string unused;
+            if (!detected.dev_ip.empty() && sanitize_moonraker_address(detected.dev_ip, sanitized_detected, unused)) {
+                resolved.dev_ip = sanitized_detected;
+                resolved.dev_id = sanitized_detected;
+            } else if (!detected.dev_id.empty() && sanitize_moonraker_address(detected.dev_id, sanitized_detected, unused)) {
+                resolved.dev_ip = sanitized_detected;
+                resolved.dev_id = sanitized_detected;
+            }
+        }
+
+        wxGetApp().CallAfter([this, lifetime, resolved, use_ssl, probed, finish_ui]() {
+            if (lifetime.expired() || m_destroying) {
+                finish_ui(false, _L("Could not connect to the printer."));
+                return;
+            }
+            if (probed == MoonrakerProbeStatus::Unreachable) {
+                finish_ui(false, _L("Could not connect to the printer."));
+                return;
+            }
+            if (probed == MoonrakerProbeStatus::Unsupported) {
+                show_unsupported_printer_dialog(this);
+                finish_ui(false, wxString());
+                return;
+            }
+            const bool ok = finish_add_moonraker_printer(resolved, use_ssl, false);
+            finish_ui(ok, ok ? wxString() : _L("Could not connect to the printer."));
+        });
+    }).detach();
+}
+
 void PrinterWebView::show_printer_card_actions_menu(wxWindow *anchor, MachineObject *machine)
 {
     if (anchor == nullptr || machine == nullptr)
         return;
 
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    const auto local_machines = dev_manager ? dev_manager->get_local_machinelist() : std::map<std::string, MachineObject*>();
-    const bool can_remove = local_machines.find(machine->get_dev_id()) != local_machines.end();
-
     wxMenu menu;
-    menu.Append(1, _L("Edit printer"));
-    if (can_remove) {
-        auto *forget_item = new wxMenuItem(&menu, 2, _L("Forget printer"));
-        forget_item->SetBitmap(create_scaled_bitmap("device_sidebar_bin", this, 16));
-        menu.Append(forget_item);
-    }
+    menu.Append(1, _L("Edit name"));
+    menu.Append(2, _L("Forget printer"));
 
-    const wxPoint screen_pos = anchor->ClientToScreen(wxPoint(0, anchor->GetSize().GetHeight()));
-    const int sel = GetPopupMenuSelectionFromUser(menu, screen_pos);
+    const wxPoint pos = anchor->ScreenToClient(wxGetMousePosition());
+    const int sel = anchor->GetPopupMenuSelectionFromUser(menu, pos);
     if (sel == 1) {
         if (edit_sidebar_printer_name(machine)) {
             rebuild_printers_popup();
@@ -2695,7 +2615,7 @@ void PrinterWebView::show_printer_card_actions_menu(wxWindow *anchor, MachineObj
             refresh_layer_info_from_selected_machine();
             Layout();
         }
-    } else if (sel == 2 && can_remove) {
+    } else if (sel == 2) {
         if (confirm_forget_printer())
             forget_local_printer(machine);
     }
@@ -2706,20 +2626,21 @@ bool PrinterWebView::edit_sidebar_printer_name(MachineObject *machine)
     if (machine == nullptr)
         return false;
 
-    wxDialog dlg(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    dlg.SetBackgroundColour(wxColour("#232527"));
+    wxWindow *host = wxGetApp().mainframe != nullptr ? static_cast<wxWindow *>(wxGetApp().mainframe) : this;
+    wxDialog dlg(host, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    dlg.SetBackgroundColour(*wxWHITE);
 
     auto *root = new wxBoxSizer(wxVERTICAL);
     auto *frame = new StaticBox(&dlg, wxID_ANY);
     frame->SetCornerRadius(FromDIP(12));
     frame->SetBorderWidth(1);
-    frame->SetBorderColorNormal(wxColour("#3A3D40"));
-    frame->SetBackgroundColorNormal(wxColour("#232527"));
-    frame->SetBackgroundColour(wxColour("#232527"));
+    frame->SetBorderColorNormal(wxColour("#C7C7C7"));
+    frame->SetBackgroundColorNormal(*wxWHITE);
+    frame->SetBackgroundColour(*wxWHITE);
 
     auto *content = new wxBoxSizer(wxVERTICAL);
     auto *title = new wxStaticText(frame, wxID_ANY, _L("Edit printer name"));
-    title->SetForegroundColour(wxColour("#F1F3F4"));
+    title->SetForegroundColour(wxColour("#232527"));
     wxFont tf = title->GetFont();
     tf.SetPointSize(11);
     tf.SetWeight(wxFONTWEIGHT_BOLD);
@@ -2727,12 +2648,12 @@ bool PrinterWebView::edit_sidebar_printer_name(MachineObject *machine)
     content->Add(title, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
 
     auto *hint = new wxStaticText(frame, wxID_ANY, _L("Printer display name"));
-    hint->SetForegroundColour(wxColour("#A7ADB4"));
+    hint->SetForegroundColour(wxColour("#767C84"));
     content->Add(hint, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
 
     auto *name_input = new ::TextInput(frame, from_u8(machine->get_dev_name()), "", "", wxDefaultPosition,
                                        wxSize(FromDIP(280), FromDIP(36)), wxTE_PROCESS_ENTER);
-    name_input->SetBackgroundColour(wxColour("#2A2C2E"));
+    name_input->SetBackgroundColour(*wxWHITE);
     content->Add(name_input, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(20));
 
     auto *buttons = new wxBoxSizer(wxHORIZONTAL);
@@ -2751,7 +2672,7 @@ bool PrinterWebView::edit_sidebar_printer_name(MachineObject *machine)
     root->Add(frame, 1, wxEXPAND | wxALL, FromDIP(1));
     dlg.SetSizer(root);
     dlg.Fit();
-    dlg.CentreOnParent();
+    dlg.CentreOnScreen();
 
     bool accepted = false;
     auto accept = [&]() {
@@ -2774,6 +2695,7 @@ bool PrinterWebView::edit_sidebar_printer_name(MachineObject *machine)
         } else {
             machine->set_dev_name(new_name);
         }
+        post_coprint_device_name(machine, new_name);
         accepted = true;
         dlg.EndModal(wxID_OK);
     };
@@ -2790,22 +2712,179 @@ bool PrinterWebView::edit_sidebar_printer_name(MachineObject *machine)
     return accepted;
 }
 
+void PrinterWebView::post_coprint_device_name(MachineObject *machine, const std::string &device_name)
+{
+    const std::string base = moonraker_base_url(machine);
+    if (machine == nullptr || base.empty() || device_name.empty())
+        return;
+
+    std::string api_key = machine->get_access_code();
+    if (api_key.empty())
+        api_key = machine->get_user_access_code();
+
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, base, api_key, device_name]() {
+        nlohmann::json payload;
+        payload["device_name"] = device_name;
+        auto http = Http::post(base + "/machine/coprint/info");
+        if (!api_key.empty())
+            http.header("X-Api-Key", api_key);
+        http.header("Content-Type", "application/json")
+            .set_post_body(payload.dump())
+            .timeout_connect(2)
+            .timeout_max(6)
+            .on_complete([](std::string, unsigned status) {
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: coprint device_name saved status=" << status;
+            })
+            .on_error([](std::string, std::string error, unsigned status) {
+                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: coprint device_name save failed status="
+                                           << status << " error=" << error;
+            })
+            .perform_sync();
+
+        wxGetApp().CallAfter([this, lifetime]() {
+            if (lifetime.expired() || m_destroying)
+                return;
+            m_sidebar_printer_list_signature.clear();
+            rebuild_sidebar_printer_list();
+            rebuild_printers_popup();
+        });
+    }).detach();
+}
+
+void PrinterWebView::refresh_coprint_device_names(std::function<void()> on_updated)
+{
+    if (m_destroying)
+        return;
+
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    if (dev_manager == nullptr) {
+        if (on_updated)
+            on_updated();
+        return;
+    }
+
+    struct NameFetchTarget {
+        std::string dev_id;
+        std::string base;
+        std::string api_key;
+    };
+
+    std::vector<NameFetchTarget> targets;
+    std::unordered_set<std::string> seen_ids;
+    std::unordered_set<std::string> seen_bases;
+    auto add_machine = [&](MachineObject *machine) {
+        if (machine == nullptr)
+            return;
+        std::string id = machine->get_dev_id();
+        if (id.empty())
+            id = machine->get_dev_ip();
+        if (id.empty() || !seen_ids.insert(id).second)
+            return;
+        const std::string base = moonraker_base_url(machine);
+        if (base.empty() || !seen_bases.insert(base).second)
+            return;
+        std::string api_key = machine->get_access_code();
+        if (api_key.empty())
+            api_key = machine->get_user_access_code();
+        targets.push_back({id, base, api_key});
+    };
+
+    add_machine(dev_manager->get_selected_machine());
+    for (const auto &entry : dev_manager->get_my_machine_list())
+        add_machine(entry.second);
+    for (const auto &entry : dev_manager->get_local_machinelist())
+        add_machine(entry.second);
+
+    if (targets.empty()) {
+        if (on_updated)
+            on_updated();
+        return;
+    }
+
+    const int gen = ++m_coprint_names_fetch_gen;
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, gen, targets = std::move(targets), on_updated = std::move(on_updated)]() {
+        for (const auto &target : targets) {
+            if (lifetime.expired())
+                return;
+
+            std::string body;
+            auto http = Http::get(target.base + "/machine/coprint/info");
+            if (!target.api_key.empty())
+                http.header("X-Api-Key", target.api_key);
+            http.timeout_connect(1)
+                .timeout_max(3)
+                .on_complete([&](std::string response, unsigned status) {
+                    if (status == 200)
+                        body = std::move(response);
+                })
+                .on_error([](std::string, std::string, unsigned) {})
+                .perform_sync();
+
+            const std::string display_name = display_name_from_coprint_info_body(body);
+            if (display_name.empty())
+                continue;
+
+            wxGetApp().CallAfter([this, lifetime, gen, id = target.dev_id, display_name, on_updated]() {
+                if (lifetime.expired() || m_destroying || gen != m_coprint_names_fetch_gen)
+                    return;
+                auto *dev = wxGetApp().getDeviceManager();
+                MachineObject *obj = find_machine_for_coprint_name(dev, id);
+                if (obj == nullptr || obj->get_dev_name() == display_name)
+                    return;
+
+                if (obj->is_lan_mode_printer()) {
+                    obj->set_dev_name(display_name);
+                    DeviceManager::update_local_machine(*obj);
+                } else if (dev != nullptr) {
+                    dev->modify_device_name(obj->get_dev_id(), display_name);
+                    obj->set_dev_name(display_name);
+                } else {
+                    obj->set_dev_name(display_name);
+                }
+
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: coprint device_name '" << display_name
+                                        << "' applied for " << id;
+                m_sidebar_printer_list_signature.clear();
+                rebuild_sidebar_printer_list();
+                if (dev != nullptr && dev->get_selected_machine() == obj) {
+                    refresh_connected_printer_header(obj);
+                    refresh_printer_info_labels(obj);
+                }
+                if (on_updated)
+                    on_updated();
+            });
+        }
+
+        wxGetApp().CallAfter([this, lifetime, gen, on_updated]() {
+            if (lifetime.expired() || m_destroying || gen != m_coprint_names_fetch_gen)
+                return;
+            m_sidebar_printer_list_signature.clear();
+            rebuild_sidebar_printer_list();
+            if (on_updated)
+                on_updated();
+        });
+    }).detach();
+}
+
 bool PrinterWebView::confirm_forget_printer()
 {
-    wxDialog dlg(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    dlg.SetBackgroundColour(wxColour("#232527"));
+    wxWindow *host = wxGetApp().mainframe != nullptr ? static_cast<wxWindow *>(wxGetApp().mainframe) : this;
+    wxDialog dlg(host, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    dlg.SetBackgroundColour(*wxWHITE);
 
     auto *root = new wxBoxSizer(wxVERTICAL);
     auto *frame = new StaticBox(&dlg, wxID_ANY);
     frame->SetCornerRadius(FromDIP(12));
     frame->SetBorderWidth(1);
-    frame->SetBorderColorNormal(wxColour("#3A3D40"));
-    frame->SetBackgroundColorNormal(wxColour("#232527"));
-    frame->SetBackgroundColour(wxColour("#232527"));
+    frame->SetBorderColorNormal(wxColour("#C7C7C7"));
+    frame->SetBackgroundColorNormal(*wxWHITE);
+    frame->SetBackgroundColour(*wxWHITE);
 
     auto *content = new wxBoxSizer(wxVERTICAL);
     auto *title = new wxStaticText(frame, wxID_ANY, _L("Are you sure to delete this printer?"));
-    title->SetForegroundColour(wxColour("#F1F3F4"));
+    title->SetForegroundColour(wxColour("#232527"));
     wxFont tf = title->GetFont();
     tf.SetPointSize(11);
     tf.SetWeight(wxFONTWEIGHT_BOLD);
@@ -2826,7 +2905,7 @@ bool PrinterWebView::confirm_forget_printer()
     frame->SetSizer(content);
     root->Add(frame, 1, wxEXPAND);
     dlg.SetSizerAndFit(root);
-    dlg.CentreOnParent();
+    dlg.CentreOnScreen();
 
     cancel->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent &) { dlg.EndModal(wxID_CANCEL); });
     forget->Bind(wxEVT_BUTTON, [&dlg](wxCommandEvent &) { dlg.EndModal(wxID_OK); });
@@ -2881,26 +2960,19 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
         return value;
     };
 
-    auto same_printer = [&](const std::string &key, const std::string &entry_dev_id, const std::string &entry_dev_ip) {
-        if ((!dev_id.empty() && (key == dev_id || entry_dev_id == dev_id || entry_dev_ip == dev_id)) ||
-            (!dev_ip.empty() && (key == dev_ip || entry_dev_id == dev_ip || entry_dev_ip == dev_ip)))
+    auto same_target = [&](const std::string &key, const std::string &entry_dev_id, const std::string &entry_dev_ip) {
+        if (!dev_id.empty() && (key == dev_id || entry_dev_id == dev_id))
             return true;
-
-        const std::string target_host = !dev_ip.empty() ? normalize_host(dev_ip) : normalize_host(dev_id);
-        if (target_host.empty())
-            return false;
-
-        return normalize_host(key) == target_host ||
-               normalize_host(entry_dev_id) == target_host ||
-               normalize_host(entry_dev_ip) == target_host;
+        if (!dev_ip.empty() && (key == dev_ip || entry_dev_ip == dev_ip || entry_dev_id == dev_ip))
+            return true;
+        return false;
     };
 
     MachineObject *selected_machine = dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr;
-    if (selected_machine != nullptr &&
-        same_printer(selected_machine->get_dev_id(), selected_machine->get_dev_id(), selected_machine->get_dev_ip())) {
+    if (selected_machine == machine ||
+        (selected_machine != nullptr && same_target(selected_machine->get_dev_id(), selected_machine->get_dev_id(), selected_machine->get_dev_ip()))) {
         selected_machine->disconnect();
         selected_machine->set_online_state(false);
-        selected_machine->reset();
         m_has_active_printer_connection = false;
         if (dev_manager != nullptr)
             dev_manager->set_selected_machine("");
@@ -2908,14 +2980,13 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
 
     std::vector<std::string> keys_to_erase;
     auto add_key = [&keys_to_erase](const std::string &key) {
+        if (key.empty())
+            return;
         if (std::find(keys_to_erase.begin(), keys_to_erase.end(), key) == keys_to_erase.end())
             keys_to_erase.push_back(key);
     };
-    // Always try to drop the legacy empty-key corrupt entry.
-    add_key(std::string());
     add_key(dev_id);
     add_key(dev_ip);
-    const std::string forgotten_name = machine->get_dev_name();
 
     if (wxGetApp().app_config != nullptr) {
         const std::string forgotten_host = normalize_host(!dev_ip.empty() ? dev_ip : dev_id);
@@ -2931,11 +3002,7 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
         const auto saved_machines = wxGetApp().app_config->get_local_machines();
         for (const auto &entry : saved_machines) {
             const BBLocalMachine &local = entry.second;
-            if (same_printer(entry.first, local.dev_id, local.dev_ip) ||
-                entry.first.empty() ||
-                (local.dev_id.empty() && local.dev_ip.empty()) ||
-                (!forgotten_name.empty() && local.dev_name == forgotten_name &&
-                 (local.dev_id.empty() || local.dev_ip.empty()))) {
+            if (same_target(entry.first, local.dev_id, local.dev_ip)) {
                 add_key(entry.first);
                 add_key(local.dev_id);
                 add_key(local.dev_ip);
@@ -2943,24 +3010,12 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
         }
     }
 
-    std::vector<MachineObject *> objects_to_delete;
     if (dev_manager != nullptr) {
         const auto local_machines = dev_manager->get_local_machinelist();
         for (const auto &entry : local_machines) {
-            MachineObject *local = entry.second;
-            if (local == nullptr)
-                continue;
-            if (same_printer(entry.first, local->get_dev_id(), local->get_dev_ip()) ||
-                entry.first.empty() ||
-                (local->get_dev_id().empty() && local->get_dev_ip().empty()) ||
-                local == machine ||
-                (!forgotten_name.empty() && local->get_dev_name() == forgotten_name &&
-                 (local->get_dev_id().empty() || local->get_dev_ip().empty()))) {
+            if (entry.second == machine ||
+                (entry.second != nullptr && same_target(entry.first, entry.second->get_dev_id(), entry.second->get_dev_ip()))) {
                 add_key(entry.first);
-                add_key(local->get_dev_id());
-                add_key(local->get_dev_ip());
-                if (std::find(objects_to_delete.begin(), objects_to_delete.end(), local) == objects_to_delete.end())
-                    objects_to_delete.push_back(local);
             }
         }
     }
@@ -2975,12 +3030,15 @@ void PrinterWebView::forget_local_printer(MachineObject *machine)
     if (wxGetApp().app_config != nullptr)
         wxGetApp().app_config->save();
 
-    for (MachineObject *obj : objects_to_delete) {
-        if (obj != nullptr) {
-            obj->disconnect();
-            delete obj;
-        }
-    }
+    machine->disconnect();
+    delete machine;
+
+    m_has_active_printer_connection = false;
+    m_has_moonraker_status = false;
+    m_has_moonraker_print_status = false;
+    m_klippy_state.clear();
+    reset_dashboard_snapshot();
+    refresh_dashboard_panels(dev_manager ? dev_manager->get_selected_machine() : nullptr);
 
     // Destroying sidebar cards while the trash button is still handling the click
     // can abort the refresh; rebuild after the event unwinds.
@@ -3029,25 +3087,6 @@ void PrinterWebView::show_add_printer_dialog()
             const wxColour k_accent(40, 167, 69);
             auto *root = new wxBoxSizer(wxVERTICAL);
 
-            auto *header = new wxBoxSizer(wxHORIZONTAL);
-            auto *close_btn = new wxButton(this, wxID_CANCEL, "X", wxDefaultPosition, wxSize(FromDIP(28), FromDIP(28)));
-            close_btn->SetToolTip(_L("Close"));
-            header->Add(close_btn, 0, wxLEFT | wxTOP, FromDIP(10));
-            auto *title = new wxStaticText(this, wxID_ANY, _L("Add Printer"));
-            wxFont tf = title->GetFont();
-            tf.SetPointSize(tf.GetPointSize() + 1);
-            tf.SetWeight(wxFONTWEIGHT_BOLD);
-            title->SetFont(tf);
-            title->SetForegroundColour(wxColour(28, 28, 28));
-            header->Add(title, 1, wxALIGN_CENTER_VERTICAL | wxALIGN_CENTER_HORIZONTAL);
-            header->AddSpacer(FromDIP(38));
-            root->Add(header, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(4));
-            auto *header_line = new wxPanel(this, wxID_ANY);
-            header_line->SetMinSize(wxSize(-1, FromDIP(1)));
-            header_line->SetMaxSize(wxSize(-1, FromDIP(1)));
-            header_line->SetBackgroundColour(wxColour(232, 232, 235));
-            root->Add(header_line, 0, wxEXPAND);
-
             m_tab_area = new wxPanel(this, wxID_ANY);
             m_tab_area->SetBackgroundColour(wxColour(255, 255, 255));
             auto *tab_hs = new wxBoxSizer(wxHORIZONTAL);
@@ -3071,7 +3110,7 @@ void PrinterWebView::show_add_printer_dialog()
                 tab_hs->Add(cell, 1, wxEXPAND);
             }
             m_tab_area->SetSizer(tab_hs);
-            root->Add(m_tab_area, 0, wxEXPAND | wxLEFT | wxRIGHT);
+            root->Add(m_tab_area, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(8));
 
             m_book = new wxSimplebook(this, wxID_ANY);
             m_book->SetBackgroundColour(wxColour(255, 255, 255));
@@ -3137,48 +3176,13 @@ void PrinterWebView::show_add_printer_dialog()
             m_book->AddPage(m_ip_page, wxString(), false);
             root->Add(m_book, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(8));
 
-            auto add_footer_row = [&](PrinterWebViewTab tab, const wxString &label, wxArtID art_id) {
-                auto *row = new wxPanel(this, wxID_ANY);
-                row->SetBackgroundColour(wxColour(246, 247, 248));
-                row->SetCursor(wxCursor(wxCURSOR_HAND));
-                row->SetMinSize(wxSize(-1, FromDIP(44)));
-                auto *r = new wxBoxSizer(wxHORIZONTAL);
-                r->AddSpacer(FromDIP(12));
-                wxBitmap ib = wxArtProvider::GetBitmap(art_id, wxART_CMN_DIALOG, wxSize(FromDIP(20), FromDIP(20)));
-                if (ib.IsOk())
-                    r->Add(new wxStaticBitmap(row, wxID_ANY, ib), 0, wxALIGN_CENTER_VERTICAL);
-                else
-                    r->AddSpacer(FromDIP(20));
-                r->AddSpacer(FromDIP(8));
-                auto *lbl = new wxStaticText(row, wxID_ANY, label);
-                lbl->SetForegroundColour(wxColour(40, 40, 44));
-                lbl->SetCursor(wxCursor(wxCURSOR_HAND));
-                r->Add(lbl, 1, wxALIGN_CENTER_VERTICAL);
-                auto *ch = new wxStaticText(row, wxID_ANY, ">");
-                ch->SetForegroundColour(wxColour(130, 130, 130));
-                ch->SetCursor(wxCursor(wxCURSOR_HAND));
-                r->Add(ch, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(14));
-                row->SetSizer(r);
-                auto go = [this, owner, tab](wxMouseEvent &) {
-                    EndModal(wxID_OK);
-                    if (owner != nullptr)
-                        owner->CallAfter([owner, tab]() { owner->select_tab(tab); });
-                };
-                row->Bind(wxEVT_LEFT_DOWN, go);
-                lbl->Bind(wxEVT_LEFT_DOWN, go);
-                ch->Bind(wxEVT_LEFT_DOWN, go);
-                root->Add(row, 0, wxEXPAND | wxTOP, FromDIP(2));
-            };
-            add_footer_row(PrinterWebViewTab::Update, _L("System Upgrade"), wxART_FILE_SAVE);
-            add_footer_row(PrinterWebViewTab::Storage, _L("Media"), wxART_FOLDER_OPEN);
-
             SetSizer(root);
 
             refresh_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { rebuild_auto_list(); });
             ip_add->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { try_ip_add(); });
             m_ip_field->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &) { try_ip_add(); });
             ip_refresh->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) { try_ip_add(); });
-            SetSize(wxSize(FromDIP(380), FromDIP(480)));
+            SetSize(wxSize(FromDIP(380), FromDIP(420)));
             rebuild_auto_list();
             apply_tab_selection(1);
         }
@@ -3267,6 +3271,8 @@ void PrinterWebView::show_add_printer_dialog()
 
         void try_ip_add()
         {
+            if (m_ip_add_busy)
+                return;
             if (m_ip_status != nullptr)
                 m_ip_status->SetLabelText(wxString());
             wxString ip_value = m_ip_field->GetValue();
@@ -3274,17 +3280,6 @@ void PrinterWebView::show_add_printer_dialog()
             ip_value.Trim(false);
             if (ip_value.empty()) {
                 wxMessageBox(_L("IP address cannot be empty."), _L("IP Connect"), wxOK | wxICON_WARNING, this);
-                return;
-            }
-
-            wxTextEntryDialog name_dialog(this, _L("Display name for this printer"), _L("Printer name"), _L("Unknown Printer"));
-            if (name_dialog.ShowModal() != wxID_OK)
-                return;
-            wxString name_value = name_dialog.GetValue();
-            name_value.Trim(true);
-            name_value.Trim(false);
-            if (name_value.empty()) {
-                wxMessageBox(_L("Printer name cannot be empty."), _L("Printer name"), wxOK | wxICON_WARNING, this);
                 return;
             }
 
@@ -3299,13 +3294,40 @@ void PrinterWebView::show_add_printer_dialog()
             BBLocalMachine machine;
             machine.dev_id = dev_id;
             machine.dev_ip = dev_ip;
-            machine.dev_name = into_u8(name_value);
+            machine.dev_name = friendly_host_from_address(dev_ip);
             machine.printer_type = "Moonraker";
 
             if (m_ip_status != nullptr)
                 m_ip_status->SetLabelText(_L("Connecting to printer..."));
-            if (m_owner != nullptr && m_owner->finish_add_moonraker_printer(machine, host.rfind("https://", 0) == 0))
+            if (m_owner == nullptr)
+                return;
+
+            m_ip_add_busy = true;
+            if (m_ip_field != nullptr)
+                m_ip_field->Enable(false);
+
+            if (m_alive == nullptr) {
+                m_alive = std::make_shared<bool>(true);
+                Bind(wxEVT_DESTROY, [alive = m_alive](wxWindowDestroyEvent &event) {
+                    *alive = false;
+                    event.Skip();
+                });
+            }
+
+            const bool use_ssl = host.rfind("https://", 0) == 0;
+            m_owner->add_moonraker_printer_async(machine, use_ssl, [this, alive = m_alive](bool ok, const wxString &message) {
+                if (!alive || !*alive)
+                    return;
+                m_ip_add_busy = false;
+                if (m_ip_field != nullptr)
+                    m_ip_field->Enable(true);
+                if (!ok) {
+                    if (m_ip_status != nullptr)
+                        m_ip_status->SetLabelText(message);
+                    return;
+                }
                 EndModal(wxID_OK);
+            });
         }
 
         PrinterWebView *m_owner{ nullptr };
@@ -3321,6 +3343,8 @@ void PrinterWebView::show_add_printer_dialog()
         wxBoxSizer *m_auto_list_sizer{ nullptr };
         wxTextCtrl *m_ip_field{ nullptr };
         wxStaticText *m_ip_status{ nullptr };
+        bool m_ip_add_busy{ false };
+        std::shared_ptr<bool> m_alive;
     };
 
     AddPrinterDialog dlg(this, this);
@@ -3349,23 +3373,10 @@ void PrinterWebView::prompt_ip_connect()
         dev_ip += ":7125";
     const std::string dev_id = dev_ip;
 
-    wxString default_name = _L("Unknown Printer");
-    wxTextEntryDialog name_dialog(this, "Bu yazici icin gorunecek bir isim belirleyin.", "Yazici Adi", default_name);
-    if (name_dialog.ShowModal() != wxID_OK)
-        return;
-
-    wxString name_value = name_dialog.GetValue();
-    name_value.Trim(true);
-    name_value.Trim(false);
-    if (name_value.empty()) {
-        wxMessageBox("Yazici adi bos olamaz.", "Yazici Adi", wxOK | wxICON_WARNING, this);
-        return;
-    }
-
     BBLocalMachine machine;
     machine.dev_id = dev_id;
     machine.dev_ip = dev_ip;
-    machine.dev_name = into_u8(name_value);
+    machine.dev_name = friendly_host_from_address(dev_ip);
     machine.printer_type = "Moonraker";
 
     finish_add_moonraker_printer(machine, host.rfind("https://", 0) == 0);
@@ -3383,7 +3394,9 @@ void PrinterWebView::rebuild_printers_popup()
     m_printers_popup_panel->DestroyChildren();
 
     m_printers_popup_panel->SetBackgroundColour(wxColour(255, 255, 255));
-    m_printers_popup_panel->SetMinSize(wxSize(FromDIP(288), -1));
+    const int popup_width = m_printers_popup_max_width > 0 ? m_printers_popup_max_width : FromDIP(220);
+    m_printers_popup_panel->SetMinSize(wxSize(popup_width, -1));
+    m_printers_popup_panel->SetMaxSize(wxSize(popup_width, -1));
 
     auto *printers_popup_sizer = new wxBoxSizer(wxVERTICAL);
     auto *dev_manager = wxGetApp().getDeviceManager();
@@ -3392,6 +3405,8 @@ void PrinterWebView::rebuild_printers_popup()
     const auto local_machines = dev_manager ? dev_manager->get_local_machinelist() : std::map<std::string, MachineObject*>();
 
     const wxColour k_green(40, 167, 69);
+    const wxColour k_yellow(wxColour("#F2C94C"));
+    const wxColour k_red(wxColour("#E74C3C"));
     const wxColour k_muted(120, 120, 120);
     const wxColour k_card_border(232, 232, 232);
 
@@ -3401,13 +3416,21 @@ void PrinterWebView::rebuild_printers_popup()
         if (machine == nullptr)
             return;
         const std::string dev_id = machine->get_dev_id();
+        MachineObject *current = dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr;
+        const bool already_selected = current != nullptr && current->get_dev_id() == dev_id;
         dismiss_printers_popup();
+        if (already_selected && machine->is_online()) {
+            m_has_active_printer_connection = true;
+            refresh_layer_info_from_selected_machine();
+            return;
+        }
+        // Apply selection synchronously so Status reads the same machine the
+        // picker just chose. MonitorPanel::select_machine only queues an event.
+        if (dev_manager != nullptr)
+            dev_manager->set_selected_machine(dev_id);
         if (wxGetApp().mainframe != nullptr && wxGetApp().mainframe->m_monitor != nullptr)
             wxGetApp().mainframe->m_monitor->select_machine(dev_id);
-        else if (dev_manager != nullptr)
-            dev_manager->set_selected_machine(dev_id);
-        m_has_active_printer_connection = true;
-        machine->command_request_push_all(true);
+        m_has_active_printer_connection = machine->is_online();
         refresh_layer_info_from_selected_machine();
     };
 
@@ -3440,7 +3463,9 @@ void PrinterWebView::rebuild_printers_popup()
     for (MachineObject *m : sorted) {
         if (m == nullptr)
             continue;
-        if (m->is_online())
+        const bool selected = selected_machine != nullptr &&
+                              selected_machine->get_dev_id() == m->get_dev_id();
+        if (m->is_online() || selected)
             online_list.push_back(m);
         else
             offline_list.push_back(m);
@@ -3459,60 +3484,62 @@ void PrinterWebView::rebuild_printers_popup()
         if (machine == nullptr)
             return;
         const bool online = machine->is_online();
-        const bool active = online && selected_machine != nullptr &&
-                            selected_machine->get_dev_id() == machine->get_dev_id();
-        const wxString status_text = active ? _L("Connected") : (online ? _L("Not active") : _L("Offline"));
+        const bool selected = selected_machine != nullptr &&
+                              selected_machine->get_dev_id() == machine->get_dev_id();
+        wxColour dot_colour = k_red;
+        if (online)
+            dot_colour = k_green;
+        else if (machine->is_connecting())
+            dot_colour = k_yellow;
+
         auto *card = new StaticBox(m_printers_popup_panel, wxID_ANY);
-        card->SetCornerRadius(static_cast<double>(FromDIP(10)));
+        card->SetMinSize(wxSize(-1, FromDIP(36)));
+        card->SetCornerRadius(static_cast<double>(FromDIP(8)));
         card->SetBorderWidth(1);
-        card->SetBorderColorNormal(k_card_border);
+        card->SetBorderColorNormal(selected ? k_green : k_card_border);
         card->SetBackgroundColorNormal(wxColour(255, 255, 255));
         card->SetBackgroundColour(wxColour(255, 255, 255));
         card->SetCursor(wxCursor(wxCURSOR_HAND));
+
         auto *hs = new wxBoxSizer(wxHORIZONTAL);
         hs->AddSpacer(FromDIP(10));
-        auto *printer_bmp = new wxStaticBitmap(card, wxID_ANY, create_scaled_bitmap(k_cprint_printer_nav_bitmap, this, 22));
-        hs->Add(printer_bmp, 0, wxALIGN_CENTER_VERTICAL);
-        hs->AddSpacer(FromDIP(10));
-        auto *vs = new wxBoxSizer(wxVERTICAL);
-        auto *name_lbl = new wxStaticText(card, wxID_ANY, from_u8(machine->get_dev_name()), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
-        wxFont nf = name_lbl->GetFont();
-        nf.SetWeight(wxFONTWEIGHT_BOLD);
-        name_lbl->SetFont(nf);
-        name_lbl->SetForegroundColour(wxColour(28, 28, 28));
-        vs->Add(name_lbl, 0);
-        auto *status_row = new wxBoxSizer(wxHORIZONTAL);
         auto *dot = new wxStaticText(card, wxID_ANY, wxString::FromUTF8("\xE2\x97\x8F"));
-        dot->SetForegroundColour(active ? k_green : wxColour(180, 180, 180));
-        status_row->Add(dot, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(4));
-        auto *st = new wxStaticText(card, wxID_ANY, status_text);
-        st->SetForegroundColour(active ? k_green : k_muted);
-        status_row->Add(st, 0, wxALIGN_CENTER_VERTICAL);
-        vs->Add(status_row, 0);
-        hs->Add(vs, 1, wxALIGN_CENTER_VERTICAL);
-        auto *more = new wxStaticText(card, wxID_ANY, "...");
-        more->SetForegroundColour(k_muted);
-        more->SetCursor(wxCursor(wxCURSOR_HAND));
-        hs->Add(more, 0, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, FromDIP(6));
-        auto *chev = new wxStaticText(card, wxID_ANY, ">");
-        chev->SetForegroundColour(wxColour(160, 160, 160));
-        chev->SetCursor(wxCursor(wxCURSOR_HAND));
-        hs->Add(chev, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
+        dot->SetForegroundColour(dot_colour);
+        hs->Add(dot, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(8));
+        auto *name_lbl = new wxStaticText(card, wxID_ANY, sidebar_display_name_for(machine), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
+        name_lbl->SetForegroundColour(wxColour(28, 28, 28));
+        hs->Add(name_lbl, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+
+        auto *edit_icon = new wxStaticBitmap(card, wxID_ANY, create_scaled_bitmap("rename_edit", this, 16));
+        edit_icon->SetCursor(wxCursor(wxCURSOR_HAND));
+        edit_icon->SetToolTip(_L("Edit printer name"));
+        hs->Add(edit_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+
+        auto *forget_icon = new wxStaticBitmap(card, wxID_ANY, create_scaled_bitmap("unbind", this, 16));
+        forget_icon->SetCursor(wxCursor(wxCURSOR_HAND));
+        forget_icon->SetToolTip(_L("Forget printer"));
+        hs->Add(forget_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
+
         auto *card_outer = new wxBoxSizer(wxVERTICAL);
-        // Extra vertical padding (+30px at 96 DPI via FromDIP) for taller cards
-        card_outer->Add(hs, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(10) + FromDIP(15));
+        card_outer->Add(hs, 1, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(6));
         card->SetSizer(card_outer);
 
         auto pick = [select_machine_fn, machine](wxMouseEvent &) { select_machine_fn(machine); };
         card->Bind(wxEVT_LEFT_DOWN, pick);
         name_lbl->Bind(wxEVT_LEFT_DOWN, pick);
-        st->Bind(wxEVT_LEFT_DOWN, pick);
         dot->Bind(wxEVT_LEFT_DOWN, pick);
-        printer_bmp->Bind(wxEVT_LEFT_DOWN, pick);
-        chev->Bind(wxEVT_LEFT_DOWN, pick);
-        more->Bind(wxEVT_LEFT_DOWN, [this, more, machine](wxMouseEvent &evt) {
+        edit_icon->Bind(wxEVT_LEFT_DOWN, [this, machine](wxMouseEvent &evt) {
             evt.StopPropagation();
-            show_printer_card_actions_menu(more, machine);
+            if (edit_sidebar_printer_name(machine)) {
+                rebuild_printers_popup();
+                rebuild_sidebar_printer_list();
+                Layout();
+            }
+        });
+        forget_icon->Bind(wxEVT_LEFT_DOWN, [this, machine](wxMouseEvent &evt) {
+            evt.StopPropagation();
+            if (confirm_forget_printer())
+                forget_local_printer(machine);
         });
         printers_popup_sizer->Add(card, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(8));
     };
@@ -3561,10 +3588,11 @@ void PrinterWebView::rebuild_printers_popup()
     printers_popup_sizer->Fit(m_printers_popup_panel);
     m_printers_popup_panel->Layout();
 
-    const wxSize popup_size = m_printers_popup_panel->GetBestSize();
+    const wxSize popup_size(popup_width, m_printers_popup_panel->GetBestSize().GetHeight());
     m_printers_popup_panel->SetSize(popup_size);
     m_printers_popup->SetClientSize(popup_size);
     m_printers_popup->SetSize(popup_size);
+    m_printers_popup->SetMaxSize(wxSize(popup_width, -1));
     m_printers_popup->Layout();
     rebuild_sidebar_printer_list();
 }
@@ -3578,14 +3606,14 @@ wxString PrinterWebView::sidebar_display_name_for(const MachineObject *machine) 
     const std::string dev_ip   = machine->get_dev_ip();
     const bool placeholder_name = is_placeholder_printer_name(dev_name);
 
-    if (!placeholder_name && !dev_name.empty() && dev_name != dev_ip)
+    if (!placeholder_name && !dev_name.empty())
         return from_u8(dev_name);
 
-    const wxString model_name = machine->get_printer_type_display_str();
-    if (!model_name.empty() && model_name != "N/A")
-        return model_name;
+    const std::string host = friendly_host_from_address(!dev_ip.empty() ? dev_ip : machine->get_dev_id());
+    if (!host.empty())
+        return from_u8(host);
 
-    if (!placeholder_name && !dev_name.empty())
+    if (!dev_name.empty() && !is_generic_coprint_product_name(dev_name))
         return from_u8(dev_name);
 
     return _L("Unknown Printer");
@@ -3659,39 +3687,37 @@ void PrinterWebView::begin_moonraker_lan_scan()
                     if (index >= candidates.size())
                         break;
                     BBLocalMachine machine;
-                    if (probe_moonraker_host(candidates[index], machine)) {
-                        if (!is_coprint_discovered_machine(machine))
-                            continue;
+                    if (probe_moonraker_host(candidates[index], machine) != MoonrakerProbeStatus::Ok)
+                        continue;
 
-                        bool added = false;
-                        std::lock_guard<std::mutex> lock(discovered_mutex);
-                        const auto duplicate = std::find_if(
-                            discovered.begin(),
-                            discovered.end(),
-                            [&](const BBLocalMachine &existing) { return existing.dev_ip == machine.dev_ip; });
-                        if (duplicate == discovered.end()) {
-                            discovered.push_back(machine);
-                            added = true;
-                        }
-                        if (added) {
-                            wxGetApp().CallAfter([this, lifetime, cancel_token, machine]() {
-                                if (lifetime.expired() || m_destroying || cancel_token->load())
-                                    return;
-                                const auto duplicate = std::find_if(
-                                    m_discovered_moonraker_printers.begin(),
-                                    m_discovered_moonraker_printers.end(),
-                                    [&](const BBLocalMachine &existing) { return existing.dev_ip == machine.dev_ip; });
-                                if (duplicate == m_discovered_moonraker_printers.end()) {
-                                    m_discovered_moonraker_printers.push_back(machine);
-                                    std::sort(m_discovered_moonraker_printers.begin(), m_discovered_moonraker_printers.end(), [](const BBLocalMachine &a, const BBLocalMachine &b) {
-                                        return a.dev_name < b.dev_name;
-                                    });
-                                    if (m_sidebar_add_printer_panel != nullptr && m_sidebar_add_printer_panel->IsShown() &&
-                                        m_sidebar_add_tab_index == 0)
-                                        show_sidebar_add_printer_view();
-                                }
-                            });
-                        }
+                    bool added = false;
+                    std::lock_guard<std::mutex> lock(discovered_mutex);
+                    const auto duplicate = std::find_if(
+                        discovered.begin(),
+                        discovered.end(),
+                        [&](const BBLocalMachine &existing) { return existing.dev_ip == machine.dev_ip; });
+                    if (duplicate == discovered.end()) {
+                        discovered.push_back(machine);
+                        added = true;
+                    }
+                    if (added) {
+                        wxGetApp().CallAfter([this, lifetime, cancel_token, machine]() {
+                            if (lifetime.expired() || m_destroying || cancel_token->load())
+                                return;
+                            const auto duplicate = std::find_if(
+                                m_discovered_moonraker_printers.begin(),
+                                m_discovered_moonraker_printers.end(),
+                                [&](const BBLocalMachine &existing) { return existing.dev_ip == machine.dev_ip; });
+                            if (duplicate == m_discovered_moonraker_printers.end()) {
+                                m_discovered_moonraker_printers.push_back(machine);
+                                std::sort(m_discovered_moonraker_printers.begin(), m_discovered_moonraker_printers.end(), [](const BBLocalMachine &a, const BBLocalMachine &b) {
+                                    return a.dev_name < b.dev_name;
+                                });
+                                if (m_sidebar_add_printer_panel != nullptr && m_sidebar_add_printer_panel->IsShown() &&
+                                    m_sidebar_add_tab_index == 0)
+                                    show_sidebar_add_printer_view();
+                            }
+                        });
                     }
                 }
             });
@@ -3703,7 +3729,9 @@ void PrinterWebView::begin_moonraker_lan_scan()
             if (lifetime.expired() || m_destroying || cancel_token->load())
                 return;
             discovered.erase(
-                std::remove_if(discovered.begin(), discovered.end(), [](const BBLocalMachine &machine) { return !is_coprint_discovered_machine(machine); }),
+                std::remove_if(discovered.begin(), discovered.end(), [](const BBLocalMachine &machine) {
+                    return machine.dev_ip.empty();
+                }),
                 discovered.end());
             std::sort(discovered.begin(), discovered.end(), [](const BBLocalMachine &a, const BBLocalMachine &b) {
                 return a.dev_name < b.dev_name;
@@ -3781,11 +3809,11 @@ void PrinterWebView::show_sidebar_add_printer_view()
     m_sidebar_add_printer_panel->DestroyChildren();
     auto *root = new wxBoxSizer(wxVERTICAL);
 
-    const wxColour k_text("#F1F3F4");
-    const wxColour k_muted("#A7ADB5");
+    const wxColour k_text("#232527");
+    const wxColour k_muted("#767C84");
     const wxColour k_green("#35AD27");
-    const wxColour k_card("#232527");
-    const wxColour k_border("#3A3D40");
+    const wxColour k_card(*wxWHITE);
+    const wxColour k_border("#C7C7C7");
 
     m_sidebar_add_tab_index = std::clamp(m_sidebar_add_tab_index, 0, 1);
 
@@ -3836,7 +3864,7 @@ void PrinterWebView::show_sidebar_add_printer_view()
         auto *auto_list_row = new wxBoxSizer(wxHORIZONTAL);
         auto *auto_list = new wxScrolledWindow(m_sidebar_add_printer_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
         m_auto_connect_list_window = auto_list;
-        auto_list->SetBackgroundColour(wxColour("#2A2C2E"));
+        auto_list->SetBackgroundColour(*wxWHITE);
         auto_list->SetScrollRate(0, FromDIP(8));
         auto_list->ShowScrollbars(wxSHOW_SB_NEVER, wxSHOW_SB_NEVER);
         auto_list->SetMinSize(wxSize(-1, FromDIP(150)));
@@ -3972,7 +4000,7 @@ void PrinterWebView::show_sidebar_add_printer_view()
     hint_box->SetBackgroundColour(k_card);
     hint_box->SetMinSize(wxSize(-1, FromDIP(56)));
     auto *hint_sz = new wxBoxSizer(wxHORIZONTAL);
-    auto *hint_icon = new wxStaticBitmap(hint_box, wxID_ANY, create_scaled_bitmap("device_sidebar_idea_light", this, 20));
+    auto *hint_icon = new wxStaticBitmap(hint_box, wxID_ANY, create_scaled_bitmap("device_sidebar_idea", this, 20));
     hint_sz->Add(hint_icon, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(12));
     hint_sz->AddSpacer(FromDIP(10));
     auto *hint = new wxStaticText(hint_box, wxID_ANY, _L("Make sure your printer is powered on\nand connected the same network."));
@@ -3990,9 +4018,9 @@ void PrinterWebView::show_sidebar_add_printer_view()
         auto *fallback = new StaticBox(m_sidebar_add_printer_panel, wxID_ANY);
         fallback->SetCornerRadius(FromDIP(8));
         fallback->SetBorderWidth(1);
-        fallback->SetBorderColorNormal(wxColour("#35512F"));
-        fallback->SetBackgroundColorNormal(wxColour("#293126"));
-        fallback->SetBackgroundColour(wxColour("#293126"));
+        fallback->SetBorderColorNormal(wxColour("#B7D8B0"));
+        fallback->SetBackgroundColorNormal(wxColour("#F3F8F1"));
+        fallback->SetBackgroundColour(wxColour("#F3F8F1"));
         fallback->SetCursor(wxCursor(wxCURSOR_HAND));
         auto *fallback_sizer = new wxBoxSizer(wxVERTICAL);
         auto *title = new wxStaticText(fallback, wxID_ANY, _L("Can't find your printer?"));
@@ -4052,80 +4080,47 @@ void PrinterWebView::show_sidebar_add_printer_view()
             ip_input->Enable(false);
         m_sidebar_add_printer_panel->Layout();
 
-        // Probe off the UI thread — synchronous Moonraker HTTP used to freeze the app
-        // for many seconds when a printer was slow or partially unreachable.
         const bool use_ssl = host.rfind("https://", 0) == 0;
-        std::weak_ptr<int> lifetime = m_lifetime_token;
-        std::thread([this, lifetime, machine, use_ssl]() {
-            BBLocalMachine resolved = machine;
-            BBLocalMachine detected;
-            const bool probed = probe_moonraker_host(machine.dev_ip, detected);
-            if (probed) {
-                if (!detected.dev_name.empty())
-                    resolved.dev_name = detected.dev_name;
-                if (!detected.printer_type.empty())
-                    resolved.printer_type = detected.printer_type;
-                std::string sanitized_detected;
-                std::string unused;
-                if (!detected.dev_ip.empty() && sanitize_moonraker_address(detected.dev_ip, sanitized_detected, unused)) {
-                    resolved.dev_ip = sanitized_detected;
-                    resolved.dev_id = sanitized_detected;
-                } else if (!detected.dev_id.empty() && sanitize_moonraker_address(detected.dev_id, sanitized_detected, unused)) {
-                    resolved.dev_ip = sanitized_detected;
-                    resolved.dev_id = sanitized_detected;
+        add_moonraker_printer_async(machine, use_ssl, [this](bool ok, const wxString &message) {
+            wxWindow *status_ctrl = m_sidebar_add_printer_panel
+                ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_status")
+                : nullptr;
+            wxWindow *add_btn_ctrl = m_sidebar_add_printer_panel
+                ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_button")
+                : nullptr;
+            wxWindow *ip_input_ctrl = m_sidebar_add_printer_panel
+                ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_ip")
+                : nullptr;
+
+            auto show_fail = [&](const wxString &fail_message) {
+                if (status_ctrl != nullptr) {
+                    status_ctrl->Show();
+                    if (auto *label = dynamic_cast<wxStaticText *>(status_ctrl))
+                        label->SetLabelText(fail_message);
+                    if (m_sidebar_add_printer_panel != nullptr)
+                        m_sidebar_add_printer_panel->Layout();
                 }
-            }
-
-            wxGetApp().CallAfter([this, lifetime, resolved, use_ssl, probed]() {
-                if (lifetime.expired() || m_destroying)
-                    return;
-
-                wxWindow *status_ctrl = m_sidebar_add_printer_panel
-                    ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_status")
-                    : nullptr;
-                wxWindow *add_btn_ctrl = m_sidebar_add_printer_panel
-                    ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_button")
-                    : nullptr;
-                wxWindow *ip_input_ctrl = m_sidebar_add_printer_panel
-                    ? m_sidebar_add_printer_panel->FindWindowByName("sidebar_add_printer_ip")
-                    : nullptr;
-
-                auto show_fail = [&](const wxString &message) {
-                    if (status_ctrl != nullptr) {
-                        status_ctrl->Show();
-                        if (auto *label = dynamic_cast<wxStaticText *>(status_ctrl))
-                            label->SetLabelText(message);
-                        if (m_sidebar_add_printer_panel != nullptr)
-                            m_sidebar_add_printer_panel->Layout();
-                    }
-                    if (add_btn_ctrl != nullptr)
-                        add_btn_ctrl->Enable(true);
-                    if (ip_input_ctrl != nullptr)
-                        ip_input_ctrl->Enable(true);
-                };
-
-                // Do not insert unreachable printers as "Unknown" — that leaves the UI
-                // stuck on Connecting... against a bad/forgotten address.
-                if (!probed) {
-                    show_fail(_L("Could not connect to the printer."));
-                    return;
-                }
-
-                const bool ok = finish_add_moonraker_printer(resolved, use_ssl, false);
-                if (ok) {
-                    begin_sidebar_connect_attempt(resolved.dev_id);
-                    show_sidebar_printers_view();
-                } else {
-                    show_fail(_L("Could not connect to the printer."));
-                    return;
-                }
-
                 if (add_btn_ctrl != nullptr)
                     add_btn_ctrl->Enable(true);
                 if (ip_input_ctrl != nullptr)
                     ip_input_ctrl->Enable(true);
-            });
-        }).detach();
+            };
+
+            if (!ok) {
+                show_fail(message);
+                return;
+            }
+
+            auto *dev_manager = wxGetApp().getDeviceManager();
+            MachineObject *added = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+            if (added != nullptr)
+                begin_sidebar_connect_attempt(added->get_dev_id());
+            show_sidebar_printers_view();
+            if (add_btn_ctrl != nullptr)
+                add_btn_ctrl->Enable(true);
+            if (ip_input_ctrl != nullptr)
+                ip_input_ctrl->Enable(true);
+        });
     };
     if (add_btn != nullptr)
         add_btn->Bind(wxEVT_BUTTON, submit_ip);
@@ -4153,6 +4148,28 @@ void PrinterWebView::begin_sidebar_connect_attempt(const std::string &dev_id)
     m_sidebar_connect_dev_id = dev_id;
     m_sidebar_connect_started_ms = wxGetUTCTimeMillis();
     m_sidebar_connect_phase = SidebarConnectPhase::Connecting;
+    m_device_warn_ack = DeviceWarnAck::None;
+}
+
+void PrinterWebView::mark_printer_connecting(const std::string &dev_id)
+{
+    begin_sidebar_connect_attempt(dev_id);
+    m_klippy_state.clear();
+    m_has_moonraker_status = false;
+    m_has_moonraker_print_status = false;
+    reset_dashboard_snapshot();
+    m_sidebar_printer_list_signature.clear();
+    rebuild_sidebar_printer_list();
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    update_dashboard_connecting_overlay(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+}
+
+bool PrinterWebView::is_printer_connecting(const MachineObject *machine) const
+{
+    if (machine == nullptr || m_sidebar_connect_dev_id.empty())
+        return false;
+    return m_sidebar_connect_phase == SidebarConnectPhase::Connecting &&
+           machine->get_dev_id() == m_sidebar_connect_dev_id;
 }
 
 void PrinterWebView::update_sidebar_connect_attempt_state()
@@ -4183,7 +4200,8 @@ void PrinterWebView::update_sidebar_connect_attempt_state()
         }
     }
 
-    if (machine != nullptr && machine->is_online()) {
+    if (machine != nullptr && machine->is_online() && klippy_is_ready(m_klippy_state) &&
+        is_dashboard_snapshot_ready()) {
         clear_sidebar_connect_attempt();
         m_sidebar_printer_list_signature.clear();
         rebuild_sidebar_printer_list();
@@ -4191,6 +4209,7 @@ void PrinterWebView::update_sidebar_connect_attempt_state()
     }
 
     if (m_sidebar_connect_phase == SidebarConnectPhase::Connecting &&
+        !klippy_is_ready(m_klippy_state) &&
         (wxGetUTCTimeMillis() - m_sidebar_connect_started_ms) >= 15000) {
         m_sidebar_connect_phase = SidebarConnectPhase::Failed;
         m_sidebar_printer_list_signature.clear();
@@ -4331,7 +4350,9 @@ void PrinterWebView::rebuild_sidebar_printer_list()
     for (MachineObject *machine : deduped) {
         if (machine == nullptr)
             continue;
-        (machine->is_online() ? online_list : offline_list).push_back(machine);
+        const bool selected = selected_machine != nullptr &&
+                              selected_machine->get_dev_id() == machine->get_dev_id();
+        (machine->is_online() || selected ? online_list : offline_list).push_back(machine);
     }
     auto by_name = [](MachineObject *a, MachineObject *b) {
         if (a == nullptr || b == nullptr)
@@ -4381,13 +4402,13 @@ void PrinterWebView::rebuild_sidebar_printer_list()
 
     m_sidebar_printer_list_sizer->Clear(true);
 
-    const wxColour k_text("#F1F3F4");
-    const wxColour k_muted("#A7ADB5");
+    const wxColour k_text("#232527");
+    const wxColour k_muted("#767C84");
     const wxColour k_green("#35AD27");
     const wxColour k_yellow("#F2C94C");
     const wxColour k_red("#E74C3C");
-    const wxColour k_card_bg("#232527");
-    const wxColour k_card_border("#3A3D40");
+    const wxColour k_card_bg(*wxWHITE);
+    const wxColour k_card_border("#C7C7C7");
 
     auto add_section_title = [&](const wxString &text) {
         auto *label = new wxStaticText(m_sidebar_printer_list_panel, wxID_ANY, text);
@@ -4520,7 +4541,11 @@ void PrinterWebView::rebuild_sidebar_printer_list()
             status_text = _L("Connecting...");
             status_colour = k_yellow;
             dot_colour = k_yellow;
-        } else if (show_not_connected) {
+        } else if (selected && klippy_is_faulted(m_klippy_state)) {
+            status_text = klippy_state_label(m_klippy_state);
+            status_colour = klippy_state_colour(m_klippy_state);
+            dot_colour = status_colour;
+        } else if (show_not_connected || (selected && !online)) {
             status_text = _L("Not connected");
             status_colour = k_red;
             dot_colour = k_red;
@@ -4543,8 +4568,8 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         card->SetCornerRadius(FromDIP(8));
         card->SetBorderWidth(1);
         card->SetBorderColorNormal(selected ? wxColour("#4B8C43") : k_card_border);
-        card->SetBackgroundColorNormal(selected ? wxColour("#293126") : k_card_bg);
-        card->SetBackgroundColour(selected ? wxColour("#293126") : k_card_bg);
+        card->SetBackgroundColorNormal(selected ? wxColour("#F3F8F1") : k_card_bg);
+        card->SetBackgroundColour(selected ? wxColour("#F3F8F1") : k_card_bg);
         card->SetCursor(wxCursor(wxCURSOR_HAND));
 
         auto *outer = new wxBoxSizer(wxHORIZONTAL);
@@ -4592,7 +4617,7 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         auto *actions = new wxPanel(card, wxID_ANY);
         actions->SetMinSize(wxSize(FromDIP(can_forget ? 68 : 32), FromDIP(34)));
         actions->SetMaxSize(wxSize(FromDIP(can_forget ? 68 : 32), FromDIP(34)));
-        actions->SetBackgroundColour(selected ? wxColour("#293126") : k_card_bg);
+        actions->SetBackgroundColour(selected ? wxColour("#F3F8F1") : k_card_bg);
         auto *actions_sizer = new wxBoxSizer(wxHORIZONTAL);
 
         auto flash_connecting = [card, dot, status, k_yellow]() {
@@ -4625,16 +4650,16 @@ void PrinterWebView::rebuild_sidebar_printer_list()
             forget_area->SetMaxSize(wxSize(FromDIP(30), FromDIP(30)));
             forget_area->SetCornerRadius(FromDIP(15));
             forget_area->SetBorderWidth(1);
-            forget_area->SetBorderColorNormal(wxColour("#4A4D51"));
-            forget_area->SetBackgroundColorNormal(selected ? wxColour("#293126") : k_card_bg);
-            forget_area->SetBackgroundColour(selected ? wxColour("#293126") : k_card_bg);
+            forget_area->SetBorderColorNormal(wxColour("#C7C7C7"));
+            forget_area->SetBackgroundColorNormal(selected ? wxColour("#F3F8F1") : k_card_bg);
+            forget_area->SetBackgroundColour(selected ? wxColour("#F3F8F1") : k_card_bg);
             forget_area->SetCursor(wxCursor(wxCURSOR_HAND));
             auto *forget_sizer = new wxBoxSizer(wxVERTICAL);
             forget_sizer->AddStretchSpacer(1);
             auto *forget_icon = new wxStaticBitmap(
                 forget_area,
                 wxID_ANY,
-                create_scaled_bitmap("device_sidebar_forget", this, 16, false, "#F1F3F4"));
+                create_scaled_bitmap("unbind", this, 16));
             forget_icon->SetCursor(wxCursor(wxCURSOR_HAND));
             forget_sizer->Add(forget_icon, 0, wxALIGN_CENTER_HORIZONTAL);
             forget_sizer->AddStretchSpacer(1);
@@ -4656,9 +4681,9 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         rename_area->SetMaxSize(wxSize(FromDIP(30), FromDIP(30)));
         rename_area->SetCornerRadius(FromDIP(15));
         rename_area->SetBorderWidth(1);
-        rename_area->SetBorderColorNormal(wxColour("#4A4D51"));
-        rename_area->SetBackgroundColorNormal(selected ? wxColour("#293126") : k_card_bg);
-        rename_area->SetBackgroundColour(selected ? wxColour("#293126") : k_card_bg);
+        rename_area->SetBorderColorNormal(wxColour("#C7C7C7"));
+        rename_area->SetBackgroundColorNormal(selected ? wxColour("#F3F8F1") : k_card_bg);
+        rename_area->SetBackgroundColour(selected ? wxColour("#F3F8F1") : k_card_bg);
         rename_area->SetCursor(wxCursor(wxCURSOR_HAND));
         rename_area->SetToolTip(_L("Edit printer name"));
         auto *rename_sizer = new wxBoxSizer(wxVERTICAL);
@@ -4666,7 +4691,7 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         auto *rename_icon = new wxStaticBitmap(
             rename_area,
             wxID_ANY,
-            create_scaled_bitmap("device_sidebar_rename_edit", this, 16));
+            create_scaled_bitmap("rename_edit", this, 16));
         rename_icon->SetCursor(wxCursor(wxCURSOR_HAND));
         rename_icon->SetToolTip(_L("Edit printer name"));
         rename_sizer->Add(rename_icon, 0, wxALIGN_CENTER_HORIZONTAL);
@@ -4744,7 +4769,8 @@ void PrinterWebView::update_dashboard_filament_state(const std::array<wxColour, 
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    const bool can_load_unload = obj != nullptr && obj->is_online() && !obj->is_in_printing();
+    const bool can_load_unload = dashboard_manual_controls_allowed(obj, m_klippy_state,
+        m_dashboard_state_store.state().print_job);
 
     m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
         for (int i = 0; i < 4; ++i) {
@@ -4774,8 +4800,8 @@ void PrinterWebView::update_dashboard_filament_state(const std::array<wxColour, 
         state.filament.can_load_unload = can_load_unload;
     });
 
-    if (m_dashboard_filament_panel != nullptr)
-        m_dashboard_filament_panel->apply_state(m_dashboard_state_store.state().filament);
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
 }
 
 void PrinterWebView::set_filament_assigned_tool(int model_slot_index, int ui_tool, bool send_mapping_command)
@@ -4791,8 +4817,8 @@ void PrinterWebView::set_filament_assigned_tool(int model_slot_index, int ui_too
         state.filament.model_slot_to_tool[model_slot_index] = ui_tool - 1;
         state.filament.assigned_colors[model_slot_index] = m_filament_loaded_tool_colors[ui_tool - 1];
     });
-    if (m_dashboard_filament_panel != nullptr)
-        m_dashboard_filament_panel->apply_state(m_dashboard_state_store.state().filament);
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
 
     if (send_mapping_command)
         send_tool_map_command(model_slot_index, ui_tool);
@@ -4838,7 +4864,7 @@ bool PrinterWebView::send_tool_select_command(int tool_index)
     const std::string base = moonraker_base_url(obj);
     if (obj == nullptr || !obj->is_online() || base.empty())
         return false;
-    if (obj->is_in_printing()) {
+    if (print_blocks_manual_controls(m_dashboard_state_store.state().print_job)) {
         BOOST_LOG_TRIVIAL(info) << "PrinterWebView: ignoring tool select while printing";
         return true;
     }
@@ -4879,7 +4905,52 @@ bool PrinterWebView::send_tool_select_command(int tool_index)
     return true;
 }
 
-bool PrinterWebView::send_print_control_command(bool stop_print)
+bool PrinterWebView::send_klipper_gcode_script(const std::string& script)
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (!dashboard_commands_allowed(obj, m_klippy_state))
+        return false;
+    const std::string base = moonraker_base_url(obj);
+    if (obj == nullptr || base.empty() || script.empty())
+        return false;
+
+    std::string api_key = obj->get_access_code();
+    if (api_key.empty())
+        api_key = obj->get_user_access_code();
+
+    BOOST_LOG_TRIVIAL(info) << "PrinterWebView: sending gcode script: " << script;
+
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, base, api_key, script]() {
+        nlohmann::json payload;
+        payload["script"] = script;
+        auto http = Http::post(base + "/printer/gcode/script");
+        if (!api_key.empty())
+            http.header("X-Api-Key", api_key);
+        http.header("Content-Type", "application/json")
+            .set_post_body(payload.dump())
+            .timeout_connect(2)
+            .timeout_max(4)
+            .on_complete([](std::string, unsigned status) {
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: gcode script status=" << status;
+            })
+            .on_error([](std::string, std::string error, unsigned status) {
+                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: gcode script failed status="
+                                           << status << " error=" << error;
+            })
+            .perform_sync();
+
+        wxGetApp().CallAfter([this, lifetime]() {
+            if (lifetime.expired() || m_destroying)
+                return;
+            refresh_moonraker_status_from_selected_machine();
+        });
+    }).detach();
+    return true;
+}
+
+bool PrinterWebView::send_print_control_command(bool stop_print, bool resume)
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
@@ -4887,8 +4958,9 @@ bool PrinterWebView::send_print_control_command(bool stop_print)
     if (obj == nullptr || !obj->is_online() || base.empty())
         return false;
 
-    const std::string action          = stop_print ? "CANCEL_PRINT" : "PAUSE";
-    const std::string endpoint        = stop_print ? "/printer/print/cancel" : "/printer/print/pause";
+    const std::string action = stop_print ? "CANCEL_PRINT" : (resume ? "RESUME" : "PAUSE");
+    const std::string endpoint = stop_print ? "/printer/print/cancel"
+        : (resume ? "/printer/print/resume" : "/printer/print/pause");
     const std::string fallback_script = action;
     BOOST_LOG_TRIVIAL(info) << "PrinterWebView: sending print control command: " << action << " via " << endpoint;
 
@@ -4957,6 +5029,29 @@ void PrinterWebView::apply_filament_preview_fallback()
         default_filament_preview_weights(),
         default_filament_preview_assigned_tools(),
         colors);
+}
+
+void PrinterWebView::apply_loaded_filament_cache(const std::array<wxColour, 4> &colors,
+                                                 const std::array<wxString, 4> &materials,
+                                                 const std::array<wxString, 4> &brands,
+                                                 const std::array<std::string, 4> &item_json,
+                                                 const std::array<bool, 4> &has_color)
+{
+    for (int i = 0; i < 4; ++i) {
+        m_filament_tool_item_json[i] = item_json[i];
+        m_filament_tool_has_color[i] = has_color[i];
+        m_filament_loaded_tool_colors[i] = has_color[i] ? colors[i] : wxColour();
+        if (is_empty_filament_material(materials[i])) {
+            m_filament_loaded_tool_materials[i] = wxString::FromUTF8("Empty");
+            if (!has_color[i])
+                m_filament_loaded_tool_brands[i].clear();
+            else
+                m_filament_loaded_tool_brands[i] = brands[i];
+        } else {
+            m_filament_loaded_tool_materials[i] = materials[i];
+            m_filament_loaded_tool_brands[i] = brands[i];
+        }
+    }
 }
 
 void PrinterWebView::sync_model_colors_from_plater()
@@ -5057,13 +5152,15 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
     const wxString metadata_file_path = active_file_metadata_path(obj);
     const bool has_file = !metadata_file_path.empty();
 
-    if (obj == nullptr || !obj->is_online() || base.empty()) {
+    if (obj == nullptr || !obj->is_online() || !klippy_is_ready(m_klippy_state) || base.empty()) {
         m_filament_preview_fetch_key.clear();
         m_filament_preview_fetch_in_progress = false;
         m_filament_tool_has_color.fill(false);
         for (int i = 0; i < 4; ++i) {
             m_filament_loaded_tool_colors[i] = wxColour();
             m_filament_loaded_tool_materials[i] = wxString::FromUTF8("Empty");
+            m_filament_loaded_tool_brands[i].clear();
+            m_filament_tool_item_json[i].clear();
         }
         apply_filament_preview_fallback();
         return;
@@ -5114,26 +5211,24 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
 
             auto meta   = parse_filament_metadata(parse_json_body(metadata_body));
             auto loaded = parse_filament_db(parse_json_body(db_body));
-
-            for (int i = 0; i < 4; ++i) {
-                m_filament_tool_has_color[i] = loaded.tool_has_color[i];
-                if (loaded.tool_has_color[i]) {
-                    m_filament_loaded_tool_colors[i] = loaded.assigned_colors[i];
-                    m_filament_loaded_tool_materials[i] = loaded.materials[i].empty()
-                        ? wxString::FromUTF8("Empty")
-                        : loaded.materials[i];
-                } else {
-                    m_filament_loaded_tool_colors[i] = wxColour();
-                    m_filament_loaded_tool_materials[i] = wxString::FromUTF8("Empty");
-                }
+            const bool keep_local = m_filament_db_write_in_progress || m_filament_db_write_queued;
+            if (!keep_local) {
+                apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
+                                            loaded.item_json, loaded.tool_has_color);
             }
 
+            const auto &tool_colors = keep_local ? m_filament_loaded_tool_colors : loaded.assigned_colors;
+            const bool has_tool_colors = keep_local
+                ? std::any_of(m_filament_tool_has_color.begin(), m_filament_tool_has_color.end(),
+                              [](bool has_color) { return has_color; })
+                : loaded.has_colors;
+
             auto assigned_tools  = default_filament_preview_assigned_tools();
-            auto assigned_colors = loaded.assigned_colors;
-            if (loaded.has_colors) {
-                assigned_tools = nearest_unique_tool_assignment(meta.model_colors, loaded.assigned_colors);
+            auto assigned_colors = tool_colors;
+            if (has_tool_colors) {
+                assigned_tools = nearest_unique_tool_assignment(meta.model_colors, tool_colors);
                 for (int i = 0; i < 4; ++i)
-                    assigned_colors[i] = loaded.assigned_colors[assigned_tools[i] - 1];
+                    assigned_colors[i] = tool_colors[assigned_tools[i] - 1];
             }
 
             // If metadata returned no model colors, keep the colors synced from
@@ -5142,7 +5237,7 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
             if (!meta.colors_parsed && m_has_plater_synced_colors) {
                 meta.model_colors = m_plater_synced_colors;
                 meta.materials    = m_plater_synced_materials;
-                if (loaded.has_colors) {
+                if (has_tool_colors) {
                     assigned_tools = nearest_unique_tool_assignment(meta.model_colors, m_filament_loaded_tool_colors);
                     for (int i = 0; i < 4; ++i)
                         assigned_colors[i] = m_filament_loaded_tool_colors[assigned_tools[i] - 1];
@@ -5159,87 +5254,124 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
     }).detach();
 }
 
-void PrinterWebView::sync_loaded_tool_filaments(MachineObject *obj)
+void PrinterWebView::sync_loaded_tool_filaments(MachineObject *obj, std::function<void()> on_done)
 {
-    if (m_destroying)
+    fetch_filament_selections(obj, [on_done = std::move(on_done)](bool) {
+        if (on_done)
+            on_done();
+    });
+}
+
+void PrinterWebView::fetch_filament_selections(MachineObject *obj, std::function<void(bool ok)> on_done)
+{
+    auto finish = [on_done = std::move(on_done)](bool ok) {
+        if (on_done)
+            on_done(ok);
+    };
+
+    if (m_destroying || obj == nullptr) {
+        finish(false);
         return;
+    }
     const std::string base = moonraker_base_url(obj);
-    if (obj == nullptr || !obj->is_online() || base.empty())
+    if (base.empty()) {
+        finish(false);
         return;
+    }
 
     std::weak_ptr<int> lifetime = m_lifetime_token;
-    std::thread([this, lifetime, base]() {
+    std::thread([this, lifetime, base, finish = std::move(finish)]() {
         std::string db_body;
+        bool http_ok = false;
         Http::get(base + "/server/database/item?namespace=coprint&key=filament_selections")
             .timeout_connect(2)
             .timeout_max(4)
             .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
+                if (status == 200) {
                     db_body = std::move(response);
+                    http_ok = true;
+                } else if (status == 404) {
+                    http_ok = true;
+                }
             })
-            .on_error([](std::string, std::string, unsigned) {})
+            .on_error([&](std::string, std::string, unsigned status) {
+                if (status == 404)
+                    http_ok = true;
+            })
             .perform_sync();
 
-        wxGetApp().CallAfter([this, lifetime, db_body]() {
-            if (lifetime.expired() || m_destroying)
-                return;
-            const auto loaded = parse_filament_db(parse_json_body(db_body));
-            for (int i = 0; i < 4; ++i) {
-                m_filament_tool_has_color[i] = loaded.tool_has_color[i];
-                if (loaded.tool_has_color[i]) {
-                    m_filament_loaded_tool_colors[i] = loaded.assigned_colors[i];
-                    m_filament_loaded_tool_materials[i] = loaded.materials[i].empty()
-                        ? wxString::FromUTF8("Empty")
-                        : loaded.materials[i];
-                }
+        wxGetApp().CallAfter([this, lifetime, db_body, http_ok, finish]() {
+            bool ok = http_ok && !lifetime.expired() && !m_destroying;
+            if (ok && !m_filament_db_write_in_progress && !m_filament_db_write_queued) {
+                const auto loaded = parse_filament_db(parse_json_body(db_body));
+                apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
+                                            loaded.item_json, loaded.tool_has_color);
             }
+            finish(ok);
         });
     }).detach();
 }
 
 bool PrinterWebView::get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const
 {
-    if (tool_0based < 0 || tool_0based >= 4 || !m_filament_tool_has_color[tool_0based])
+    if (tool_0based < 0 || tool_0based >= 4)
         return false;
-    const wxColour &cached = m_filament_loaded_tool_colors[tool_0based];
-    if (!cached.IsOk())
+    const bool has_material = !is_empty_filament_material(m_filament_loaded_tool_materials[tool_0based]);
+    const bool has_color = m_filament_tool_has_color[tool_0based] && m_filament_loaded_tool_colors[tool_0based].IsOk();
+    if (!has_material && !has_color)
         return false;
     if (color_out)
-        *color_out = cached;
+        *color_out = has_color ? m_filament_loaded_tool_colors[tool_0based] : wxColour();
     if (material_out)
         *material_out = m_filament_loaded_tool_materials[tool_0based];
     return true;
 }
 
-bool PrinterWebView::show_filament_material_dialog(bool start_load_after_save, const wxPoint& anchor_screen_pos)
+bool PrinterWebView::show_filament_material_dialog(bool start_load_after_save, const wxPoint& /*anchor_screen_pos*/)
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    if (start_load_after_save && (obj == nullptr || !obj->is_online() || obj->is_in_printing()))
+    if (start_load_after_save && (obj == nullptr || !obj->is_online() ||
+        print_blocks_manual_controls(m_dashboard_state_store.state().print_job)))
         return false;
 
     const int ui_tool = m_selected_filament_tool + 1;
-    FilamentMaterialDialog dialog(
+    const int tool = m_selected_filament_tool;
+    const bool has_material = !is_empty_filament_material(m_filament_loaded_tool_materials[tool]);
+    const bool has_color = m_filament_tool_has_color[tool] && m_filament_loaded_tool_colors[tool].IsOk();
+    DeviceDashboard::FilamentSelectDialog dialog(
         this,
         ui_tool,
-        m_filament_loaded_tool_materials[m_selected_filament_tool],
-        m_filament_loaded_tool_colors[m_selected_filament_tool]);
-    position_dialog_near_anchor(dialog, this, anchor_screen_pos);
+        has_material ? m_filament_loaded_tool_materials[tool] : wxString(),
+        has_color ? m_filament_loaded_tool_colors[tool] : wxColour(),
+        m_filament_loaded_tool_brands[tool]);
     if (dialog.ShowModal() != wxID_OK)
         return false;
 
-    const wxString material = dialog.material();
-    const wxString color_hex = dialog.color_hex();
-    m_filament_loaded_tool_materials[m_selected_filament_tool] = material;
-    m_filament_loaded_tool_colors[m_selected_filament_tool] = colour_from_hex(into_u8(color_hex), m_filament_loaded_tool_colors[m_selected_filament_tool]);
-    m_filament_tool_has_color[m_selected_filament_tool] = true;
+    const DeviceDashboard::FilamentSelection selection = dialog.selection();
+    const bool cleared = is_empty_filament_material(selection.type) && selection.color_hex.IsEmpty();
+    m_filament_loaded_tool_materials[m_selected_filament_tool] =
+        cleared ? wxString::FromUTF8("Empty") : selection.type;
+    m_filament_loaded_tool_brands[m_selected_filament_tool] = cleared ? wxString() : selection.brand;
+    m_filament_tool_item_json[m_selected_filament_tool] =
+        cleared ? std::string() : filament_item_from_selection(selection).dump();
+    if (cleared) {
+        m_filament_loaded_tool_colors[m_selected_filament_tool] = wxColour();
+        m_filament_tool_has_color[m_selected_filament_tool] = false;
+    } else {
+        m_filament_loaded_tool_colors[m_selected_filament_tool] = colour_from_hex(into_u8(selection.color_hex), m_filament_loaded_tool_colors[m_selected_filament_tool]);
+        m_filament_tool_has_color[m_selected_filament_tool] = true;
+    }
     m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
-        auto &tool = state.filament.tools[m_selected_filament_tool];
-        tool.color = m_filament_loaded_tool_colors[m_selected_filament_tool];
-        tool.material = material;
+        auto &tool_state = state.filament.tools[m_selected_filament_tool];
+        tool_state.color = m_filament_loaded_tool_colors[m_selected_filament_tool];
+        tool_state.material = m_filament_loaded_tool_materials[m_selected_filament_tool];
     });
     apply_filament_tool_selection(m_selected_filament_tool);
-    save_filament_selection_to_moonraker(ui_tool, material, color_hex);
+    if (cleared)
+        clear_filament_selection_from_moonraker(ui_tool);
+    else
+        save_filament_selection_to_moonraker(ui_tool, selection);
     if (start_load_after_save)
         show_filament_load_wizard();
     return true;
@@ -5250,136 +5382,162 @@ void PrinterWebView::prompt_and_save_filament_selection_then_load()
     show_filament_load_wizard();
 }
 
-void PrinterWebView::save_filament_selection_to_moonraker(int ui_tool, const wxString &material, const wxString &color_hex)
+void PrinterWebView::save_filament_selection_to_moonraker(int ui_tool, const DeviceDashboard::FilamentSelection &selection)
 {
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    const std::string base = moonraker_base_url(obj);
-    if (obj == nullptr || !obj->is_online() || base.empty())
-        return;
-
     ui_tool = std::max(1, std::min(4, ui_tool));
-    const std::string material_utf8 = into_u8(material);
-    const std::string color_utf8 = into_u8(color_hex);
-
-    std::weak_ptr<int> lifetime = m_lifetime_token;
-    std::thread([this, lifetime, base, ui_tool, material_utf8, color_utf8]() {
-        nlohmann::json value = nlohmann::json::object();
-        std::string body;
-        Http::get(base + "/server/database/item?namespace=coprint&key=filament_selections")
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        if (!body.empty()) {
-            auto parsed = nlohmann::json::parse(body, nullptr, false, true);
-            if (!parsed.is_discarded()) {
-                if (parsed.contains("result"))
-                    parsed = parsed["result"];
-                if (parsed.is_object() && parsed.contains("value") && parsed["value"].is_object())
-                    value = parsed["value"];
-            }
-        }
-
-        value.erase("toolhead_" + std::to_string(ui_tool - 1));
-        value["toolhead_" + std::to_string(ui_tool)] = {
-            { "type", material_utf8 },
-            { "color_hex", color_utf8 }
-        };
-
-        nlohmann::json payload;
-        payload["namespace"] = "coprint";
-        payload["key"] = "filament_selections";
-        payload["value"] = value;
-
-        Http::post(base + "/server/database/item")
-            .header("Content-Type", "application/json")
-            .set_post_body(payload.dump())
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([](std::string, unsigned status) {
-                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament selection saved status=" << status;
-            })
-            .on_error([](std::string, std::string error, unsigned status) {
-                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: filament selection save failed status=" << status << " error=" << error;
-            })
-            .perform_sync();
-
-        wxGetApp().CallAfter([this, lifetime]() {
-            if (lifetime.expired() || m_destroying)
-                return;
-            m_filament_preview_fetch_key.clear();
-            refresh_filament_preview_from_selected_machine();
-        });
-    }).detach();
+    m_filament_tool_item_json[ui_tool - 1] = filament_item_from_selection(selection).dump();
+    queue_filament_selections_write();
 }
 
 void PrinterWebView::clear_filament_selection_from_moonraker(int ui_tool)
 {
+    ui_tool = std::max(1, std::min(4, ui_tool));
+    const int tool = ui_tool - 1;
+    m_filament_tool_item_json[tool].clear();
+    m_filament_tool_has_color[tool] = false;
+    m_filament_loaded_tool_colors[tool] = wxColour();
+    m_filament_loaded_tool_materials[tool] = wxString::FromUTF8("Empty");
+    m_filament_loaded_tool_brands[tool].clear();
+    m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
+        state.filament.tools[tool].color = wxColour();
+        state.filament.tools[tool].material = wxString::FromUTF8("Empty");
+    });
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+    queue_filament_selections_write();
+}
+
+void PrinterWebView::queue_filament_selections_write()
+{
+    if (m_destroying)
+        return;
+    if (m_filament_db_write_in_progress) {
+        m_filament_db_write_queued = true;
+        return;
+    }
+    start_filament_selections_write();
+}
+
+void PrinterWebView::start_filament_selections_write()
+{
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
     const std::string base = moonraker_base_url(obj);
-    if (obj == nullptr || !obj->is_online() || base.empty())
+    if (obj == nullptr || !obj->is_online() || base.empty()) {
+        m_filament_db_write_in_progress = false;
+        m_filament_db_write_queued = false;
         return;
+    }
 
-    ui_tool = std::max(1, std::min(4, ui_tool));
-    std::weak_ptr<int> lifetime = m_lifetime_token;
-    std::thread([this, lifetime, base, ui_tool]() {
-        nlohmann::json value = nlohmann::json::object();
-        std::string body;
-        Http::get(base + "/server/database/item?namespace=coprint&key=filament_selections")
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
+    nlohmann::json value = nlohmann::json::object();
+    for (int i = 0; i < 4; ++i) {
+        const bool empty_slot = !m_filament_tool_has_color[i] &&
+            is_empty_filament_material(m_filament_loaded_tool_materials[i]);
+        if (empty_slot)
+            continue;
 
-        if (!body.empty()) {
-            auto parsed = nlohmann::json::parse(body, nullptr, false, true);
-            if (!parsed.is_discarded()) {
-                if (parsed.contains("result"))
-                    parsed = parsed["result"];
-                if (parsed.is_object() && parsed.contains("value") && parsed["value"].is_object())
-                    value = parsed["value"];
-            }
+        nlohmann::json item;
+        if (!m_filament_tool_item_json[i].empty()) {
+            item = nlohmann::json::parse(m_filament_tool_item_json[i], nullptr, false, true);
+            if (item.is_discarded() || !item.is_object())
+                item = nlohmann::json::object();
         }
+        if (item.empty() || !item.is_object()) {
+            item = nlohmann::json::object();
+            item["brand"] = into_u8(m_filament_loaded_tool_brands[i]);
+            item["type"] = into_u8(m_filament_loaded_tool_materials[i]);
+            const std::string hex = into_u8(hex_from_colour(m_filament_loaded_tool_colors[i]));
+            item["color"] = hex;
+            item["color_hex"] = hex;
+            item["temp_min"] = 0;
+            item["temp_max"] = 0;
+            item["pressure_advance"] = 0;
+        }
+        value["toolhead_" + std::to_string(i + 1)] = std::move(item);
+    }
 
-        value.erase("toolhead_" + std::to_string(ui_tool));
-        value.erase("toolhead_" + std::to_string(ui_tool - 1));
+    nlohmann::json payload;
+    payload["namespace"] = "coprint";
+    payload["key"] = "filament_selections";
+    payload["value"] = value;
+    const std::string body = payload.dump();
 
-        nlohmann::json payload;
-        payload["namespace"] = "coprint";
-        payload["key"] = "filament_selections";
-        payload["value"] = value;
-
+    m_filament_db_write_in_progress = true;
+    m_filament_db_write_queued = false;
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, base, body]() {
         Http::post(base + "/server/database/item")
             .header("Content-Type", "application/json")
-            .set_post_body(payload.dump())
+            .set_post_body(body)
             .timeout_connect(2)
             .timeout_max(4)
             .on_complete([](std::string, unsigned status) {
-                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament selection cleared status=" << status;
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament selections saved status=" << status;
             })
             .on_error([](std::string, std::string error, unsigned status) {
-                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: filament selection clear failed status=" << status << " error=" << error;
+                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: filament selections save failed status="
+                                           << status << " error=" << error;
             })
             .perform_sync();
 
         wxGetApp().CallAfter([this, lifetime]() {
             if (lifetime.expired() || m_destroying)
                 return;
-            m_filament_preview_fetch_key.clear();
-            refresh_filament_preview_from_selected_machine();
+            m_filament_db_write_in_progress = false;
+            if (m_filament_db_write_queued)
+                start_filament_selections_write();
         });
     }).detach();
+}
+
+void PrinterWebView::reset_dashboard_snapshot()
+{
+    m_dashboard_snapshot_ready = false;
+    m_filament_snapshot_ready = false;
+    m_filament_snapshot_fetch_in_progress = false;
+}
+
+bool PrinterWebView::is_dashboard_snapshot_ready() const
+{
+    return m_dashboard_snapshot_ready && m_filament_snapshot_ready;
+}
+
+void PrinterWebView::begin_filament_snapshot_fetch(MachineObject *obj)
+{
+    if (m_filament_snapshot_ready || m_filament_snapshot_fetch_in_progress)
+        return;
+    m_filament_snapshot_fetch_in_progress = true;
+    const std::string machine_id = obj != nullptr ? obj->get_dev_id() : std::string();
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    fetch_filament_selections(obj, [this, lifetime, machine_id](bool) {
+        if (lifetime.expired() || m_destroying)
+            return;
+        if (m_moonraker_status_machine_id != machine_id)
+            return;
+        m_filament_snapshot_ready = true;
+        m_filament_snapshot_fetch_in_progress = false;
+        auto *dev_manager = wxGetApp().getDeviceManager();
+        reveal_dashboard_if_ready(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+    });
+}
+
+void PrinterWebView::reveal_dashboard_if_ready(MachineObject *obj)
+{
+    if (m_destroying || !is_dashboard_snapshot_ready())
+        return;
+    if (m_sidebar_connect_phase != SidebarConnectPhase::None)
+        clear_sidebar_connect_attempt();
+    refresh_dashboard_panels(obj);
+    refresh_connected_printer_header(obj);
+    refresh_printer_info_labels(obj);
+    if (obj != nullptr && klippy_is_ready(m_klippy_state)) {
+        const bool has_active_job = m_dashboard_state_store.state().print_job.has_active_job;
+        update_preview_thumbnail(obj, has_active_job);
+        refresh_filament_preview_from_selected_machine();
+        refresh_camera_stream(obj);
+    }
+    m_sidebar_printer_list_signature.clear();
+    rebuild_sidebar_printer_list();
 }
 
 void PrinterWebView::refresh_moonraker_status_from_selected_machine()
@@ -5391,24 +5549,38 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
     const std::string base = moonraker_base_url(obj);
     const std::string machine_id = obj != nullptr ? obj->get_dev_id() : std::string();
 
-    if (obj == nullptr || !obj->is_online() || base.empty()) {
+    // CoPrint talks to Moonraker over HTTP. Do not wait for Bambu is_online()
+    // (push_status / m_push_count); that flag stays false for LAN printers
+    // until JSON arrives, which never happens if we skip this fetch.
+    if (obj == nullptr || base.empty()) {
         m_has_moonraker_status = false;
         m_has_moonraker_print_status = false;
+        m_klippy_state.clear();
         m_moonraker_print_job = DeviceDashboard::PrintJobState();
         m_moonraker_available_tool_count = 0;
         m_moonraker_status_fetch_in_progress = false;
         m_moonraker_status_machine_id.clear();
+        m_device_warn_ack = DeviceWarnAck::None;
+        abort_preview_thumbnail();
+        reset_dashboard_snapshot();
+        update_dashboard_connecting_overlay(nullptr);
         return;
     }
 
     if (m_moonraker_status_machine_id != machine_id) {
         m_has_moonraker_status = false;
         m_has_moonraker_print_status = false;
+        m_klippy_state.clear();
         m_moonraker_print_job = DeviceDashboard::PrintJobState();
         m_moonraker_available_tool_count = 0;
         m_moonraker_status_fetch_in_progress = false;
         m_moonraker_status_machine_id = machine_id;
+        m_device_warn_ack = DeviceWarnAck::None;
+        abort_preview_thumbnail();
+        reset_dashboard_snapshot();
     }
+
+    begin_filament_snapshot_fetch(obj);
 
     if (m_moonraker_status_fetch_in_progress)
         return;
@@ -5436,123 +5608,173 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         std::string fan_body;
         std::string coprint_info_body;
         std::string metadata_body;
-        Http::get(status_query_url)
+        std::string server_info_body;
+        Http::get(base + "/server/info")
             .timeout_connect(2)
             .timeout_max(4)
             .on_complete([&](std::string response, unsigned status) {
                 if (status == 200)
-                    body = std::move(response);
+                    server_info_body = std::move(response);
             })
             .on_error([](std::string, std::string, unsigned) {})
             .perform_sync();
 
-        if (!body.empty()) {
-            auto parsed_status = nlohmann::json::parse(body, nullptr, false, true);
-            if (!parsed_status.is_discarded()) {
-                if (parsed_status.contains("result"))
-                    parsed_status = parsed_status["result"];
-                if (parsed_status.is_object() && parsed_status.contains("status") && parsed_status["status"].is_object()) {
-                    const auto &status = parsed_status["status"];
-                    if (status.contains("print_stats") && status["print_stats"].is_object()) {
-                        const auto &print_stats = status["print_stats"];
-                        if (print_stats.contains("filename") && print_stats["filename"].is_string()) {
-                            const std::string raw_filename = print_stats["filename"].get<std::string>();
-                            if (!raw_filename.empty()) {
-                                const std::string metadata_url = base + "/server/files/metadata?filename=" + url_encode_path_preserving_slashes(raw_filename);
-                                Http::get(metadata_url)
-                                    .timeout_connect(2)
-                                    .timeout_max(4)
-                                    .on_complete([&](std::string response, unsigned status_code) {
-                                        if (status_code == 200)
-                                            metadata_body = std::move(response);
-                                    })
-                                    .on_error([](std::string, std::string, unsigned) {})
-                                    .perform_sync();
+        const std::string probed_klippy = parse_klippy_state(server_info_body);
+        const bool klippy_ready = klippy_is_ready(probed_klippy);
+        std::string objects_list_body;
+        std::string hostname_hint;
+
+        // Temperatures, fans, files, and identity only while Klippy is ready.
+        if (klippy_ready) {
+            Http::get(status_query_url)
+                .timeout_connect(2)
+                .timeout_max(4)
+                .on_complete([&](std::string response, unsigned status) {
+                    if (status == 200)
+                        body = std::move(response);
+                })
+                .on_error([](std::string, std::string, unsigned) {})
+                .perform_sync();
+
+            if (!body.empty()) {
+                auto parsed_status = nlohmann::json::parse(body, nullptr, false, true);
+                if (!parsed_status.is_discarded()) {
+                    if (parsed_status.contains("result"))
+                        parsed_status = parsed_status["result"];
+                    if (parsed_status.is_object() && parsed_status.contains("status") && parsed_status["status"].is_object()) {
+                        const auto &status = parsed_status["status"];
+                        if (status.contains("print_stats") && status["print_stats"].is_object()) {
+                            const auto &print_stats = status["print_stats"];
+                            if (print_stats.contains("filename") && print_stats["filename"].is_string()) {
+                                const std::string raw_filename = print_stats["filename"].get<std::string>();
+                                if (!raw_filename.empty()) {
+                                    const std::string metadata_url = base + "/server/files/metadata?filename=" + url_encode_path_preserving_slashes(raw_filename);
+                                    Http::get(metadata_url)
+                                        .timeout_connect(2)
+                                        .timeout_max(4)
+                                        .on_complete([&](std::string response, unsigned status_code) {
+                                            if (status_code == 200)
+                                                metadata_body = std::move(response);
+                                        })
+                                        .on_error([](std::string, std::string, unsigned) {})
+                                        .perform_sync();
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        Http::get(fan_query_url)
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    fan_body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        Http::get(base + "/machine/coprint/info")
-            .timeout_connect(2)
-            .timeout_max(5)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    coprint_info_body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        // Also use objects/list when /machine/coprint/info is missing/slow — Quadro has extruder1+.
-        std::string objects_list_body;
-        Http::get(base + "/printer/objects/list")
-            .timeout_connect(2)
-            .timeout_max(4)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    objects_list_body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        // Resolve Moonraker hostname so placeholder names like "Unknown Printer"
-        // can be upgraded to Co Print product names (e.g. chromahead -> ChromaSet).
-        std::string hostname_hint;
-        auto capture_hostname = [&](const std::string &path) {
-            if (!hostname_hint.empty())
-                return;
-            std::string response_body;
-            Http::get(base + path)
+            Http::get(fan_query_url)
                 .timeout_connect(2)
                 .timeout_max(4)
                 .on_complete([&](std::string response, unsigned status) {
                     if (status == 200)
-                        response_body = std::move(response);
+                        fan_body = std::move(response);
                 })
                 .on_error([](std::string, std::string, unsigned) {})
                 .perform_sync();
-            if (response_body.empty())
-                return;
-            auto parsed_host = nlohmann::json::parse(response_body, nullptr, false, true);
-            if (parsed_host.is_discarded())
-                return;
-            if (parsed_host.contains("result"))
-                parsed_host = parsed_host["result"];
-            if (!parsed_host.is_object())
-                return;
-            if (parsed_host.contains("machine_name") && parsed_host["machine_name"].is_string())
-                hostname_hint = parsed_host["machine_name"].get<std::string>();
-            else if (parsed_host.contains("hostname") && parsed_host["hostname"].is_string())
-                hostname_hint = parsed_host["hostname"].get<std::string>();
-            else if (parsed_host.contains("system_info") && parsed_host["system_info"].is_object() &&
-                     parsed_host["system_info"].contains("hostname") &&
-                     parsed_host["system_info"]["hostname"].is_string())
-                hostname_hint = parsed_host["system_info"]["hostname"].get<std::string>();
-        };
-        capture_hostname("/server/info");
-        capture_hostname("/printer/info");
-        capture_hostname("/machine/system_info");
 
-        wxGetApp().CallAfter([this, lifetime, machine_id, body, fan_body, coprint_info_body, objects_list_body, metadata_body, hostname_hint, base]() {
+            Http::get(base + "/machine/coprint/info")
+                .timeout_connect(2)
+                .timeout_max(5)
+                .on_complete([&](std::string response, unsigned status) {
+                    if (status == 200)
+                        coprint_info_body = std::move(response);
+                })
+                .on_error([](std::string, std::string, unsigned) {})
+                .perform_sync();
+
+            Http::get(base + "/printer/objects/list")
+                .timeout_connect(2)
+                .timeout_max(4)
+                .on_complete([&](std::string response, unsigned status) {
+                    if (status == 200)
+                        objects_list_body = std::move(response);
+                })
+                .on_error([](std::string, std::string, unsigned) {})
+                .perform_sync();
+
+            auto capture_hostname = [&](const std::string &path) {
+                if (!hostname_hint.empty())
+                    return;
+                std::string response_body;
+                Http::get(base + path)
+                    .timeout_connect(2)
+                    .timeout_max(4)
+                    .on_complete([&](std::string response, unsigned status) {
+                        if (status == 200)
+                            response_body = std::move(response);
+                    })
+                    .on_error([](std::string, std::string, unsigned) {})
+                    .perform_sync();
+                if (response_body.empty())
+                    return;
+                auto parsed_host = nlohmann::json::parse(response_body, nullptr, false, true);
+                if (parsed_host.is_discarded())
+                    return;
+                if (parsed_host.contains("result"))
+                    parsed_host = parsed_host["result"];
+                if (!parsed_host.is_object())
+                    return;
+                if (parsed_host.contains("machine_name") && parsed_host["machine_name"].is_string())
+                    hostname_hint = parsed_host["machine_name"].get<std::string>();
+                else if (parsed_host.contains("hostname") && parsed_host["hostname"].is_string())
+                    hostname_hint = parsed_host["hostname"].get<std::string>();
+                else if (parsed_host.contains("system_info") && parsed_host["system_info"].is_object() &&
+                         parsed_host["system_info"].contains("hostname") &&
+                         parsed_host["system_info"]["hostname"].is_string())
+                    hostname_hint = parsed_host["system_info"]["hostname"].get<std::string>();
+            };
+            capture_hostname("/server/info");
+            capture_hostname("/printer/info");
+            capture_hostname("/machine/system_info");
+        }
+
+        wxGetApp().CallAfter([this, lifetime, machine_id, body, fan_body, coprint_info_body, objects_list_body, metadata_body, hostname_hint, base, server_info_body]() {
             if (lifetime.expired() || m_destroying)
                 return;
-            m_moonraker_status_fetch_in_progress = false;
+            if (m_moonraker_status_machine_id == machine_id)
+                m_moonraker_status_fetch_in_progress = false;
             auto *dev_manager = wxGetApp().getDeviceManager();
             MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
             if (obj == nullptr || obj->get_dev_id() != machine_id)
                 return;
+
+            const bool moonraker_reachable = !server_info_body.empty();
+            if (!moonraker_reachable) {
+                m_klippy_state = "offline";
+            } else {
+                const std::string parsed_klippy = parse_klippy_state(server_info_body);
+                if (!parsed_klippy.empty() || !server_info_body.empty())
+                    m_klippy_state = parsed_klippy;
+            }
+
+            if (!moonraker_reachable) {
+                m_has_moonraker_status = false;
+                m_has_moonraker_print_status = false;
+                m_has_active_printer_connection = false;
+                m_moonraker_print_job = DeviceDashboard::PrintJobState();
+                if (obj->is_online())
+                    obj->set_online_state(false);
+            } else if (klippy_is_ready(m_klippy_state)) {
+                obj->set_online_state(true);
+                m_has_active_printer_connection = true;
+            } else {
+                // Host is reachable; Klippy error/shutdown/disconnect is a warning,
+                // not a lost LAN connection. Keep polling until it recovers.
+                m_has_moonraker_status = false;
+                m_has_moonraker_print_status = false;
+                m_has_active_printer_connection = false;
+                m_moonraker_print_job = DeviceDashboard::PrintJobState();
+                if (klippy_is_faulted(m_klippy_state) && !obj->is_online())
+                    obj->set_online_state(true);
+            }
+
+            if (!moonraker_reachable || !klippy_is_ready(m_klippy_state)) {
+                apply_klippy_connection_ui(obj);
+                return;
+            }
 
             auto upgrade_placeholder_identity = [&](std::string detected_name, std::string detected_type, int moonraker_tool_count) {
                 if (detected_type.empty() && !coprint_info_body.empty()) {
@@ -5578,19 +5800,18 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                                 else if (name == "extruder1" || name == "extruder2" || name == "extruder3")
                                     has_extra = true;
                             }
-                            if (has_extra) {
-                                detected_name = "Co Print Quadro";
+                            if (has_extra)
                                 detected_type = "Co_Print_Quadro";
-                            } else if (has_extruder) {
-                                detected_name = "Co Print ChromaSet";
+                            else if (has_extruder)
                                 detected_type = "Co_Print_ChromaSet";
-                            }
                         }
                     }
                 }
 
-                if (detected_type.empty() && !hostname_hint.empty())
-                    apply_coprint_name_from_hostname(hostname_hint, detected_name, detected_type);
+                if (detected_type.empty() && !hostname_hint.empty()) {
+                    std::string mapped_name;
+                    apply_coprint_name_from_hostname(hostname_hint, mapped_name, detected_type);
+                }
 
                 if (detected_type.empty() && moonraker_tool_count > 0) {
                     const std::string cached_identity = to_lower_ascii(
@@ -5606,31 +5827,32 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                         cached_identity.find("chromahead") != std::string::npos;
                     const bool placeholder_name = is_placeholder_printer_name(obj->get_dev_name());
                     if (known_coprint || placeholder_name) {
-                        // Any second+ extruder implies Quadro; a single tool is ChromaSet.
-                        if (moonraker_tool_count >= 2) {
-                            detected_name = "Co Print Quadro";
+                        if (moonraker_tool_count >= 2)
                             detected_type = "Co_Print_Quadro";
-                        } else if (moonraker_tool_count == 1) {
-                            detected_name = "Co Print ChromaSet";
+                        else if (moonraker_tool_count == 1)
                             detected_type = "Co_Print_ChromaSet";
-                        }
                     }
                 }
 
-                if (detected_type.empty())
+                std::string display_name;
+                if (!detected_name.empty())
+                    display_name = detected_name;
+                else if (!hostname_hint.empty() && !is_placeholder_printer_name(hostname_hint))
+                    display_name = hostname_hint;
+
+                if (detected_type.empty() && display_name.empty())
                     return;
 
-                const bool type_changed = obj->printer_type != detected_type;
+                const bool type_changed = !detected_type.empty() && obj->printer_type != detected_type;
                 const bool name_should_update =
-                    !detected_name.empty() &&
-                    (is_placeholder_printer_name(obj->get_dev_name()) ||
-                     to_lower_ascii(obj->get_dev_name()).find("quadorya") != std::string::npos ||
-                     to_lower_ascii(obj->get_dev_name()).find("chromahead") != std::string::npos);
+                    !display_name.empty() &&
+                    display_name != obj->get_dev_name() &&
+                    is_placeholder_printer_name(obj->get_dev_name());
                 if (!type_changed && !name_should_update)
                     return;
 
                 if (name_should_update)
-                    obj->set_dev_name(detected_name);
+                    obj->set_dev_name(display_name);
                 if (type_changed)
                     obj->printer_type = detected_type;
                 DeviceManager::update_local_machine(*obj);
@@ -5638,21 +5860,30 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 rebuild_sidebar_printer_list();
             };
 
+            auto finish_status_snapshot = [this, obj]() {
+                m_dashboard_snapshot_ready = true;
+                update_dashboard_connecting_overlay(obj);
+                reveal_dashboard_if_ready(obj);
+            };
+
             // Even if status JSON is missing, hostname alone can fix "Unknown Printer".
             if (body.empty()) {
                 upgrade_placeholder_identity({}, {}, 0);
+                finish_status_snapshot();
                 return;
             }
 
             auto parsed = nlohmann::json::parse(body, nullptr, false, true);
             if (parsed.is_discarded()) {
                 upgrade_placeholder_identity({}, {}, 0);
+                finish_status_snapshot();
                 return;
             }
             if (parsed.contains("result"))
                 parsed = parsed["result"];
             if (!parsed.is_object() || !parsed.contains("status") || !parsed["status"].is_object()) {
                 upgrade_placeholder_identity({}, {}, 0);
+                finish_status_snapshot();
                 return;
             }
 
@@ -5723,8 +5954,13 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 if (print_stats.contains("state") && print_stats["state"].is_string())
                     print_state = from_u8(print_stats["state"].get<std::string>()).Lower();
 
-                moonraker_print_job.has_active_job = print_state == "printing" || print_state == "paused";
+                moonraker_print_job.has_active_job = print_state == "printing" || print_state == "paused"
+                    || print_state == "pausing";
                 got_print_state = !print_state.empty();
+                if (print_state == "paused" || print_state == "pausing")
+                    moonraker_print_job.state = DeviceDashboard::PrintCommandState::Paused;
+                else if (print_state == "printing")
+                    moonraker_print_job.state = DeviceDashboard::PrintCommandState::Printing;
                 if (moonraker_print_job.has_active_job) {
                     if (print_stats.contains("filename") && print_stats["filename"].is_string())
                         moonraker_print_job.file_name = clean_moonraker_print_filename(from_u8(print_stats["filename"].get<std::string>()));
@@ -5858,7 +6094,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             // Moonraker verisi geldi — sadece sıcaklık panelini güncelle
             // (refresh_layer_info_from_selected_machine() çağırmıyoruz;
             //  o fonksiyon içinde yeni bir Moonraker fetch başlatır → sonsuz döngü)
-            if (got_any && m_dashboard_printer_status_panel != nullptr) {
+            if (got_any && m_dashboard_page != nullptr) {
                 DeviceDashboard::DeviceDashboardState patched = m_dashboard_state_store.state();
                 if (active_tool_index >= 0) {
                     m_selected_extruder_index = active_tool_index;
@@ -5879,6 +6115,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                     patched.movement.selected_tool,
                     0,
                     std::max(0, patched.movement.available_tool_count - 1));
+                patched.movement.selected_distance_mm = m_axis_move_step;
                 patched.bed.temperature.available = true;
                 patched.bed.temperature.current   = m_moonraker_bed_current;
                 patched.bed.temperature.target    = m_moonraker_bed_target;
@@ -5895,20 +6132,16 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 }
                 if (got_print_state)
                     patched.print_job = moonraker_print_job;
-                m_dashboard_printer_status_panel->apply_state(patched.tools, patched.bed);
-                if (got_print_state && m_dashboard_print_status_panel != nullptr)
-                    m_dashboard_print_status_panel->apply_state(patched.print_job);
-                if (active_tool_index >= 0 && active_tool_index < patched.movement.available_tool_count)
-                    m_dashboard_printer_status_panel->set_active_tool(active_tool_index);
-                if (m_dashboard_movement_panel != nullptr)
-                    m_dashboard_movement_panel->apply_state(patched.movement);
+                patched.connection.status = connection_from_klippy(m_klippy_state);
+                patched.connection.message = klippy_state_label(m_klippy_state);
+                patched.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
+                patched.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, patched.print_job);
+                patched.filament.can_load_unload = patched.movement.can_move;
+                if (active_tool_index >= 0 && active_tool_index < patched.movement.available_tool_count && m_dashboard_page->printer_status_panel() != nullptr)
+                    m_dashboard_page->printer_status_panel()->set_active_tool(active_tool_index);
                 m_dashboard_state_store.set_state(patched);
             }
-            // Tüm status_page'i değil, sadece sıcaklık panelini yenile
-            if (m_dashboard_printer_status_panel != nullptr)
-                m_dashboard_printer_status_panel->Refresh();
-            if (got_print_state && m_dashboard_print_status_panel != nullptr)
-                m_dashboard_print_status_panel->Refresh();
+            finish_status_snapshot();
         });
     }).detach();
 }
@@ -5934,12 +6167,21 @@ void PrinterWebView::ensure_camera_webview_created()
         vs->AddStretchSpacer(1);
         m_camera_webview_host->SetSizer(vs);
         m_camera_webview_host->Layout();
+        m_camera_stream_requested = false;
+        if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
+            m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Failed);
         return;
     }
 
     m_camera_webview = wv;
     m_camera_webview->SetBackgroundColour(*wxBLACK);
-    m_camera_webview->SetPage(camera_stream_page({}), "");
+    m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
+    std::weak_ptr<int> title_lifetime = m_lifetime_token;
+    m_camera_webview->Bind(wxEVT_WEBVIEW_TITLE_CHANGED, [this, title_lifetime](wxWebViewEvent &event) {
+        if (title_lifetime.expired() || m_destroying)
+            return;
+        handle_camera_webview_title(event.GetString());
+    });
 
     auto *hs = new wxBoxSizer(wxHORIZONTAL);
     hs->Add(m_camera_webview, 1, wxEXPAND);
@@ -5988,8 +6230,8 @@ void PrinterWebView::apply_filament_tool_selection(int tool_index)
     m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
         state.filament.selected_tool = tool_index;
     });
-    if (m_dashboard_filament_panel != nullptr)
-        m_dashboard_filament_panel->apply_state(m_dashboard_state_store.state().filament);
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
 }
 
 void PrinterWebView::apply_printer_status_tool_selection(int tool_index)
@@ -5999,8 +6241,8 @@ void PrinterWebView::apply_printer_status_tool_selection(int tool_index)
 
     m_selected_extruder_index = tool_index;
 
-    if (m_dashboard_printer_status_panel != nullptr)
-        m_dashboard_printer_status_panel->set_active_tool(m_selected_extruder_index);
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->printer_status_panel()->set_active_tool(m_selected_extruder_index);
 
     refresh_layer_info_from_selected_machine();
     Layout();
@@ -6010,6 +6252,8 @@ bool PrinterWebView::send_toolhead_fan_speed_command(int tool_index, int fan_per
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (!dashboard_commands_allowed(obj, m_klippy_state))
+        return false;
     const std::string base = moonraker_base_url(obj);
     if (obj == nullptr || !obj->is_online() || base.empty())
         return false;
@@ -6087,10 +6331,10 @@ void PrinterWebView::show_toolhead_fan_dialog(int active_extruder_index)
     auto *shell_sz = new wxBoxSizer(wxVERTICAL);
 
     auto *title_bar = new wxPanel(dialog_shell, wxID_ANY);
-    title_bar->SetBackgroundColour(wxColour("#252D31"));
+    title_bar->SetBackgroundColour(wxColour("#FFFFFF"));
     auto *title_sz = new wxBoxSizer(wxHORIZONTAL);
     auto *title_txt = new wxStaticText(title_bar, wxID_ANY, _L("Change Toolhead Fan"));
-    title_txt->SetForegroundColour(*wxWHITE);
+    title_txt->SetForegroundColour(wxColour("#232527"));
     {
         wxFont tf = title_txt->GetFont();
         if (tf.GetPointSize() > 1)
@@ -6100,8 +6344,8 @@ void PrinterWebView::show_toolhead_fan_dialog(int active_extruder_index)
     }
     title_sz->Add(title_txt, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, S(14));
     auto *close_btn = new wxButton(title_bar, wxID_ANY, wxString::FromUTF8("\u00D7"), wxDefaultPosition, wxSize(S(34), S(34)), wxBORDER_NONE);
-    close_btn->SetBackgroundColour(wxColour("#252D31"));
-    close_btn->SetForegroundColour(*wxWHITE);
+    close_btn->SetBackgroundColour(wxColour("#FFFFFF"));
+    close_btn->SetForegroundColour(wxColour("#232527"));
     scale_font(close_btn, 1.3);
     title_sz->Add(close_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, S(4));
     title_bar->SetSizer(title_sz);
@@ -6380,10 +6624,10 @@ void PrinterWebView::show_toolhead_temperature_dialog(int active_extruder_index)
     auto *shell_sz = new wxBoxSizer(wxVERTICAL);
 
     auto *title_bar = new wxPanel(dialog_shell, wxID_ANY);
-    title_bar->SetBackgroundColour(wxColour("#252D31"));
+    title_bar->SetBackgroundColour(wxColour("#FFFFFF"));
     auto *title_sz = new wxBoxSizer(wxHORIZONTAL);
     auto *title_txt = new wxStaticText(title_bar, wxID_ANY, _L("Change Toolhead Temperature"));
-    title_txt->SetForegroundColour(*wxWHITE);
+    title_txt->SetForegroundColour(wxColour("#232527"));
     {
         wxFont tf = title_txt->GetFont();
         if (tf.GetPointSize() > 1)
@@ -6393,8 +6637,8 @@ void PrinterWebView::show_toolhead_temperature_dialog(int active_extruder_index)
     }
     title_sz->Add(title_txt, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, S(14));
     auto *close_btn = new wxButton(title_bar, wxID_ANY, wxString::FromUTF8("\u00D7"), wxDefaultPosition, wxSize(S(34), S(34)), wxBORDER_NONE);
-    close_btn->SetBackgroundColour(wxColour("#252D31"));
-    close_btn->SetForegroundColour(*wxWHITE);
+    close_btn->SetBackgroundColour(wxColour("#FFFFFF"));
+    close_btn->SetForegroundColour(wxColour("#232527"));
     scale_font(close_btn, 1.3);
     title_sz->Add(close_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, S(4));
     title_bar->SetSizer(title_sz);
@@ -6601,8 +6845,8 @@ void PrinterWebView::show_toolhead_temperature_dialog(int active_extruder_index)
             wxMessageBox(_L("Please enter a valid temperature."), _L("Change Toolhead Temperature"), wxOK | wxICON_WARNING, &dlg);
             return;
         }
-        v = std::max(min_t, std::min(max_t, v));
-        obj->command_set_nozzle_new(active_extruder_index, static_cast<int>(v));
+        v = std::max(0L, std::min(max_t, v));
+        apply_nozzle_target_temperature(active_extruder_index, static_cast<int>(v));
         dlg.EndModal(wxID_OK);
     };
 
@@ -6691,10 +6935,10 @@ void PrinterWebView::show_bed_temperature_dialog()
     auto *shell_sz = new wxBoxSizer(wxVERTICAL);
 
     auto *title_bar = new wxPanel(dialog_shell, wxID_ANY);
-    title_bar->SetBackgroundColour(wxColour("#252D31"));
+    title_bar->SetBackgroundColour(wxColour("#FFFFFF"));
     auto *title_sz = new wxBoxSizer(wxHORIZONTAL);
     auto *title_txt = new wxStaticText(title_bar, wxID_ANY, _L("Change Build Plate Temperature"));
-    title_txt->SetForegroundColour(*wxWHITE);
+    title_txt->SetForegroundColour(wxColour("#232527"));
     {
         wxFont tf = title_txt->GetFont();
         if (tf.GetPointSize() > 1)
@@ -6704,8 +6948,8 @@ void PrinterWebView::show_bed_temperature_dialog()
     }
     title_sz->Add(title_txt, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, S(14));
     auto *close_btn = new wxButton(title_bar, wxID_ANY, wxString::FromUTF8("\u00D7"), wxDefaultPosition, wxSize(S(34), S(34)), wxBORDER_NONE);
-    close_btn->SetBackgroundColour(wxColour("#252D31"));
-    close_btn->SetForegroundColour(*wxWHITE);
+    close_btn->SetBackgroundColour(wxColour("#FFFFFF"));
+    close_btn->SetForegroundColour(wxColour("#232527"));
     scale_font(close_btn, 1.3);
     title_sz->Add(close_btn, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, S(4));
     title_bar->SetSizer(title_sz);
@@ -6829,8 +7073,8 @@ void PrinterWebView::show_bed_temperature_dialog()
             wxMessageBox(_L("Please enter a valid temperature."), _L("Change Build Plate Temperature"), wxOK | wxICON_WARNING, &dlg);
             return;
         }
-        v = std::max(min_t, std::min(max_t, v));
-        obj->command_set_bed(static_cast<int>(v));
+        v = std::max(0L, std::min(max_t, v));
+        apply_bed_target_temperature(static_cast<int>(v));
         dlg.EndModal(wxID_OK);
     };
 
@@ -6864,6 +7108,56 @@ void PrinterWebView::show_bed_temperature_dialog()
     }
     dlg.CentreOnParent();
     dlg.ShowModal();
+}
+
+void PrinterWebView::apply_nozzle_target_temperature(int extruder_index, int temperature)
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr)
+        return;
+
+    extruder_index = std::max(0, std::min(3, extruder_index));
+    long max_t = 370;
+    if (obj->nozzle_temp_range.size() >= 2)
+        max_t = std::max(max_t, static_cast<long>(obj->nozzle_temp_range[1]));
+    const int value = static_cast<int>(std::max(0L, std::min(max_t, static_cast<long>(temperature))));
+
+    const std::string heater = extruder_index == 0 ? "extruder" : "extruder" + std::to_string(extruder_index);
+    const std::string script = "SET_HEATER_TEMPERATURE HEATER=" + heater + " TARGET=" + std::to_string(value);
+    if (!send_klipper_gcode_script(script))
+        return;
+
+    m_has_moonraker_status = true;
+    m_moonraker_nozzle_target[extruder_index] = static_cast<double>(value);
+    if (auto *extders = obj->GetExtderSystem())
+        extders->set_extder_target_temp(extruder_index, value);
+    refresh_dashboard_panels(obj);
+}
+
+void PrinterWebView::apply_bed_target_temperature(int temperature)
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr)
+        return;
+
+    long max_t = obj->get_bed_temperature_limit();
+    if (max_t <= 0)
+        max_t = 150;
+    if (obj->bed_temp_range.size() >= 2)
+        max_t = std::max(max_t, static_cast<long>(obj->bed_temp_range[1]));
+    const int value = static_cast<int>(std::max(0L, std::min(max_t, static_cast<long>(temperature))));
+
+    const std::string script = "SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=" + std::to_string(value);
+    if (!send_klipper_gcode_script(script))
+        return;
+
+    m_has_moonraker_status = true;
+    m_moonraker_bed_target = static_cast<double>(value);
+    if (auto *bed = obj->GetBed())
+        bed->set_target_temp(static_cast<float>(value));
+    refresh_dashboard_panels(obj);
 }
 
 void PrinterWebView::prompt_ps_target_temperature(bool is_bed, int extruder_index)
@@ -6959,7 +7253,8 @@ void PrinterWebView::show_filament_busy_dialog(bool is_load)
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    if (obj == nullptr || !obj->is_online() || obj->is_in_printing())
+    if (obj == nullptr || !obj->is_online() ||
+        print_blocks_manual_controls(m_dashboard_state_store.state().print_job))
         return;
 
     const int tool_index = std::clamp(m_selected_filament_tool, 0, 3);
@@ -6977,16 +7272,16 @@ void PrinterWebView::show_filament_busy_dialog(bool is_load)
     auto *shell = new StaticBox(&dlg, wxID_ANY);
     shell->SetCornerRadius(FromDIP(10));
     shell->SetBorderWidth(1);
-    shell->SetBorderColorNormal(wxColour("#3A3F45"));
-    shell->SetBackgroundColorNormal(wxColour("#202429"));
-    shell->SetBackgroundColour(wxColour("#202429"));
+    shell->SetBorderColorNormal(wxColour("#C7C7C7"));
+    shell->SetBackgroundColorNormal(*wxWHITE);
+    shell->SetBackgroundColour(*wxWHITE);
     shell->SetMinSize(wxSize(FromDIP(360), -1));
 
     auto *shell_sizer = new wxBoxSizer(wxVERTICAL);
     auto *title_row = new wxBoxSizer(wxHORIZONTAL);
     auto *title = new wxStaticText(shell, wxID_ANY,
         wxString::Format(is_load ? "Tool %d loading..." : "Tool %d unloading...", tool_index + 1));
-    title->SetForegroundColour(wxColour("#F4F6F8"));
+    title->SetForegroundColour(wxColour("#232527"));
     {
         wxFont f = title->GetFont();
         f.SetPointSize(std::max(12, f.GetPointSize() + 2));
@@ -6994,7 +7289,7 @@ void PrinterWebView::show_filament_busy_dialog(bool is_load)
         title->SetFont(f);
     }
     auto *close = new wxStaticText(shell, wxID_ANY, wxString::FromUTF8("\xC3\x97"));
-    close->SetForegroundColour(wxColour("#F4F6F8"));
+    close->SetForegroundColour(wxColour("#232527"));
     close->SetCursor(wxCursor(wxCURSOR_HAND));
     title_row->Add(title, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxTOP, FromDIP(22));
     title_row->Add(close, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxTOP, FromDIP(18));
@@ -7010,11 +7305,11 @@ void PrinterWebView::show_filament_busy_dialog(bool is_load)
         wxString::Format(is_load ? "Tool %d filament loading is in progress." :
                                    "Tool %d filament unloading is in progress.",
                          tool_index + 1));
-    message->SetForegroundColour(wxColour("#C9D2DC"));
+    message->SetForegroundColour(wxColour("#767C84"));
     shell_sizer->Add(message, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(22));
 
     const int spinner_px = FromDIP(72);
-    auto *spinner = new FilamentBusySpinner(shell, wxSize(spinner_px, spinner_px), wxColour("#202429"));
+    auto *spinner = new FilamentBusySpinner(shell, wxSize(spinner_px, spinner_px), *wxWHITE);
     shell_sizer->Add(spinner, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(22));
 
     shell->SetSizer(shell_sizer);
@@ -7037,6 +7332,8 @@ void PrinterWebView::show_filament_busy_dialog(bool is_load)
 
 void PrinterWebView::ensure_storage_page_created()
 {
+    if (m_embedded_in_monitor)
+        return;
     if (m_storage_page != nullptr || m_storage_placeholder == nullptr)
         return;
 
@@ -7047,6 +7344,7 @@ void PrinterWebView::ensure_storage_page_created()
 
     m_storage_page = new CloudTaskManagerPage(parent, CloudTaskManagerPage::MediaPresentation::TimelapseOnly);
     m_storage_page->Hide();
+    m_storage_page->set_offline_retry_handler([this]() { retry_selected_printer_connection(); });
 
     if (!sizer->Replace(m_storage_placeholder, m_storage_page, false)) {
         BOOST_LOG_TRIVIAL(error) << "PrinterWebView: ensure_storage_page_created Replace failed";
@@ -7086,8 +7384,16 @@ void PrinterWebView::select_tab(PrinterWebViewTab tab)
         m_assistant_page->Show(tab == PrinterWebViewTab::Assistant);
 
     if ((tab == PrinterWebViewTab::Storage || tab == PrinterWebViewTab::PrintModels) && m_storage_page != nullptr) {
-        m_storage_page->refresh_user_device();
-        m_storage_page->update_page();
+        const bool printer_ready = klippy_is_ready(m_klippy_state);
+        if (printer_ready) {
+            m_storage_page->refresh_user_device();
+            m_storage_page->update_page();
+        }
+    }
+
+    {
+        auto *dev_manager = wxGetApp().getDeviceManager();
+        update_dashboard_connecting_overlay(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
     }
 
     update_sidebar_selection();
@@ -7100,37 +7406,36 @@ void PrinterWebView::update_sidebar_selection()
     for (auto &item : m_sidebar_items) {
         const bool selected = item.tab == m_selected_tab;
         if (item.panel != nullptr)
-            item.panel->SetBackgroundColour(selected ? wxColour(47, 54, 44) : wxColour(28, 30, 34));
+            item.panel->SetBackgroundColour(selected ? wxColour(243, 248, 241) : *wxWHITE);
         if (item.active_strip != nullptr)
-            item.active_strip->SetBackgroundColour(selected ? wxColour(47, 181, 90) : wxColour(28, 30, 34));
+            item.active_strip->SetBackgroundColour(selected ? wxColour(47, 181, 90) : *wxWHITE);
         if (item.label != nullptr)
-            item.label->SetForegroundColour(selected ? wxColour(245, 245, 245) : wxColour(235, 235, 235));
+            item.label->SetForegroundColour(wxColour("#232527"));
         if (item.chevron != nullptr)
-            item.chevron->SetForegroundColour(selected ? wxColour(210, 210, 210) : wxColour(130, 130, 130));
+            item.chevron->SetForegroundColour(selected ? wxColour("#232527") : wxColour("#767C84"));
     }
 }
 
 wxPanel *PrinterWebView::create_placeholder_page(wxWindow *parent, const wxString &title, const wxString &description)
 {
     auto *page = new wxPanel(parent, wxID_ANY);
-    page->SetBackgroundColour(wxColour(28, 30, 34));
+    page->SetBackgroundColour(wxColour("#EEEEEF"));
 
     auto *page_sizer = new wxBoxSizer(wxVERTICAL);
     page_sizer->AddStretchSpacer(1);
 
     auto *card = new StaticBox(page, wxID_ANY);
-    card->SetCornerRadius(FromDIP(10));
-    card->SetBorderWidth(1);
-    card->SetBorderColorNormal(wxColour(55, 58, 64));
-    card->SetBackgroundColorNormal(wxColour(22, 24, 29));
-    card->SetBackgroundColour(wxColour(28, 30, 34));
+    card->SetCornerRadius(0);
+    card->SetBorderWidth(0);
+    card->SetBackgroundColorNormal(*wxWHITE);
+    card->SetBackgroundColour(*wxWHITE);
     card->SetMinSize(wxSize(FromDIP(520), FromDIP(220)));
 
     auto *card_sizer = new wxBoxSizer(wxVERTICAL);
     card_sizer->AddStretchSpacer(1);
 
     auto *title_label = new wxStaticText(card, wxID_ANY, title);
-    title_label->SetForegroundColour(wxColour(235, 235, 235));
+    title_label->SetForegroundColour(wxColour("#232527"));
     wxFont title_font = title_label->GetFont();
     title_font.SetPointSize(title_font.GetPointSize() + 4);
     title_font.SetWeight(wxFONTWEIGHT_BOLD);
@@ -7138,7 +7443,7 @@ wxPanel *PrinterWebView::create_placeholder_page(wxWindow *parent, const wxStrin
     card_sizer->Add(title_label, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, FromDIP(12));
 
     auto *description_label = new wxStaticText(card, wxID_ANY, description);
-    description_label->SetForegroundColour(wxColour(150, 156, 166));
+    description_label->SetForegroundColour(wxColour("#767C84"));
     card_sizer->Add(description_label, 0, wxALIGN_CENTER_HORIZONTAL);
 
     card_sizer->AddStretchSpacer(1);
@@ -7153,23 +7458,22 @@ wxPanel *PrinterWebView::create_placeholder_page(wxWindow *parent, const wxStrin
 wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
 {
     auto *page = new wxPanel(parent, wxID_ANY);
-    page->SetBackgroundColour(wxColour("#1B1D21"));
+    page->SetBackgroundColour(wxColour("#EEEEEF"));
 
     auto *page_sizer = new wxBoxSizer(wxVERTICAL);
     page_sizer->AddSpacer(FromDIP(40));
 
     auto *card = new StaticBox(page, wxID_ANY);
-    card->SetCornerRadius(FromDIP(6));
-    card->SetBorderWidth(1);
-    card->SetBorderColorNormal(wxColour("#59616B"));
-    card->SetBackgroundColorNormal(wxColour("#202429"));
-    card->SetBackgroundColour(wxColour("#202429"));
+    card->SetCornerRadius(0);
+    card->SetBorderWidth(0);
+    card->SetBackgroundColorNormal(*wxWHITE);
+    card->SetBackgroundColour(*wxWHITE);
     card->SetMinSize(wxSize(FromDIP(728), FromDIP(481)));
 
     auto *card_sizer = new wxBoxSizer(wxVERTICAL);
 
     auto *header = new wxPanel(card, wxID_ANY);
-    header->SetBackgroundColour(wxColour("#202429"));
+    header->SetBackgroundColour(*wxWHITE);
     header->SetMinSize(wxSize(-1, FromDIP(75)));
     auto *header_sizer = new wxBoxSizer(wxHORIZONTAL);
     m_update_header_title = new wxStaticText(header, wxID_ANY, "P1P(Bosta)");
@@ -7177,7 +7481,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     header_font.SetPointSize(header_font.GetPointSize() + 4);
     header_font.SetWeight(wxFONTWEIGHT_BOLD);
     m_update_header_title->SetFont(header_font);
-    m_update_header_title->SetForegroundColour(wxColour(241, 243, 244));
+    m_update_header_title->SetForegroundColour(wxColour("#232527"));
     header_sizer->Add(m_update_header_title, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(29));
     m_update_connection_badge = new wxStaticText(header, wxID_ANY, "");
     m_update_connection_badge->SetForegroundColour(wxColour("#35CE82"));
@@ -7187,7 +7491,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     card_sizer->Add(header, 0, wxEXPAND);
 
     auto *body = new wxPanel(card, wxID_ANY);
-    body->SetBackgroundColour(wxColour("#202429"));
+    body->SetBackgroundColour(*wxWHITE);
     auto *body_sizer = new wxBoxSizer(wxVERTICAL);
 
     auto *top_row = new wxBoxSizer(wxHORIZONTAL);
@@ -7200,9 +7504,9 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     auto *info_box = new StaticBox(body, wxID_ANY);
     info_box->SetCornerRadius(FromDIP(6));
     info_box->SetBorderWidth(1);
-    info_box->SetBorderColorNormal(wxColour("#3A3F47"));
-    info_box->SetBackgroundColorNormal(wxColour("#202429"));
-    info_box->SetBackgroundColour(wxColour("#202429"));
+    info_box->SetBorderColorNormal(wxColour("#C7C7C7"));
+    info_box->SetBackgroundColorNormal(*wxWHITE);
+    info_box->SetBackgroundColour(*wxWHITE);
     info_box->SetMinSize(wxSize(FromDIP(351), FromDIP(156)));
 
     auto *info_col = new wxBoxSizer(wxVERTICAL);
@@ -7214,11 +7518,11 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
         wxFont label_font = label->GetFont();
         label_font.SetWeight(wxFONTWEIGHT_BOLD);
         label->SetFont(label_font);
-        label->SetForegroundColour(wxColour("#AEB6C1"));
+        label->SetForegroundColour(wxColour("#767C84"));
         row->Add(label, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(23));
 
         auto *value = new wxStaticText(info_box, wxID_ANY, "-");
-        value->SetForegroundColour(wxColour("#DCE3EA"));
+        value->SetForegroundColour(wxColour("#232527"));
         row->AddStretchSpacer(1);
         row->Add(value, 0, wxALIGN_CENTER_VERTICAL);
         *value_out = value;
@@ -7236,9 +7540,9 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     auto *status_box = new StaticBox(body, wxID_ANY);
     status_box->SetCornerRadius(FromDIP(6));
     status_box->SetBorderWidth(1);
-    status_box->SetBorderColorNormal(wxColour("#3A3F47"));
-    status_box->SetBackgroundColorNormal(wxColour("#202429"));
-    status_box->SetBackgroundColour(wxColour("#202429"));
+    status_box->SetBorderColorNormal(wxColour("#C7C7C7"));
+    status_box->SetBackgroundColorNormal(*wxWHITE);
+    status_box->SetBackgroundColour(*wxWHITE);
     status_box->SetMinSize(wxSize(FromDIP(663), FromDIP(91)));
     auto *status_sizer = new wxBoxSizer(wxHORIZONTAL);
 
@@ -7259,7 +7563,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     m_update_progress_gauge->SetPadding(FromDIP(3));
     m_update_progress_gauge->SetProgressForedColour(wxColour(132, 162, 188));
     m_update_progress_gauge->SetProgressBackgroundColour(wxColour("#35CE82"));
-    m_update_progress_gauge->SetBackgroundColour(wxColour("#202429"));
+    m_update_progress_gauge->SetBackgroundColour(*wxWHITE);
     m_update_progress_gauge->SetValue(0);
     m_update_progress_gauge->Hide();
     progress_row->Add(m_update_progress_gauge, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(16));
@@ -7274,7 +7578,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     body_sizer->Add(status_box, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(16));
 
     auto *actions = new wxPanel(body, wxID_ANY);
-    actions->SetBackgroundColour(wxColour("#202429"));
+    actions->SetBackgroundColour(*wxWHITE);
     auto *actions_sizer = new wxBoxSizer(wxHORIZONTAL);
     actions_sizer->AddSpacer(FromDIP(16));
 
@@ -7348,9 +7652,9 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     auto *export_log_button = new Button(actions, "Export Log");
     export_log_button->SetMinSize(wxSize(FromDIP(189), FromDIP(44)));
     export_log_button->SetCornerRadius(FromDIP(8));
-    export_log_button->SetBackgroundColor(StateColor(std::pair<wxColour, int>(wxColour("#23272E"), StateColor::Normal)));
-    export_log_button->SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour("#59616B"), StateColor::Normal)));
-    export_log_button->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour("#DCE3EA"), StateColor::Normal)));
+    export_log_button->SetBackgroundColor(StateColor(std::pair<wxColour, int>(*wxWHITE, StateColor::Normal)));
+    export_log_button->SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour("#C7C7C7"), StateColor::Normal)));
+    export_log_button->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour("#232527"), StateColor::Normal)));
     export_log_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
         auto *dev_manager = wxGetApp().getDeviceManager();
         MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
@@ -7453,6 +7757,8 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     page_sizer->Add(card, 0, wxLEFT | wxRIGHT, FromDIP(31));
     page_sizer->AddStretchSpacer(1);
     page->SetSizer(page_sizer);
+    m_update_offline_overlay = new DeviceDashboard::PrinterOfflineOverlay(page);
+    m_update_offline_overlay->set_retry_handler([this]() { retry_selected_printer_connection(); });
     return page;
 }
 
@@ -7463,24 +7769,78 @@ void PrinterWebView::clear_preview_thumbnail()
 
     m_preview_thumbnail_url.clear();
     m_thumbnail_image = wxImage();
-    if (m_dashboard_print_status_panel != nullptr)
-        m_dashboard_print_status_panel->reset_thumbnail_placeholder();
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->print_status_panel()->reset_thumbnail_placeholder();
     else
         m_preview_thumbnail->SetBitmap(wxNullBitmap);
     Layout();
 }
 
+void PrinterWebView::abort_preview_thumbnail()
+{
+    m_pending_thumbnail_url.clear();
+    m_pending_thumbnail_machine_id.clear();
+    m_clear_thumbnail_after_cancel = false;
+    m_thumbnail_request_machine_id.clear();
+    if (m_thumbnail_web_request.IsOk() && m_thumbnail_web_request.GetState() == wxWebRequest::State_Active)
+        m_thumbnail_web_request.Cancel();
+    clear_preview_thumbnail();
+}
+
 void PrinterWebView::on_thumbnail_webrequest_state(wxWebRequestEvent &evt)
 {
+    const auto state = evt.GetState();
+    const bool terminal = state == wxWebRequest::State_Completed ||
+                          state == wxWebRequest::State_Failed ||
+                          state == wxWebRequest::State_Cancelled ||
+                          state == wxWebRequest::State_Unauthorized;
+
+    auto selected_machine_id = [this]() {
+        auto *dev_manager = wxGetApp().getDeviceManager();
+        MachineObject *obj = dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr;
+        return obj != nullptr ? obj->get_dev_id() : std::string();
+    };
+
+    if (terminal && !m_pending_thumbnail_url.empty()) {
+        const wxString next = m_pending_thumbnail_url;
+        const std::string next_machine = m_pending_thumbnail_machine_id;
+        m_pending_thumbnail_url.clear();
+        m_pending_thumbnail_machine_id.clear();
+        m_clear_thumbnail_after_cancel = false;
+        if (next_machine.empty() || next_machine != selected_machine_id()) {
+            abort_preview_thumbnail();
+            return;
+        }
+        m_preview_thumbnail_url.clear();
+        m_thumbnail_web_request = wxWebSession::GetDefault().CreateRequest(this, next);
+        if (!m_thumbnail_web_request.IsOk()) {
+            abort_preview_thumbnail();
+            return;
+        }
+        m_preview_thumbnail_url = next;
+        m_thumbnail_request_machine_id = next_machine;
+        m_thumbnail_web_request.Start();
+        return;
+    }
+    if (terminal && m_clear_thumbnail_after_cancel) {
+        m_clear_thumbnail_after_cancel = false;
+        clear_preview_thumbnail();
+        return;
+    }
+
     if (!m_thumbnail_web_request.IsOk())
         return;
 
-    switch (evt.GetState()) {
+    switch (state) {
     case wxWebRequest::State_Completed: {
-        m_thumbnail_image = *evt.GetResponse().GetStream();
-        if (!m_dashboard_state_store.state().print_job.has_active_job) {
+        if (m_thumbnail_request_machine_id.empty() ||
+            m_thumbnail_request_machine_id != selected_machine_id() ||
+            !m_dashboard_state_store.state().print_job.has_active_job) {
             clear_preview_thumbnail();
-        } else if (m_preview_thumbnail != nullptr && m_thumbnail_image.IsOk()) {
+            break;
+        }
+        m_thumbnail_image = *evt.GetResponse().GetStream();
+        if (m_preview_thumbnail != nullptr && m_thumbnail_image.IsOk()) {
             const wxSize target = preview_thumbnail_target_size(m_preview_thumbnail, FromDIP(120), FromDIP(120));
             wxImage resized = scale_preview_thumbnail(m_thumbnail_image, target.GetWidth(), target.GetHeight());
             m_preview_thumbnail->SetBitmap(wxBitmap(resized));
@@ -7493,7 +7853,9 @@ void PrinterWebView::on_thumbnail_webrequest_state(wxWebRequestEvent &evt)
     case wxWebRequest::State_Failed:
     case wxWebRequest::State_Cancelled:
     case wxWebRequest::State_Unauthorized:
-        clear_preview_thumbnail();
+        if (m_thumbnail_request_machine_id.empty() ||
+            m_thumbnail_request_machine_id == selected_machine_id())
+            clear_preview_thumbnail();
         break;
     case wxWebRequest::State_Active:
     case wxWebRequest::State_Idle:
@@ -7506,11 +7868,12 @@ void PrinterWebView::on_thumbnail_webrequest_state(wxWebRequestEvent &evt)
 void PrinterWebView::update_preview_thumbnail(const MachineObject *obj, bool has_active_job)
 {
     if (!has_active_job || obj == nullptr) {
-        if (m_thumbnail_web_request.IsOk())
-            m_thumbnail_web_request.Cancel();
-        clear_preview_thumbnail();
+        abort_preview_thumbnail();
         return;
     }
+
+    if (m_dashboard_page != nullptr && !m_dashboard_page->IsShownOnScreen())
+        return;
 
     wxString next_source = m_dashboard_state_store.state().print_job.thumbnail_url;
     if (next_source.IsEmpty() && obj->slice_info != nullptr)
@@ -7521,48 +7884,69 @@ void PrinterWebView::update_preview_thumbnail(const MachineObject *obj, bool has
     }
 
     if (next_source.IsEmpty()) {
-        if (m_thumbnail_web_request.IsOk())
-            m_thumbnail_web_request.Cancel();
-        clear_preview_thumbnail();
+        abort_preview_thumbnail();
         return;
     }
 
-    if (next_source == m_preview_thumbnail_url)
+    const std::string machine_id = obj->get_dev_id();
+    if (next_source == m_preview_thumbnail_url && m_pending_thumbnail_url.empty() &&
+        m_thumbnail_request_machine_id == machine_id)
         return;
 
-    if (m_thumbnail_web_request.IsOk())
+    if (m_thumbnail_web_request.IsOk() && m_thumbnail_web_request.GetState() == wxWebRequest::State_Active) {
+        m_clear_thumbnail_after_cancel = false;
+        m_pending_thumbnail_url = next_source;
+        m_pending_thumbnail_machine_id = machine_id;
         m_thumbnail_web_request.Cancel();
+        return;
+    }
 
-    if (!is_http_url(next_source)) {
-        const wxString local_path = normalize_local_file_url(next_source);
+    if (wxFileName::FileExists(next_source)) {
         wxImage local_image;
-        if (wxFileName::FileExists(local_path) && local_image.LoadFile(local_path, wxBITMAP_TYPE_ANY) && local_image.IsOk()) {
+        if (local_image.LoadFile(next_source) && local_image.IsOk()) {
             m_preview_thumbnail_url = next_source;
+            m_thumbnail_request_machine_id = machine_id;
             m_thumbnail_image = local_image;
             const wxSize target = preview_thumbnail_target_size(m_preview_thumbnail, FromDIP(120), FromDIP(120));
             m_preview_thumbnail->SetBitmap(wxBitmap(scale_preview_thumbnail(local_image, target.GetWidth(), target.GetHeight())));
             Layout();
             return;
         }
-        clear_preview_thumbnail();
+        abort_preview_thumbnail();
         return;
     }
 
     m_preview_thumbnail_url = next_source;
+    m_thumbnail_request_machine_id = machine_id;
     m_thumbnail_web_request = wxWebSession::GetDefault().CreateRequest(this, m_preview_thumbnail_url);
     if (!m_thumbnail_web_request.IsOk()) {
-        clear_preview_thumbnail();
+        abort_preview_thumbnail();
         return;
     }
-
     m_thumbnail_web_request.Start();
 }
-
 
 void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceCommand &command)
 {
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (!dashboard_commands_allowed(obj, m_klippy_state))
+        return;
+    if (print_blocks_manual_controls(m_dashboard_state_store.state().print_job)) {
+        switch (command.kind) {
+        case DeviceDashboard::DeviceCommandKind::SelectTool:
+        case DeviceDashboard::DeviceCommandKind::SelectFilamentTool:
+        case DeviceDashboard::DeviceCommandKind::AssignModelSlotToTool:
+        case DeviceDashboard::DeviceCommandKind::LoadFilament:
+        case DeviceDashboard::DeviceCommandKind::UnloadFilament:
+        case DeviceDashboard::DeviceCommandKind::ConfigureFilament:
+        case DeviceDashboard::DeviceCommandKind::Home:
+        case DeviceDashboard::DeviceCommandKind::MoveAxis:
+            return;
+        default:
+            break;
+        }
+    }
 
     switch (command.kind) {
     case DeviceDashboard::DeviceCommandKind::SelectTool:
@@ -7591,6 +7975,9 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
         break;
     case DeviceDashboard::DeviceCommandKind::SetMotionDistance:
         m_axis_move_step = command.value > 0.0 ? command.value : 1.0;
+        m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
+            state.movement.selected_distance_mm = m_axis_move_step;
+        });
         break;
     case DeviceDashboard::DeviceCommandKind::PausePrint:
         if (obj == nullptr || !obj->is_online())
@@ -7601,7 +7988,8 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
     case DeviceDashboard::DeviceCommandKind::ResumePrint:
         if (obj == nullptr || !obj->is_online())
             return;
-        obj->command_task_resume();
+        if (!send_print_control_command(false, true))
+            obj->command_task_resume();
         break;
     case DeviceDashboard::DeviceCommandKind::StopPrint:
         if (obj == nullptr || !obj->is_online())
@@ -7617,11 +8005,16 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
         if (!send_print_control_command(true))
             obj->command_task_abort();
         break;
-    case DeviceDashboard::DeviceCommandKind::Home:
+    case DeviceDashboard::DeviceCommandKind::Home: {
+        const std::string home_script =
+            print_blocks_manual_controls(m_dashboard_state_store.state().print_job) ? "G28 X" : "G28";
+        if (send_klipper_gcode_script(home_script))
+            break;
         if (obj == nullptr || !obj->is_online())
             return;
         obj->command_go_home();
         break;
+    }
     case DeviceDashboard::DeviceCommandKind::SetPrintSpeed: {
         if (obj == nullptr || !obj->is_online())
             return;
@@ -7639,8 +8032,6 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
         break;
     }
     case DeviceDashboard::DeviceCommandKind::MoveAxis: {
-        if (obj == nullptr || !obj->is_online())
-            return;
         std::string axis;
         int speed = 3000;
         switch (command.axis) {
@@ -7651,8 +8042,21 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
             speed = 900;
             break;
         }
-        if (!axis.empty())
-            obj->command_axis_control(axis, 1.0, command.value, speed);
+        if (axis.empty())
+            break;
+
+        double value = command.value;
+        if (obj != nullptr && !obj->is_core_xy() && (axis == "Y" || axis == "Z"))
+            value = -value;
+
+        std::ostringstream script;
+        script << "G91\nG1 " << axis << std::fixed << std::setprecision(3) << value
+               << " F" << speed << "\nG90\n";
+        if (send_klipper_gcode_script(script.str()))
+            break;
+        if (obj == nullptr || !obj->is_online())
+            return;
+        obj->command_axis_control(axis, 1.0, command.value, speed);
         break;
     }
     default:
@@ -7672,7 +8076,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
     }
     dashboard_state.filament = m_dashboard_state_store.state().filament;
     dashboard_state.filament.selected_tool    = std::clamp(m_selected_filament_tool, 0, 3);
-    dashboard_state.filament.can_load_unload  = obj != nullptr && obj->is_online() && !obj->is_in_printing();
+    dashboard_state.filament.can_load_unload  = false;
     dashboard_state.filament.is_loading       = false;
     dashboard_state.filament.loading_tool     = -1;
     dashboard_state.movement.selected_tool    = m_selected_extruder_index;
@@ -7707,7 +8111,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
 
     // Moonraker WebSocket verileri MachineObject içinde değil, PrinterWebView'ın
     // kendi m_moonraker_* alanlarında tutuluyor — DashboardStateAdapter çıktısının üzerine yaz.
-    if (m_has_moonraker_status) {
+    if (m_has_moonraker_status && klippy_is_ready(m_klippy_state)) {
         dashboard_state.bed.temperature.available = true;
         dashboard_state.bed.temperature.current   = m_moonraker_bed_current;
         dashboard_state.bed.temperature.target    = m_moonraker_bed_target;
@@ -7726,7 +8130,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
             0,
             std::max(0, dashboard_state.movement.available_tool_count - 1));
     }
-    if (m_has_moonraker_print_status) {
+    if (m_has_moonraker_print_status && klippy_is_ready(m_klippy_state)) {
         if (m_moonraker_print_job.has_active_job) {
             DeviceDashboard::PrintJobState merged = m_moonraker_print_job;
             const DeviceDashboard::PrintJobState &adapter_job = dashboard_state.print_job;
@@ -7740,16 +8144,153 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
         }
     }
 
+    dashboard_state.connection.status = connection_from_klippy(m_klippy_state);
+    dashboard_state.connection.message = klippy_state_label(m_klippy_state);
+    dashboard_state.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
+    dashboard_state.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, dashboard_state.print_job);
+    dashboard_state.filament.can_load_unload = dashboard_state.movement.can_move;
+
     m_dashboard_state_store.set_state(dashboard_state);
-    const auto &state = m_dashboard_state_store.state();
-    if (m_dashboard_print_status_panel != nullptr)
-        m_dashboard_print_status_panel->apply_state(state.print_job);
-    if (m_dashboard_movement_panel != nullptr)
-        m_dashboard_movement_panel->apply_state(state.movement);
-    if (m_dashboard_printer_status_panel != nullptr)
-        m_dashboard_printer_status_panel->apply_state(state.tools, state.bed);
-    if (m_dashboard_filament_panel != nullptr)
-        m_dashboard_filament_panel->apply_state(state.filament);
+    if (m_dashboard_page != nullptr && is_dashboard_snapshot_ready())
+        m_dashboard_page->apply_state(m_dashboard_state_store.state());
+    update_dashboard_connecting_overlay(obj);
+}
+
+void PrinterWebView::apply_klippy_connection_ui(MachineObject *obj)
+{
+    DeviceDashboard::DeviceDashboardState patched = m_dashboard_state_store.state();
+    patched.connection.status = connection_from_klippy(m_klippy_state);
+    patched.connection.message = klippy_state_label(m_klippy_state);
+    patched.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
+    patched.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, patched.print_job);
+    patched.filament.can_load_unload = patched.movement.can_move;
+    m_dashboard_state_store.set_state(patched);
+    if (m_dashboard_page != nullptr &&
+        (is_dashboard_snapshot_ready() || m_device_warn_ack != DeviceWarnAck::None))
+        m_dashboard_page->apply_state(m_dashboard_state_store.state());
+
+    update_dashboard_connecting_overlay(obj);
+    if (klippy_is_ready(m_klippy_state) && m_update_page != nullptr && m_update_page->IsShownOnScreen())
+        refresh_update_page_from_selected_machine();
+}
+
+void PrinterWebView::update_dashboard_connecting_overlay(MachineObject *obj)
+{
+    const bool klippy_faulted = obj != nullptr && klippy_is_faulted(m_klippy_state);
+    const bool printer_ready = obj != nullptr && klippy_is_ready(m_klippy_state);
+    bool snapshot_ready = is_dashboard_snapshot_ready();
+    bool waiting_link = obj != nullptr && !klippy_faulted && !printer_ready && m_klippy_state != "offline";
+    bool waiting_data = printer_ready && !snapshot_ready;
+    if (waiting_link || waiting_data) {
+        if (m_dashboard_connect_started_ms == 0)
+            m_dashboard_connect_started_ms = wxGetUTCTimeMillis();
+    } else {
+        m_dashboard_connect_started_ms = 0;
+    }
+
+    const wxLongLong elapsed = m_dashboard_connect_started_ms == 0
+        ? 0
+        : (wxGetUTCTimeMillis() - m_dashboard_connect_started_ms);
+    bool forced_snapshot = false;
+    if (waiting_data && elapsed >= 25000) {
+        m_dashboard_snapshot_ready = true;
+        m_filament_snapshot_ready = true;
+        snapshot_ready = true;
+        waiting_data = false;
+        forced_snapshot = true;
+    }
+
+    const bool waiting = waiting_link || waiting_data;
+    const bool timed_out = waiting_link && elapsed >= 20000;
+    if (timed_out && !klippy_faulted)
+        m_klippy_state = "offline";
+
+    if (printer_ready && snapshot_ready)
+        m_device_warn_ack = DeviceWarnAck::None;
+
+    const bool host_unreachable = obj != nullptr &&
+        (m_klippy_state == "offline" || timed_out);
+    const bool show_klippy_warning = klippy_faulted &&
+        m_device_warn_ack != DeviceWarnAck::KlippyFault;
+    const bool show_unreachable = host_unreachable &&
+        m_device_warn_ack != DeviceWarnAck::Unreachable;
+    const bool silent_recover = m_device_warn_ack == DeviceWarnAck::KlippyFault &&
+        !host_unreachable;
+    const bool show_connecting = waiting && !show_klippy_warning &&
+        !show_unreachable && !silent_recover;
+    if (show_connecting && obj != nullptr &&
+        m_sidebar_connect_phase == SidebarConnectPhase::None)
+        begin_sidebar_connect_attempt(obj->get_dev_id());
+
+    if (host_unreachable && obj != nullptr) {
+        m_has_active_printer_connection = false;
+        bool sidebar_dirty = false;
+        if (obj->is_online()) {
+            obj->set_online_state(false);
+            sidebar_dirty = true;
+        }
+        if (m_sidebar_connect_phase == SidebarConnectPhase::Connecting &&
+            obj->get_dev_id() == m_sidebar_connect_dev_id) {
+            m_sidebar_connect_phase = SidebarConnectPhase::Failed;
+            sidebar_dirty = true;
+        }
+        if (sidebar_dirty) {
+            m_sidebar_printer_list_signature.clear();
+            rebuild_sidebar_printer_list();
+        }
+    } else if (klippy_faulted && obj != nullptr) {
+        m_has_active_printer_connection = false;
+        bool sidebar_dirty = false;
+        if (!obj->is_online()) {
+            obj->set_online_state(true);
+            sidebar_dirty = true;
+        }
+        if (m_sidebar_connect_phase != SidebarConnectPhase::None &&
+            obj->get_dev_id() == m_sidebar_connect_dev_id) {
+            clear_sidebar_connect_attempt();
+            sidebar_dirty = true;
+        }
+        if (sidebar_dirty) {
+            m_sidebar_printer_list_signature.clear();
+            rebuild_sidebar_printer_list();
+        }
+    }
+
+    DeviceSessionUi session = DeviceSessionUi::None;
+    wxString session_message;
+    wxString session_hint;
+    if (show_connecting) {
+        session = DeviceSessionUi::Connecting;
+        session_message = m_klippy_state == "startup"
+            ? klippy_state_label(m_klippy_state)
+            : _L("Connecting...");
+    } else if (show_klippy_warning) {
+        session = DeviceSessionUi::Failed;
+        session_message = klippy_fault_warning_title(m_klippy_state);
+        session_hint = klippy_fault_warning_hint();
+    } else if (show_unreachable) {
+        session = DeviceSessionUi::Failed;
+        session_message = _L("Could not connect to the printer.");
+        session_hint = _L("Check that the printer is powered on and on the same network.");
+    }
+    if (m_device_session_ui)
+        m_device_session_ui(session, session_message, session_hint);
+
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->set_connecting_visible(false);
+
+    const wxString printer_name = obj != nullptr ? sidebar_display_name_for(obj) : _L("Printer");
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->set_offline_overlay_visible(false, printer_name);
+
+    const bool show_other_offline = host_unreachable &&
+        m_device_warn_ack != DeviceWarnAck::Unreachable &&
+        session == DeviceSessionUi::None;
+    if (m_update_offline_overlay != nullptr)
+        m_update_offline_overlay->set_visible(show_other_offline, printer_name);
+    sync_media_page_connection_state(printer_ready, show_other_offline, printer_name);
+    if (forced_snapshot)
+        reveal_dashboard_if_ready(obj);
 }
 
 void PrinterWebView::refresh_connected_printer_header(MachineObject *obj)
@@ -7813,6 +8354,46 @@ void PrinterWebView::refresh_printer_info_labels(MachineObject *obj)
     }
 }
 
+void PrinterWebView::start_camera_stream()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    const std::string dev_id = obj != nullptr ? obj->get_dev_id() : "";
+    if (dev_id != m_camera_machine_id)
+        m_camera_machine_id = dev_id;
+    m_camera_stream_url.clear();
+    m_camera_stream_requested = true;
+    if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
+        m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Initializing);
+    refresh_camera_stream(obj);
+}
+
+void PrinterWebView::stop_camera_stream()
+{
+    m_camera_stream_requested = false;
+    m_camera_stream_url.clear();
+    if (m_camera_webview != nullptr)
+        m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
+    if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
+        m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Idle);
+}
+
+void PrinterWebView::handle_camera_webview_title(const wxString &title)
+{
+    if (!m_camera_stream_requested || m_dashboard_page == nullptr || m_dashboard_page->camera_panel() == nullptr)
+        return;
+    if (title == "coprint-camera-ok") {
+        m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Live);
+        return;
+    }
+    if (title != "coprint-camera-fail")
+        return;
+    m_camera_stream_requested = false;
+    if (m_camera_webview != nullptr)
+        m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
+    m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Failed);
+}
+
 void PrinterWebView::refresh_camera_stream(MachineObject *obj)
 {
     const std::string next_machine_id = obj != nullptr ? obj->get_dev_id() : "";
@@ -7820,85 +8401,49 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
     const wxString next_url = camera_urls.empty() ? wxString() : camera_urls.front();
 
     const bool machine_changed = next_machine_id != m_camera_machine_id;
-    const bool stream_changed  = next_url != m_camera_stream_url;
     if (machine_changed) {
         m_camera_stream_requested = false;
         if (m_camera_webview != nullptr)
-            m_camera_webview->SetPage(camera_stream_page({}), "");
+            m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
+        m_camera_machine_id = next_machine_id;
+        m_camera_stream_url.clear();
+        if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
+            m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Idle);
+        return;
     }
-    m_camera_machine_id = next_machine_id;
+
+    if (!m_camera_stream_requested)
+        return;
+
+    DeviceDashboard::CameraPanel *cam =
+        m_dashboard_page != nullptr ? m_dashboard_page->camera_panel() : nullptr;
+    const bool stream_changed = next_url != m_camera_stream_url;
     m_camera_stream_url = next_url;
 
-    const bool has_stream = !next_url.IsEmpty();
-    const bool should_load_stream = m_camera_stream_requested && has_stream;
+    if (next_url.IsEmpty()) {
+        m_camera_stream_requested = false;
+        if (m_camera_webview != nullptr)
+            m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
+        if (cam != nullptr)
+            cam->set_load_state(DeviceDashboard::CameraLoadState::Failed);
+        return;
+    }
 
-    // WebView2'yi yalnızca stream URL varken oluştur — önceden oluşturulunca beyaz sayfa gösterir
-    if (m_camera_webview_host != nullptr && should_load_stream)
+    if (cam != nullptr && cam->load_state() != DeviceDashboard::CameraLoadState::Live)
+        cam->set_load_state(DeviceDashboard::CameraLoadState::Initializing);
+
+    if (m_camera_webview_host != nullptr)
         ensure_camera_webview_created();
 
-    if (m_camera_webview != nullptr && should_load_stream && (machine_changed || stream_changed))
+    if (m_camera_webview == nullptr) {
+        m_camera_stream_requested = false;
+        if (cam != nullptr)
+            cam->set_load_state(DeviceDashboard::CameraLoadState::Failed);
+        return;
+    }
+
+    if (stream_changed)
         m_camera_webview->SetPage(camera_stream_page(camera_urls), m_camera_stream_url.BeforeLast('/'));
-
-    if (m_dashboard_camera_panel != nullptr) {
-        m_dashboard_camera_panel->set_stream_started(m_camera_stream_requested);
-        DeviceDashboard::CameraState camera_state;
-        camera_state.available  = should_load_stream && obj != nullptr && obj->is_online();
-        camera_state.stream_url = should_load_stream ? next_url : wxString();
-        m_dashboard_camera_panel->apply_state(camera_state);
-    }
-}
-
-void PrinterWebView::show_camera_fullscreen()
-{
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    if (obj == nullptr || !obj->is_online()) {
-        wxMessageBox(_L("Camera stream unavailable."), _L("Live Camera"), wxOK | wxICON_INFORMATION, this);
-        return;
-    }
-
-    std::vector<wxString> camera_urls = configured_camera_stream_urls(obj);
-    if (camera_urls.empty()) {
-        wxMessageBox(_L("Camera stream unavailable."), _L("Live Camera"), wxOK | wxICON_INFORMATION, this);
-        return;
-    }
-
-    m_camera_stream_requested = true;
-    m_camera_machine_id = obj->get_dev_id();
-    m_camera_stream_url = camera_urls.front();
-
-    wxWindow *parent = wxGetTopLevelParent(this);
-    auto *frame = new wxFrame(parent, wxID_ANY, wxString::FromUTF8("Live Camera"),
-        wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_STYLE | wxFRAME_FLOAT_ON_PARENT);
-    frame->SetBackgroundColour(*wxBLACK);
-
-    wxWebView *const webview = ::WebView::CreateWebView(frame, wxString{});
-    if (webview == nullptr) {
-        frame->Destroy();
-        wxMessageBox(_L("Camera preview could not start. Install or repair Microsoft WebView2 Runtime."),
-            _L("Live Camera"), wxOK | wxICON_WARNING, this);
-        return;
-    }
-
-    webview->SetBackgroundColour(*wxBLACK);
-    auto *sizer = new wxBoxSizer(wxVERTICAL);
-    sizer->Add(webview, 1, wxEXPAND);
-    frame->SetSizer(sizer);
-
-    frame->Bind(wxEVT_CHAR_HOOK, [frame](wxKeyEvent &evt) {
-        if (evt.GetKeyCode() == WXK_ESCAPE) {
-            frame->Close();
-            return;
-        }
-        evt.Skip();
-    });
-    frame->Bind(wxEVT_CLOSE_WINDOW, [frame](wxCloseEvent &) {
-        frame->Destroy();
-    });
-
-    webview->SetPage(camera_stream_page(camera_urls), m_camera_stream_url.BeforeLast('/'));
-    frame->Show();
-    frame->ShowFullScreen(true, wxFULLSCREEN_ALL);
 }
 
 void PrinterWebView::toggle_camera_timelapse()
@@ -7931,22 +8476,93 @@ void PrinterWebView::refresh_layer_info_from_selected_machine()
     const std::string machine_id = obj != nullptr ? obj->get_dev_id() : std::string();
     const bool machine_changed = machine_id != m_last_refresh_machine_id;
     m_last_refresh_machine_id = machine_id;
+    if (machine_changed) {
+        m_has_moonraker_status = false;
+        m_has_moonraker_print_status = false;
+        m_klippy_state.clear();
+        m_moonraker_print_job = DeviceDashboard::PrintJobState();
+        m_moonraker_available_tool_count = 0;
+        m_moonraker_status_fetch_in_progress = false;
+        m_moonraker_status_machine_id = machine_id;
+        m_filament_tool_has_color = {};
+        m_filament_loaded_tool_colors = {};
+        m_filament_loaded_tool_materials = {};
+        m_filament_loaded_tool_brands = {};
+        m_filament_tool_item_json = {};
+        m_filament_db_write_queued = false;
+        m_filament_preview_fetch_in_progress = false;
+        m_filament_preview_fetch_key.clear();
+        m_camera_machine_id.clear();
+        m_camera_stream_url.clear();
+        m_dashboard_connect_started_ms = obj != nullptr ? wxGetUTCTimeMillis() : 0;
+        m_device_warn_ack = DeviceWarnAck::None;
+        {
+            DeviceDashboard::DeviceDashboardState cleared = m_dashboard_state_store.state();
+            cleared.print_job = DeviceDashboard::PrintJobState();
+            m_dashboard_state_store.set_state(cleared);
+        }
+        abort_preview_thumbnail();
+        reset_dashboard_snapshot();
+    }
+    const bool printer_connected = klippy_is_ready(m_klippy_state);
+    const bool session_ready = printer_connected && is_dashboard_snapshot_ready();
     const bool periodic_heavy_refresh = (++m_refresh_tick_counter % 5) == 0;
-    const bool has_active_job = m_dashboard_state_store.state().print_job.has_active_job;
+    const bool has_active_job = session_ready && m_dashboard_state_store.state().print_job.has_active_job;
 
     update_sidebar_connect_attempt_state();
     refresh_moonraker_status_from_selected_machine();
     refresh_dashboard_panels(obj);
-    if (machine_changed || periodic_heavy_refresh || has_active_job)
+    if (session_ready && (machine_changed || periodic_heavy_refresh || has_active_job))
         update_preview_thumbnail(obj, has_active_job);
-    if (machine_changed || periodic_heavy_refresh || has_active_job)
+    if (session_ready && (machine_changed || periodic_heavy_refresh || has_active_job))
         refresh_filament_preview_from_selected_machine();
     if (machine_changed || periodic_heavy_refresh) {
         refresh_connected_printer_header(obj);
         refresh_printer_info_labels(obj);
-        refresh_camera_stream(obj);
+        if (session_ready)
+            refresh_camera_stream(obj);
     }
-    if (m_selected_tab == PrinterWebViewTab::Update && (machine_changed || periodic_heavy_refresh))
+    if (session_ready && m_selected_tab == PrinterWebViewTab::Update && (machine_changed || periodic_heavy_refresh))
+        refresh_update_page_from_selected_machine();
+}
+
+void PrinterWebView::invalidate_device_cache_and_refresh()
+{
+    if (m_destroying)
+        return;
+
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+
+    m_has_moonraker_status = false;
+    m_has_moonraker_print_status = false;
+    m_klippy_state.clear();
+    m_moonraker_print_job = DeviceDashboard::PrintJobState();
+    m_moonraker_status_fetch_in_progress = false;
+    m_filament_preview_fetch_in_progress = false;
+    m_filament_preview_fetch_key.clear();
+    abort_preview_thumbnail();
+    m_refresh_tick_counter = 0;
+    m_dashboard_connect_started_ms = obj != nullptr ? wxGetUTCTimeMillis() : 0;
+    reset_dashboard_snapshot();
+    m_sidebar_printer_list_signature.clear();
+    rebuild_sidebar_printer_list();
+
+    const bool dashboard_visible = m_dashboard_page != nullptr && m_dashboard_page->IsShownOnScreen();
+    refresh_moonraker_status_from_selected_machine();
+
+    if (dashboard_visible) {
+        refresh_dashboard_panels(obj);
+        if (klippy_is_ready(m_klippy_state)) {
+            const bool has_active_job = m_dashboard_state_store.state().print_job.has_active_job;
+            update_preview_thumbnail(obj, has_active_job);
+            refresh_filament_preview_from_selected_machine();
+        }
+        refresh_connected_printer_header(obj);
+        refresh_printer_info_labels(obj);
+    }
+
+    if (klippy_is_ready(m_klippy_state) && m_update_page != nullptr && m_update_page->IsShownOnScreen())
         refresh_update_page_from_selected_machine();
 }
 
@@ -7978,13 +8594,15 @@ void PrinterWebView::refresh_update_page_from_selected_machine()
         return;
     }
 
+    const wxString klippy_label = klippy_state_label(m_klippy_state);
+    const wxColour klippy_colour = klippy_state_colour(m_klippy_state);
     if (m_update_header_title != nullptr) {
-        const wxString header_title = wxString::Format("%s (%s)", from_u8(obj->get_dev_name()), obj->is_connected() ? "Ready" : "Offline");
+        const wxString header_title = wxString::Format("%s (%s)", from_u8(obj->get_dev_name()), klippy_label);
         m_update_header_title->SetLabelText(header_title);
     }
     if (m_update_connection_badge != nullptr) {
-        m_update_connection_badge->SetLabelText(obj->is_connected() ? "  Online  " : "  Offline  ");
-        m_update_connection_badge->SetForegroundColour(obj->is_connected() ? wxColour("#35CE82") : wxColour("#AAB2BD"));
+        m_update_connection_badge->SetLabelText(wxString::Format("  %s  ", klippy_label));
+        m_update_connection_badge->SetForegroundColour(klippy_colour);
     }
 
     if (m_update_model_value != nullptr)

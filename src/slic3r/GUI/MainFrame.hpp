@@ -268,6 +268,7 @@ public:
 
 	void        update_title_colour_after_set_title();
     void        show_option(bool show);
+    void        update_device_refresh_button();
     void        init_tabpanel();
     void        create_preset_tabs();
     //BBS: GUI refactor
@@ -355,6 +356,7 @@ public:
 
     //SoftFever
     void show_device(bool bBBLPrinter);
+    DeviceDashboard::MoonrakerDeviceController* coprint_device_controller();
 
 private:
     void ensure_printer_web_view_created();
@@ -404,6 +406,9 @@ public:
     SideButton* m_slice_option_btn{ nullptr };
     SideButton* m_print_btn{ nullptr };
     SideButton* m_print_option_btn{ nullptr };
+    wxPanel*    m_print_panel{ nullptr };
+    wxPanel*    m_device_refresh_panel{ nullptr };
+    SideButton* m_device_refresh_btn{ nullptr };
 
     SidePopup*  m_slice_option_pop_up{ nullptr };
 

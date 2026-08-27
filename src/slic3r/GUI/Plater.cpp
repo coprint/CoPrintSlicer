@@ -103,6 +103,7 @@
 #include "BackgroundSlicingProcess.hpp"
 #include "SelectMachine.hpp"
 #include "StartPrint/StartPrintDialog.hpp"
+#include "DeviceDashboard/MoonrakerDeviceController.hpp"
 #include "SendMultiMachinePage.hpp"
 #include "SendToPrinter.hpp"
 #include "PublishDialog.hpp"
@@ -157,6 +158,7 @@
 #include "PhysicalPrinterDialog.hpp"
 #include "PrintHostDialogs.hpp"
 #include "PlateSettingsDialog.hpp"
+#include "SelectCoPrintPrinterDialog.hpp"
 #include "DailyTips.hpp"
 #include "CreatePresetsDialog.hpp"
 #include "FileArchiveDialog.hpp"
@@ -574,10 +576,14 @@ void Sidebar::priv::layout_printer(bool isBBL, bool isDual)
         vsizer_printer->AddSpacer(FromDIP(SidebarProps::ContentMarginV()));
     }
 
-    //btn_connect_printer->Show(!isBBL);
-    m_printer_connect->Show(!isBBL);
     //btn_sync_printer->Show(isBBL);
     m_printer_bbl_sync->Show(isBBL);
+    if (m_printer_connect) {
+        const std::string model = wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+        m_printer_connect->Show(boost::algorithm::icontains(model, "ChromaSet"));
+        if (m_panel_printer_title)
+            m_panel_printer_title->Layout();
+    }
 
     // ORCA show plate type combo box only when its supported
     PresetBundle &preset_bundle = *wxGetApp().preset_bundle;
@@ -1273,7 +1279,36 @@ bool Sidebar::priv::switch_diameter(bool single)
         return false;
     }
     preset->is_visible = true; // force visible
-    return wxGetApp().get_tab(Preset::TYPE_PRINTER)->select_preset(preset->name);
+
+    // ORCA: nozzle-diameter variants of the same printer are expected to keep the
+    // same filament slot colors/order. Snapshot them before switching printer
+    // presets, since PresetBundle::update_selections() would otherwise overwrite
+    // them with whatever (possibly empty/default) colors were last saved under
+    // the target variant's own preset name.
+    PresetBundle* preset_bundle = wxGetApp().preset_bundle;
+    auto snapshot = [](const ConfigOptionStrings* opt) {
+        return opt ? opt->values : std::vector<std::string>();
+    };
+    std::vector<std::string> prev_colors       = snapshot(preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour"));
+    std::vector<std::string> prev_multi_colors = snapshot(preset_bundle->project_config.option<ConfigOptionStrings>("filament_multi_colour"));
+    std::vector<std::string> prev_color_types  = snapshot(preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour_type"));
+
+    bool switched = wxGetApp().get_tab(Preset::TYPE_PRINTER)->select_preset(preset->name);
+    if (switched && !prev_colors.empty()) {
+        size_t n = preset_bundle->filament_presets.size();
+        prev_colors.resize(n, "#26A69A");
+        prev_multi_colors.resize(n, "#26A69A");
+        prev_color_types.resize(n, "1");
+        preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour")->values       = prev_colors;
+        preset_bundle->project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = prev_multi_colors;
+        preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour_type")->values  = prev_color_types;
+
+        plater->update_filament_colors_in_full_config();
+        plater->sidebar().obj_list()->update_filament_colors();
+        plater->sidebar().update_presets(Preset::TYPE_FILAMENT);
+        preset_bundle->export_selections(*wxGetApp().app_config);
+    }
+    return switched;
 }
 
 bool Sidebar::priv::sync_extruder_list(bool &only_external_material)
@@ -1647,9 +1682,9 @@ Sidebar::Sidebar(Plater *parent)
             //wizard_t->run(ConfigWizard::RR_USER, ConfigWizard::SP_CUSTOM);
             });
 
-        // ORCA use connect button on titlebar
         p->m_printer_connect = new ScalableButton(p->m_panel_printer_title, wxID_ANY, "monitor_signal_strong");
         p->m_printer_connect->SetToolTip(_L("Connection"));
+        p->m_printer_connect->Hide();
         p->m_printer_connect->Bind(wxEVT_BUTTON, [this](wxCommandEvent &e) {
             PhysicalPrinterDialog dlg(this->GetParent());
             dlg.ShowModal();
@@ -1675,7 +1710,7 @@ Sidebar::Sidebar(Plater *parent)
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::ElementSpacing()));
         h_sizer_title->Add(p->m_text_printer_settings, 0, wxALIGN_CENTER);
         h_sizer_title->AddStretchSpacer();
-        h_sizer_title->Add(p->m_printer_connect , 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing())); // used larger margin to prevent accidental clicks
+        h_sizer_title->Add(p->m_printer_connect, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing()));
         h_sizer_title->Add(p->m_printer_bbl_sync, 0, wxALIGN_CENTER | wxRIGHT, FromDIP(SidebarProps::WideSpacing())); // used larger margin to prevent accidental clicks
         h_sizer_title->Add(p->m_printer_setting, 0, wxALIGN_CENTER);
         h_sizer_title->AddSpacer(FromDIP(SidebarProps::TitlebarMargin()));
@@ -2098,8 +2133,12 @@ Sidebar::Sidebar(Plater *parent)
     ams_btn = new ScalableButton(p->m_panel_filament_title, wxID_ANY, "ams_fila_sync", wxEmptyString, wxDefaultSize, wxDefaultPosition,
                                                  wxBU_EXACTFIT | wxNO_BORDER, false, 16); // ORCA match icon size with other icons as 16x16
     ams_btn->SetToolTip(_L("Synchronize filament list from AMS"));
-    ams_btn->Bind(wxEVT_BUTTON, [this, scrolled_sizer](wxCommandEvent &e) {
-        sync_ams_list();
+    ams_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        const auto printer_model = wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+        if (boost::algorithm::icontains(printer_model, "Quadro"))
+            sync_quadro_filaments_from_printer();
+        else
+            sync_ams_list();
     });
 
     ams_btn->Bind(wxEVT_UPDATE_UI, &Sidebar::update_sync_ams_btn_enable, this);
@@ -2401,28 +2440,34 @@ void Sidebar::update_all_preset_comboboxes()
 
     auto p_mainframe = wxGetApp().mainframe;
     auto cfg = preset_bundle.printers.get_edited_preset().config;
+    const bool is_chromaset = boost::algorithm::icontains(cfg.opt_string("printer_model"), "ChromaSet");
+    const bool is_quadro = boost::algorithm::icontains(cfg.opt_string("printer_model"), "Quadro");
+    if (p->m_printer_connect)
+        p->m_printer_connect->Show(is_chromaset);
+    if (p->m_panel_printer_title)
+        p->m_panel_printer_title->Layout();
 
     if (preset_bundle.use_bbl_network()) {
-        //only show connection button for not-BBL printer
-        //p->btn_connect_printer->Hide();
-        p->m_printer_connect->Hide();
         //only show sync-ams button for BBL printer
         p->m_bpButton_ams_filament->Show();
+        p->m_bpButton_ams_filament->SetToolTip(_L("Synchronize filament list from AMS"));
         //update print button default value for bbl or third-party printer
         p_mainframe->set_print_button_to_default(MainFrame::PrintSelectType::ePrintPlate);
     } else {
-        //p->btn_connect_printer->Show();
-        p->m_printer_connect->Show();
-
         // ORCA: show/hide sync-ams button based on filament sync mode
         auto agent = wxGetApp().getAgent();
-        if (agent && agent->get_filament_sync_mode() != FilamentSyncMode::none)
+        if (is_quadro || (agent && agent->get_filament_sync_mode() != FilamentSyncMode::none))
             p->m_bpButton_ams_filament->Show();
         else
             p->m_bpButton_ams_filament->Hide();
+        p->m_bpButton_ams_filament->SetToolTip(is_quadro
+            ? _L("Synchronize filament list from printer")
+            : _L("Synchronize filament list from AMS"));
 
         auto print_btn_type = MainFrame::PrintSelectType::eExportGcode;
-        if (preset_bundle.use_device_print_flow()) {
+        if (is_chromaset) {
+            print_btn_type = MainFrame::PrintSelectType::eSendGcode;
+        } else if (preset_bundle.use_device_print_flow()) {
             // Sidebar printer preset is for slicing only; Moonraker target is picked in Start Print dialog.
             print_btn_type = MainFrame::PrintSelectType::ePrintPlate;
         } else {
@@ -2860,7 +2905,8 @@ void Sidebar::msw_rescale()
     p->m_panel_filament_title->GetSizer()
         ->SetMinSize(-1, 3 * wxGetApp().em_unit());
     p->m_printer_icon->msw_rescale();
-    p->m_printer_connect->msw_rescale();
+    if (p->m_printer_connect)
+        p->m_printer_connect->msw_rescale();
     p->m_printer_bbl_sync->msw_rescale();
     p->m_printer_icon->msw_rescale();
     p->m_printer_setting->msw_rescale();
@@ -2968,7 +3014,8 @@ void Sidebar::sys_color_changed()
 #endif
     //p->btn_sync_printer->SetIcon("printer_sync");
     p->m_printer_bbl_sync->msw_rescale();
-    p->m_printer_connect->msw_rescale();
+    if (p->m_printer_connect)
+        p->m_printer_connect->msw_rescale();
     // for (wxWindow* btn : std::vector<wxWindow*>{ p->btn_reslice, p->btn_export_gcode })
     //    wxGetApp().UpdateDarkUI(btn, true);
     p->m_printer_icon->msw_rescale();
@@ -3467,6 +3514,193 @@ void Sidebar::load_ams_list(MachineObject* obj)
     }
 
     p->combo_printer->update();
+}
+
+namespace {
+
+bool machine_looks_like_quadro(const MachineObject *obj)
+{
+    if (obj == nullptr)
+        return false;
+    return boost::algorithm::icontains(obj->printer_type, "Quadro")
+        || boost::algorithm::icontains(obj->get_dev_name(), "Quadro")
+        || boost::algorithm::icontains(into_u8(obj->get_printer_type_display_str()), "Quadro");
+}
+
+bool is_empty_printer_filament(const wxString &material)
+{
+    return material.IsEmpty()
+        || material.CmpNoCase(wxString::FromUTF8("Empty")) == 0
+        || material.CmpNoCase(wxString::FromUTF8("N/A")) == 0;
+}
+
+std::string find_filament_preset_for_material(const wxString &material)
+{
+    auto *bundle = wxGetApp().preset_bundle;
+    if (bundle == nullptr || material.IsEmpty())
+        return {};
+
+    const std::string wanted = into_u8(material);
+    std::string best;
+    int best_score = -1;
+    for (const Preset &preset : bundle->filaments) {
+        if (!preset.is_visible)
+            continue;
+        const std::string type = preset.config.get_filament_type();
+        if (!boost::iequals(type, wanted))
+            continue;
+        int score = 0;
+        if (preset.is_compatible)
+            score += 8;
+        if (boost::algorithm::icontains(preset.name, "Quadro"))
+            score += 4;
+        if (boost::algorithm::icontains(preset.name, "Co Print"))
+            score += 2;
+        if (preset.is_system)
+            score += 1;
+        if (score > best_score) {
+            best_score = score;
+            best = preset.name;
+        }
+    }
+    return best;
+}
+
+} // namespace
+
+void Sidebar::sync_quadro_filaments_from_printer()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr) {
+        p->plater->pop_warning_and_go_to_device_page(p->plater->get_selected_printer_name_in_combox(),
+            Plater::PrinterWarningType::NOT_CONNECTED, _L("Syncing filament"));
+        return;
+    }
+    if (!machine_looks_like_quadro(obj)) {
+        MessageDialog dlg(this,
+            _L("The currently connected printer is not a Co Print Quadro. Switch to a Quadro printer before syncing."),
+            _L("Syncing filament"), wxOK | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    auto *controller = wxGetApp().mainframe ? wxGetApp().mainframe->coprint_device_controller() : nullptr;
+    if (controller == nullptr) {
+        MessageDialog dlg(this, _L("Unable to reach the printer."), _L("Syncing filament"), wxOK | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    auto *dlg = new ProgressDialog(_L("Syncing filament"), _L("Syncing filament"), 100, this,
+                                   wxPD_APP_MODAL | wxPD_AUTO_HIDE);
+    dlg->Pulse(_L("Syncing filament"));
+
+    wxWeakRef<Sidebar> weak_sidebar(this);
+    wxWeakRef<wxDialog> weak_dlg(dlg);
+    controller->fetch_filament_selections(obj, [weak_sidebar, weak_dlg](bool ok) {
+        if (weak_dlg)
+            weak_dlg->Destroy();
+        if (!weak_sidebar)
+            return;
+        if (!ok) {
+            MessageDialog err(weak_sidebar.get(),
+                _L("Failed to read filaments from the printer."),
+                _L("Syncing filament"), wxOK | wxICON_WARNING);
+            err.ShowModal();
+            return;
+        }
+        weak_sidebar->apply_quadro_filaments_from_printer();
+    });
+}
+
+void Sidebar::apply_quadro_filaments_from_printer()
+{
+    auto *controller = wxGetApp().mainframe ? wxGetApp().mainframe->coprint_device_controller() : nullptr;
+    auto *bundle = wxGetApp().preset_bundle;
+    if (controller == nullptr || bundle == nullptr)
+        return;
+
+    DynamicPrintConfig *project_config = &bundle->project_config;
+    auto *color_head = project_config->option<ConfigOptionStrings>("filament_colour");
+    auto *color_pack = project_config->option<ConfigOptionStrings>("filament_multi_colour");
+    auto *color_type = project_config->option<ConfigOptionStrings>("filament_colour_type");
+    const int slot_count = std::min(4, (int) p->combos_filament.size());
+
+    std::vector<int> changed_slots;
+    wxString unknown_types;
+    int loaded_count = 0;
+    for (int i = 0; i < slot_count; ++i) {
+        wxColour color;
+        wxString material;
+        if (!controller->get_loaded_tool_filament(i, &color, &material))
+            continue;
+        if (is_empty_printer_filament(material))
+            continue;
+        ++loaded_count;
+
+        const std::string preset_name = find_filament_preset_for_material(material);
+        if (preset_name.empty()) {
+            unknown_types += wxString::Format("\n- T%d (%s)", i + 1, material);
+            continue;
+        }
+
+        bundle->set_filament_preset(i, preset_name);
+        if (color.IsOk() && color_head != nullptr && i < (int) color_head->values.size()) {
+            const std::string hex = into_u8(color.GetAsString(wxC2S_HTML_SYNTAX));
+            color_head->values[i] = hex;
+            if (color_pack != nullptr && i < (int) color_pack->values.size())
+                color_pack->values[i] = hex;
+            if (color_type != nullptr && i < (int) color_type->values.size())
+                color_type->values[i] = "1";
+        }
+        changed_slots.push_back(i);
+    }
+
+    if (loaded_count == 0) {
+        MessageDialog dlg(this,
+            _L("There are no loaded filaments on the printer to sync."),
+            _L("Syncing filament"), wxOK | wxICON_INFORMATION);
+        dlg.ShowModal();
+        return;
+    }
+    if (changed_slots.empty()) {
+        wxString detail = _L("There are no compatible filaments, and sync is not performed.");
+        if (!unknown_types.empty())
+            detail += unknown_types;
+        MessageDialog dlg(this, detail, _L("Syncing filament"), wxOK | wxICON_WARNING);
+        dlg.ShowModal();
+        return;
+    }
+
+    wxGetApp().plater()->update_project_dirty_from_presets();
+    bundle->export_selections(*wxGetApp().app_config);
+    update_dynamic_filament_list();
+
+    DynamicPrintConfig new_cfg;
+    if (color_head != nullptr)
+        new_cfg.set_key_value("filament_colour", color_head->clone());
+    if (color_pack != nullptr)
+        new_cfg.set_key_value("filament_multi_colour", color_pack->clone());
+    if (color_type != nullptr)
+        new_cfg.set_key_value("filament_colour_type", color_type->clone());
+    wxGetApp().plater()->on_config_change(new_cfg);
+
+    update_presets(Preset::TYPE_FILAMENT);
+    for (int idx : changed_slots) {
+        wxGetApp().plater()->on_filament_change(idx);
+        auto_calc_flushing_volumes(idx);
+        if (idx >= 0 && idx < (int) p->combos_filament.size() && p->combos_filament[idx] != nullptr)
+            p->combos_filament[idx]->update();
+    }
+    wxGetApp().plater()->update();
+
+    if (!unknown_types.empty()) {
+        MessageDialog dlg(this,
+            _L("Some printer filaments could not be matched to a compatible preset.") + unknown_types,
+            _L("Syncing filament"), wxOK | wxICON_INFORMATION);
+        dlg.ShowModal();
+    }
 }
 
 void Sidebar::sync_ams_list(bool is_from_big_sync_btn)
@@ -5819,6 +6053,113 @@ void read_binary_stl(const std::string& filename, std::string& model_id, std::st
     return;
 }
 
+static Vec2d printable_area_size_from_config(const DynamicPrintConfig &cfg)
+{
+    const auto *opt = cfg.option<ConfigOptionPoints>("printable_area");
+    if (opt == nullptr || opt->values.size() < 3)
+        return Vec2d::Zero();
+    BoundingBoxf bb(opt->values);
+    if (!bb.defined)
+        return Vec2d::Zero();
+    return bb.size();
+}
+
+static int plate_dim_from_printable(double printable)
+{
+    return std::max(1, int(printable - Bed3D::Axes::DefaultTipRadius));
+}
+
+// Keep each instance on its source plate and center the group on that plate.
+// One object → plate center. Several objects on one plate keep their gaps and
+// the group as a whole is moved to the plate center so they do not overlap.
+static bool remap_project_instances_to_bed(PartPlateList &plates, Model &model, const Vec2d &source_printable)
+{
+    if (source_printable.x() < 1. || source_printable.y() < 1.)
+        return false;
+
+    const int old_w = plate_dim_from_printable(source_printable.x());
+    const int old_d = plate_dim_from_printable(source_printable.y());
+    int       new_w = 0, new_d = 0, new_h = 0;
+    plates.get_plate_size(new_w, new_d, new_h);
+    if (new_w <= 0 || new_d <= 0)
+        return false;
+    if (std::abs(new_w - old_w) < 1 && std::abs(new_d - old_d) < 1)
+        return false;
+
+    const int plate_count = plates.get_plate_count();
+    if (plate_count <= 0)
+        return false;
+
+    auto find_source_plate = [&](const Vec3d &offset) -> int {
+        int    best      = 0;
+        double best_dist = std::numeric_limits<double>::max();
+        for (int i = 0; i < plate_count; ++i) {
+            const Vec3d origin = plates.compute_origin_using_new_size(i, old_w, old_d);
+            const double dx    = offset.x() - (origin.x() + 0.5 * old_w);
+            const double dy    = offset.y() - (origin.y() + 0.5 * old_d);
+            const double dist  = dx * dx + dy * dy;
+            if (dist < best_dist) {
+                best_dist = dist;
+                best      = i;
+            }
+        }
+        return best;
+    };
+
+    std::vector<std::vector<std::pair<size_t, size_t>>> by_plate(plate_count);
+    for (size_t obj_idx = 0; obj_idx < model.objects.size(); ++obj_idx) {
+        ModelObject *object = model.objects[obj_idx];
+        if (object == nullptr)
+            continue;
+        for (size_t inst_idx = 0; inst_idx < object->instances.size(); ++inst_idx) {
+            ModelInstance *instance = object->instances[inst_idx];
+            if (instance == nullptr)
+                continue;
+            const int plate_idx = find_source_plate(instance->get_offset());
+            if (plate_idx >= 0 && plate_idx < plate_count)
+                by_plate[plate_idx].emplace_back(obj_idx, inst_idx);
+        }
+    }
+
+    BOOST_LOG_TRIVIAL(info) << __FUNCTION__
+                            << boost::format(": center instances on %1% plates (old bed %2%x%3%, new %4%x%5%)") %
+                                   plate_count % old_w % old_d % new_w % new_d;
+
+    bool moved = false;
+    for (int plate_idx = 0; plate_idx < plate_count; ++plate_idx) {
+        const auto &group = by_plate[plate_idx];
+        if (group.empty())
+            continue;
+        PartPlate *plate = plates.get_plate(plate_idx);
+        if (plate == nullptr)
+            continue;
+
+        BoundingBoxf3 group_bb;
+        for (const auto &[obj_idx, inst_idx] : group)
+            group_bb.merge(model.objects[obj_idx]->instance_bounding_box(inst_idx));
+        if (!group_bb.defined)
+            continue;
+
+        const Vec3d plate_center = plate->get_center_origin();
+        const Vec3d group_center = group_bb.center();
+        const Vec3d delta(plate_center.x() - group_center.x(), plate_center.y() - group_center.y(), 0.);
+        if (delta.x() * delta.x() + delta.y() * delta.y() < 1e-6)
+            continue;
+
+        for (const auto &[obj_idx, inst_idx] : group) {
+            ModelObject   *object   = model.objects[obj_idx];
+            ModelInstance *instance = object->instances[inst_idx];
+            instance->set_offset(instance->get_offset() + delta);
+            object->invalidate_bounding_box();
+        }
+        moved = true;
+    }
+
+    if (moved)
+        plates.reload_all_objects();
+    return moved;
+}
+
 // BBS: backup & restore
 std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_files, LoadStrategy strategy, bool ask_multi)
 {
@@ -5827,6 +6168,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
     bool is_user_cancel = false;
     bool translate_old = false;
     int current_width = 0, current_depth = 0, current_height = 0, project_filament_count = 1;
+    Vec2d source_printable_size = Vec2d::Zero();
 
     if (input_files.empty())
         return std::vector<size_t>();
@@ -5940,6 +6282,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                 DynamicPrintConfig config;
                 Semver             file_version;
                 En3mfType          en_3mf_file_type = En3mfType::From_BBS;
+                std::string        coprint_target_printer;
                 {
                     DynamicPrintConfig config_loaded;
 
@@ -6208,6 +6551,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                     }
                 }
 
+                source_printable_size = printable_area_size_from_config(config);
+
                 if (load_config) {
                     if (!config.empty()) {
                         Preset::normalize(config);
@@ -6311,7 +6656,44 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             if (wipe_tower_y_opt)
                                 file_wipe_tower_y = *wipe_tower_y_opt;
 
-                            preset_bundle->load_config_model(filename.string(), std::move(config), file_version);
+                            {
+                                const bool is_restore = strategy & LoadStrategy::Restore;
+                                std::string last_used;
+                                {
+                                    const Preset &current = preset_bundle->printers.get_selected_preset();
+                                    if (PresetBundle::config_uses_coprint_printer(current.config) ||
+                                        boost::algorithm::icontains(current.name, "Co Print"))
+                                        last_used = current.name;
+                                }
+                                if (last_used.empty()) {
+                                    const std::string from_app = wxGetApp().app_config->get("presets", PRESET_PRINTER_NAME);
+                                    if (const Preset *stored = preset_bundle->printers.find_preset(from_app, false);
+                                        stored != nullptr && (PresetBundle::config_uses_coprint_printer(stored->config) ||
+                                                              boost::algorithm::icontains(stored->name, "Co Print")))
+                                        last_used = stored->name;
+                                    else if (boost::algorithm::icontains(from_app, "Co Print"))
+                                        last_used = from_app;
+                                }
+
+                                if (PresetBundle::config_uses_coprint_printer(config)) {
+                                    coprint_target_printer = preset_bundle->coprint_printer_preset_from_config(config);
+                                } else if (is_restore) {
+                                    coprint_target_printer = last_used;
+                                } else {
+                                    SelectCoPrintPrinterDialog dlg(q, last_used);
+                                    if (dlg.ShowModal() != wxID_OK) {
+                                        q->skip_thumbnail_invalid = false;
+                                        return empty_result;
+                                    }
+                                    coprint_target_printer = dlg.selected_preset_name();
+                                    if (coprint_target_printer.empty()) {
+                                        q->skip_thumbnail_invalid = false;
+                                        return empty_result;
+                                    }
+                                }
+                            }
+
+                            preset_bundle->load_config_model(filename.string(), std::move(config), file_version, coprint_target_printer);
 
                             ConfigOption* bed_type_opt = preset_bundle->project_config.option("curr_bed_type");
                             if (bed_type_opt != nullptr) {
@@ -6382,8 +6764,8 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             // currently found only needs re-active here
                             wxGetApp().load_current_presets(false, false);
                             // CoPrint: load_current_presets can rebind UI around foreign project presets —
-                            // enforce again so Bambu printer/filaments never stick, then refresh UI.
-                            preset_bundle->enforce_coprint_identity();
+                            // enforce again with the chosen/restore/native target so Bambu never sticks.
+                            preset_bundle->enforce_coprint_identity(coprint_target_printer);
                             wxGetApp().load_current_presets(false, false);
                             // Update filament colors for the MM-printer profile in the full config
                             // to avoid black (default) colors for Extruders in the ObjectList,
@@ -6803,6 +7185,9 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
         view3D->get_canvas3d()->remove_raycasters_for_picking(SceneRaycaster::EType::Bed);
         partplate_list.reset_size(current_width, current_depth, current_height, true, true);
         partplate_list.register_raycasters_for_picking(*view3D->get_canvas3d());
+    } else if (load_config && load_model && !this->model.objects.empty() &&
+               remap_project_instances_to_bed(partplate_list, this->model, source_printable_size)) {
+        update();
     }
 
     //BBS: add gcode loading logic in the end
@@ -10012,12 +10397,8 @@ void Plater::priv::on_tab_selection_changing(wxBookCtrlEvent& e)
         }
     } else {
         if (new_sel == MainFrame::tpMonitor && wxGetApp().preset_bundle != nullptr) {
-            auto     cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
-            wxString url = cfg.opt_string("print_host_webui").empty() ? cfg.opt_string("print_host") : cfg.opt_string("print_host_webui");
-            if (main_frame->m_printer_view && url.empty()) {
-                // It's missing_connection page, reload so that we can replay the gif image
-                main_frame->m_printer_view->reload();
-            }
+            if (main_frame->coprint_device_controller())
+                main_frame->coprint_device_controller()->refresh();
         }
     }
 }
@@ -10081,10 +10462,6 @@ void Plater::priv::on_action_send_gcode(SimpleEvent& event)
 {
     if (q != nullptr) {
         BOOST_LOG_TRIVIAL(debug) << __FUNCTION__ << ":received export gcode event\n" ;
-    }
-    if (wxGetApp().preset_bundle->use_device_print_flow()) {
-        on_action_print_plate(event);
-        return;
     }
     q->send_gcode_legacy();
 }
@@ -11097,8 +11474,12 @@ void Plater::priv::set_bed_shape(const Pointfs       &shape,
     Pointfs prev_wrapping_exclude_areas = partplate_list.get_wrapping_exclude_area();
     new_shape |= (height_to_lid != prev_height_lid) || (height_to_rod != prev_height_rod) || (prev_exclude_areas != exclude_areas)
         || (prev_wrapping_exclude_areas != wrapping_exclude_areas);
-    if (!new_shape && partplate_list.get_logo_texture_filename() != custom_texture) {
-        partplate_list.update_logo_texture_filename(custom_texture);
+    // CoPrint: Bed3D::render_texture() already draws bed_texture over the printable area + tabs.
+    // Do not also feed the same file to PartPlate's third-party logo path — that path always
+    // stretches the image onto the printable rectangle only, which duplicates/squeezes the artwork.
+    const std::string plate_texture = bed.has_texture() ? std::string() : custom_texture;
+    if (!new_shape && partplate_list.get_logo_texture_filename() != plate_texture) {
+        partplate_list.update_logo_texture_filename(plate_texture);
     }
     if (new_shape) {
         if (view3D) view3D->bed_shape_changed();
@@ -11111,7 +11492,7 @@ void Plater::priv::set_bed_shape(const Pointfs       &shape,
         double z = config->opt_float("printable_height");
 
         partplate_list.reset_size(max.x() - min.x() - Bed3D::Axes::DefaultTipRadius, max.y() - min.y() - Bed3D::Axes::DefaultTipRadius, z);
-        partplate_list.set_shapes(shape, exclude_areas, wrapping_exclude_areas, extruder_areas, extruder_heights, custom_texture, height_to_lid, height_to_rod);
+        partplate_list.set_shapes(shape, exclude_areas, wrapping_exclude_areas, extruder_areas, extruder_heights, plate_texture, height_to_lid, height_to_rod);
 
         Vec2d new_shape_position = partplate_list.get_current_shape_position();
         if (shape_position != new_shape_position)
@@ -16018,8 +16399,8 @@ void Plater::print_job_finished(wxCommandEvent &evt)
     dev->set_selected_machine(evt.GetString().ToStdString());
 
     // Model has been sent to the printer — sync its colors to the device page now
-    if (p->main_frame && p->main_frame->m_printer_view)
-        p->main_frame->m_printer_view->sync_model_colors_from_plater();
+    if (p->main_frame && p->main_frame->coprint_device_controller())
+        p->main_frame->coprint_device_controller()->sync_model_colors_from_plater();
 
     p->main_frame->request_select_tab(MainFrame::TabPosition::tpMonitor);
     //jump to monitor and select device status panel
@@ -16035,8 +16416,8 @@ void Plater::send_job_finished(wxCommandEvent& evt)
     //dev->set_selected_machine(evt.GetString().ToStdString());
 
     // Model has been sent to the printer — sync its colors to the device page now
-    if (p->main_frame && p->main_frame->m_printer_view)
-        p->main_frame->m_printer_view->sync_model_colors_from_plater();
+    if (p->main_frame && p->main_frame->coprint_device_controller())
+        p->main_frame->coprint_device_controller()->sync_model_colors_from_plater();
 
     send_gcode_finish(evt.GetString());
     p->hide_send_to_printer_dlg();
@@ -16682,12 +17063,12 @@ const GLCanvas3D* Plater::canvas3D() const
 
 GLCanvas3D* Plater::get_view3D_canvas3D()
 {
-    return p->view3D->get_canvas3d();
+    return (p && p->view3D) ? p->view3D->get_canvas3d() : nullptr;
 }
 
 GLCanvas3D* Plater::get_preview_canvas3D()
 {
-    return p->preview->get_canvas3d();
+    return (p && p->preview) ? p->preview->get_canvas3d() : nullptr;
 }
 
 GLCanvas3D* Plater::get_assmeble_canvas3D()

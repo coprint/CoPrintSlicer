@@ -202,6 +202,9 @@ void AppConfig::set_defaults()
     if (get("use_perspective_camera").empty())
         set_bool("use_perspective_camera", true);
 
+    if (get("show_plate_gridlines").empty())
+        set_bool("show_plate_gridlines", true);
+
     if (get("auto_perspective").empty())
         set_bool("auto_perspective", false);
 

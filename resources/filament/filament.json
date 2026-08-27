@@ -1,0 +1,58 @@
+{
+  "brands": ["Generic", "Co Print"],
+  "types": {
+    "PLA": {
+      "temp_min": 190,
+      "temp_max": 240,
+      "pressure_advance": 0.04
+    },
+    "PLA-CF": {
+      "temp_min": 190,
+      "temp_max": 240,
+      "pressure_advance": 0.04
+    },
+    "PETG": {
+      "temp_min": 190,
+      "temp_max": 240,
+      "pressure_advance": 0.04
+    },
+    "ABS": {
+      "temp_min": 190,
+      "temp_max": 240,
+      "pressure_advance": 0.04
+    },
+    "TPU": {
+      "temp_min": 190,
+      "temp_max": 240,
+      "pressure_advance": 0.04
+    }
+  },
+  "colors": {
+    "White": "#ffffff",
+    "Beige": "#f7e6de",
+    "Light Gray": "#d1d3d5",
+    "Yellow": "#f4ee29",
+    "Sunflower Yellow": "#fec600",
+    "Pumpkin Orange": "#ff8e15",
+    "Orange": "#ff6a12",
+    "Gold": "#e4bc67",
+    "Bright Green": "#bece03",
+    "Green": "#19c344",
+    "Dark Green": "#3f8e44",
+    "Pink": "#f55a74",
+    "Magenta": "#ec008c",
+    "Red": "#ff1900",
+    "Maroon": "#7c0001",
+    "Purple": "#5e43b8",
+    "Turquoise": "#3bd6cb",
+    "Cyan": "#19a8d0",
+    "Cobalt Blue": "#0b4dae",
+    "Blue": "#0808ff",
+    "Brown": "#9d432c",
+    "Cocoa": "#6f5034",
+    "Bronze": "#847d48",
+    "Gray": "#8d9089",
+    "Silver": "#a7a9aa",
+    "Black": "#000000"
+  }
+}

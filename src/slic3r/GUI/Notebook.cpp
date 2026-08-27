@@ -49,6 +49,7 @@ ButtonsListCtrl::ButtonsListCtrl(wxWindow *parent, wxBoxSizer* side_tools) :
             wxWindow* item_win = item->GetWindow();
             if (item_win) {
                 item_win->Reparent(this);
+                item_win->SetBackgroundColour(GetBackgroundColour());
             }
         }
         m_sizer->Add(side_tools, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxBOTTOM, m_btn_margin);
@@ -58,6 +59,20 @@ ButtonsListCtrl::ButtonsListCtrl(wxWindow *parent, wxBoxSizer* side_tools) :
     //this->Bind(wxEVT_PAINT, &ButtonsListCtrl::OnPaint, this);
     Bind(wxEVT_SYS_COLOUR_CHANGED, [this](auto& e){
     });
+}
+
+bool ButtonsListCtrl::SetBackgroundColour(const wxColour &colour)
+{
+    const bool ok = wxControl::SetBackgroundColour(colour);
+    for (wxWindow *child : GetChildren()) {
+        if (dynamic_cast<Button *>(child) != nullptr)
+            continue;
+        child->SetBackgroundColour(colour);
+        child->Refresh();
+        for (wxWindow *grand : child->GetChildren())
+            grand->Refresh();
+    }
+    return ok;
 }
 
 void ButtonsListCtrl::OnPaint(wxPaintEvent&)

@@ -90,6 +90,7 @@
 #include "../Utils/UndoRedo.hpp"
 #include "slic3r/Config/Snapshot.hpp"
 #include "Preferences.hpp"
+#include "CoprintSettingsDialog.hpp"
 #include "Tab.hpp"
 #include "SysInfoDialog.hpp"
 #include "UpdateDialogs.hpp"
@@ -178,6 +179,8 @@ struct StaticBambuLib
 
 namespace Slic3r {
 namespace GUI {
+
+void stop_moonraker_model_file_probes();
 
 class MainFrame;
 
@@ -2631,6 +2634,7 @@ bool GUI_App::OnInit()
 
 int GUI_App::OnExit()
 {
+    stop_moonraker_model_file_probes();
     stop_sync_user_preset();
 
     if (m_device_manager) {
@@ -2678,6 +2682,10 @@ int GUI_App::OnExit()
     } catch (...) {
         BOOST_LOG_TRIVIAL(error) << "Failed to clean up encrypt bbl network log file";
     }
+
+#ifdef __APPLE__
+    macos_remove_dialog_zorder_filter();
+#endif
 
     return wxApp::OnExit();
 }
@@ -2733,6 +2741,13 @@ bool GUI_App::on_init_inner()
     wxInitAllImageHandlers();
 #ifdef NDEBUG
     wxImage::SetDefaultLoadFlags(0); // ignore waring in release build
+#endif
+
+#ifdef __APPLE__
+    macos_install_dialog_zorder_filter();
+    Bind(wxEVT_MENU, [](wxCommandEvent &) {
+        wxGetApp().CallAfter([] { wxGetApp().open_preferences(); });
+    }, wxID_PREFERENCES);
 #endif
 
 #if defined(_WIN32) && ! defined(_WIN64)
@@ -6559,8 +6574,8 @@ void GUI_App::update_mode()
         mainframe->m_param_panel->update_mode();
     if (mainframe->m_param_dialog)
         mainframe->m_param_dialog->panel()->update_mode();
-    if (mainframe->m_printer_view)
-        mainframe->m_printer_view->update_mode();
+    if (mainframe->coprint_device_controller())
+        mainframe->coprint_device_controller()->update_mode();
     mainframe->m_webview->update_mode();
 
 #ifdef _MSW_DARK_MODE
@@ -6580,8 +6595,8 @@ void GUI_App::update_mode()
 
 void GUI_App::update_internal_development() {
     mainframe->m_webview->update_mode();
-    if (mainframe->m_printer_view)
-        mainframe->m_printer_view->update_mode();
+    if (mainframe->coprint_device_controller())
+        mainframe->coprint_device_controller()->update_mode();
 }
 
 void GUI_App::show_ip_address_enter_dialog(wxString title)
@@ -6777,22 +6792,33 @@ void  GUI_App::show_ip_address_enter_dialog_handler(wxCommandEvent& evt)
 
 void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_option)
 {
+    (void)open_on_tab;
+    (void)highlight_option;
+    if (mainframe == nullptr)
+        return;
+    BOOST_LOG_TRIVIAL(error) << "open_preferences";
+#ifdef __APPLE__
+    static CoprintSettingsDialog *open_dlg = nullptr;
+    if (open_dlg != nullptr) {
+        open_dlg->Raise();
+        return;
+    }
+    open_dlg = new CoprintSettingsDialog(nullptr);
+    open_dlg->Bind(wxEVT_CLOSE_WINDOW, [](wxCloseEvent &event) {
+        open_dlg = nullptr;
+        event.Skip();
+    });
+    open_dlg->Show(true);
+    return;
+#else
     bool app_layout_changed = false;
     {
-        // the dialog needs to be destroyed before the call to recreate_GUI()
-        // or sometimes the application crashes into wxDialogBase() destructor
-        // so we put it into an inner scope
-        PreferencesDialog dlg(mainframe, open_on_tab, highlight_option);
+        CoprintSettingsDialog dlg(mainframe);
         dlg.ShowModal();
-        this->plater_->get_current_canvas3D()->force_set_focus();
-        // BBS
-        //app_layout_changed = dlg.settings_layout_changed();
-#if ENABLE_GCODE_LINES_ID_IN_H_SLIDER
-        if (dlg.seq_top_layer_only_changed() || dlg.seq_seq_top_gcode_indices_changed())
-#else
-        if (dlg.seq_top_layer_only_changed())
-#endif // ENABLE_GCODE_LINES_ID_IN_H_SLIDER
-            this->plater_->reload_print();
+        if (this->plater_ != nullptr) {
+            if (GLCanvas3D *canvas = this->plater_->get_current_canvas3D())
+                canvas->force_set_focus();
+        }
 #ifdef _WIN32
         if (is_editor()) {
             if (app_config->get("associate_3mf") == "true")
@@ -6820,6 +6846,7 @@ void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_
         mainframe->update_layout();
         mainframe->select_tab(size_t(0));
     }*/
+#endif
 }
 
 bool GUI_App::has_unsaved_preset_changes() const

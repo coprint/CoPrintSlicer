@@ -3,6 +3,29 @@
 
 #include <wx/dcclient.h>
 #include <wx/dcgraph.h>
+#include <wx/panel.h>
+
+namespace {
+wxColour host_background_colour(const wxWindow *win, const wxColour &fallback)
+{
+    wxColour bg = fallback;
+    for (wxWindow *w = win->GetParent(); w != nullptr; w = w->GetParent()) {
+        if ((w->GetWindowStyleFlag() & wxTRANSPARENT_WINDOW) != 0)
+            continue;
+        if (w->GetBackgroundStyle() == wxBG_STYLE_TRANSPARENT)
+            continue;
+        const wxColour c = w->GetBackgroundColour();
+        if (!c.IsOk())
+            continue;
+        bg = c;
+        // Skip grouping panels around the dropdown/text pair so the tab-bar
+        // colour is used instead of the default white/black window fill.
+        if (dynamic_cast<wxPanel *>(w) == nullptr)
+            break;
+    }
+    return bg;
+}
+} // namespace
 
 BEGIN_EVENT_TABLE(SideButton, wxWindow)
 EVT_LEFT_DOWN(SideButton::mouseDown)
@@ -195,9 +218,10 @@ void SideButton::dorender(wxDC& dc, wxDC& text_dc)
 {
     wxSize size = GetSize();
 
-    // draw background
+    // Fill behind rounded corners with the tab-bar colour, not a themed
+    // white/black window colour.
     dc.SetPen(wxNullPen);
-    dc.SetBrush(StateColor::darkModeColorFor(bottom_color));
+    dc.SetBrush(wxBrush(host_background_colour(this, bottom_color)));
     dc.DrawRectangle(0, 0, size.x, size.y);
 
     int states = state_handler.states();
@@ -329,8 +353,13 @@ void SideButton::mouseReleased(wxMouseEvent& event)
     event.Skip();
     if (pressedDown) {
         pressedDown = false;
-        ReleaseMouse();
-        if (wxRect({0, 0}, GetSize()).Contains(event.GetPosition()))
+        if (HasCapture())
+            ReleaseMouse();
+        state_handler.set_state(0, StateHandler::Pressed);
+        const bool inside = wxRect({0, 0}, GetSize()).Contains(event.GetPosition());
+        if (!inside)
+            state_handler.set_state(0, StateHandler::Hovered);
+        if (inside)
             sendButtonEvent();
     }
 }

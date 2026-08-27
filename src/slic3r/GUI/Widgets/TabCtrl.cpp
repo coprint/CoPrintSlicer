@@ -242,6 +242,8 @@ WXLRESULT TabCtrl::MSWWindowProc(WXUINT nMsg, WXWPARAM wParam, WXLPARAM lParam)
 
 void TabCtrl::relayout()
 {
+    if (btns.empty() || sizer == nullptr)
+        return;
     int offset = 10;
     int item = sel + 1;
     int first = 0;
@@ -271,11 +273,16 @@ void TabCtrl::relayout()
         }
         sizer->GetItem(i * 2 + 2)->SetMinSize({0, 0});
     }
-    if (item >= btns.size())
+    if (item >= static_cast<int>(btns.size()))
         -- item;
+    if (item < 0)
+        return;
+    wxSizerItem *spacer = sizer->GetItem(item * 2 + 2);
+    if (spacer == nullptr)
+        return;
     // Keep spacing 2 ~ 10 TAB_BUTTON_SPACE
     int b = GetSize().x - offset - 10 - (item + 1 - first) * TAB_BUTTON_SPACE * 8;
-    sizer->GetItem(item * 2 + 2)->SetMinSize({b > 0 ? b : 0, 0});
+    spacer->SetMinSize({b > 0 ? b : 0, 0});
     Layout();
 }
 

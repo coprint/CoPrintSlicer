@@ -63,7 +63,8 @@ private:
     ScalableBitmap check_bitmap;
     ScalableBitmap arrow_bitmap;
 
-    bool pressedDown = false;
+    bool   pressedDown = false;
+    bool   apply_dark_mode = true;
     boost::posix_time::ptime dismissTime;
     wxPoint                  offset; // x not used
     wxPoint                  dragStart;
@@ -95,6 +96,8 @@ public:
     void SetTextColor(StateColor const &color);
 
     void SetSelectorBackgroundColor(StateColor const &color);
+
+    void SetApplyDarkMode(bool apply) { apply_dark_mode = apply; }
 
     void SetUseContentWidth(bool use, bool limit_max_content_width = false);
 

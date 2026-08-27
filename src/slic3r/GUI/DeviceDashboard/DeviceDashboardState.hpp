@@ -19,7 +19,8 @@ enum class ConnectionStatus {
     Connecting,
     Online,
     Printing,
-    Error
+    Error,
+    Shutdown
 };
 
 enum class PrintCommandState {

@@ -381,6 +381,8 @@ set(SLIC3R_GUI_SOURCES
     GUI/PlateSettingsDialog.hpp
     GUI/Preferences.cpp
     GUI/Preferences.hpp
+    GUI/CoprintSettingsDialog.cpp
+    GUI/CoprintSettingsDialog.hpp
     GUI/PresetBundleDialog.cpp
     GUI/PresetBundleDialog.hpp
     GUI/ExportPresetBundleDialog.cpp
@@ -399,6 +401,11 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/DeviceCardFrame.hpp
     GUI/DeviceDashboard/DeviceDashboardPage.cpp
     GUI/DeviceDashboard/DeviceDashboardPage.hpp
+    GUI/DeviceDashboard/PrinterOfflineOverlay.hpp
+    GUI/DeviceDashboard/MoonrakerDeviceController.cpp
+    GUI/DeviceDashboard/MoonrakerDeviceController.hpp
+    GUI/CoPrintPrinterPicker.cpp
+    GUI/CoPrintPrinterPicker.hpp
     GUI/DeviceDashboard/DeviceDashboardState.hpp
     GUI/DeviceDashboard/DeviceStateStore.cpp
     GUI/DeviceDashboard/DeviceStateStore.hpp
@@ -408,6 +415,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/FilamentTrackPaint.hpp
     GUI/DeviceDashboard/FilamentTrackSlot.cpp
     GUI/DeviceDashboard/FilamentTrackSlot.hpp
+    GUI/DeviceDashboard/FilamentCatalog.cpp
+    GUI/DeviceDashboard/FilamentCatalog.hpp
+    GUI/DeviceDashboard/FilamentSelectDialog.cpp
+    GUI/DeviceDashboard/FilamentSelectDialog.hpp
     GUI/DeviceDashboard/services/DashboardStateAdapter.cpp
     GUI/DeviceDashboard/services/DashboardStateAdapter.hpp
     GUI/DeviceDashboard/panels/CameraPanel.cpp
@@ -420,6 +431,10 @@ set(SLIC3R_GUI_SOURCES
     GUI/DeviceDashboard/panels/PrintStatusPanel.hpp
     GUI/DeviceDashboard/panels/PrinterStatusPanel.cpp
     GUI/DeviceDashboard/panels/PrinterStatusPanel.hpp
+    GUI/DeviceDashboard/PresetStepSlider.cpp
+    GUI/DeviceDashboard/PresetStepSlider.hpp
+    GUI/DeviceDashboard/StatusPresetPopups.cpp
+    GUI/DeviceDashboard/StatusPresetPopups.hpp
     GUI/StartPrint/StartPrintDialog.cpp
     GUI/StartPrint/StartPrintDialog.hpp
     GUI/PrinterWebView.cpp
@@ -450,6 +465,7 @@ set(SLIC3R_GUI_SOURCES
     GUI/RemovableDriveManager.hpp
     GUI/SavePresetDialog.cpp
     GUI/SavePresetDialog.hpp
+    GUI/SelectCoPrintPrinterDialog.hpp
     GUI/SceneRaycaster.cpp
     GUI/SceneRaycaster.hpp
     GUI/PartSkipCommon.hpp
@@ -617,6 +633,8 @@ set(SLIC3R_GUI_SOURCES
     Utils/CrealityPrintAgent.hpp
     Utils/CrealityHostDiscovery.cpp
     Utils/CrealityHostDiscovery.hpp
+    Utils/CoprintMdnsDiscovery.cpp
+    Utils/CoprintMdnsDiscovery.hpp
     Utils/Duet.cpp
     Utils/Duet.hpp
     Utils/ElegooLink.cpp

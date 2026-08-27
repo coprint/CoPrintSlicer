@@ -4,15 +4,11 @@
 #include "../DeviceCommandService.hpp"
 #include "../DeviceDashboardState.hpp"
 
-#include <array>
 #include <functional>
 
 #include <wx/panel.h>
 
-class wxStaticText;
 class Button;
-class StaticBox;
-class wxPopupTransientWindow;
 
 namespace Slic3r {
 namespace GUI {
@@ -32,24 +28,12 @@ public:
     void set_command_handler(CommandHandler handler);
 
 private:
-    struct ManageToolOption {
-        int tool_index{0};
-        wxString label;
-        wxColour color;
-    };
-
     void dispatch(DeviceCommand command) const;
     void set_selected_tool(int tool_index);
-    void toggle_selected_tool_dropdown();
     void select_manage_tool(int tool_index);
 
     DeviceCardFrame* m_frame{nullptr};
     FilamentToolMapView* m_tool_map_view{nullptr};
-    std::array<ManageToolOption, MaxDashboardTools> m_manage_tool_options;
-    wxPanel* m_selected_tool_dot{nullptr};
-    wxStaticText* m_selected_tool{nullptr};
-    StaticBox* m_selected_tool_box{nullptr};
-    wxPopupTransientWindow* m_tool_dropdown_popup{nullptr};
     Button* m_load_button{nullptr};
     Button* m_unload_button{nullptr};
     int m_selected_tool_index{0};

@@ -1,6 +1,9 @@
 #include "MainFrame.hpp"
 
+#include "DeviceDashboard/MoonrakerDeviceController.hpp"
+
 #include <wx/panel.h>
+#include <wx/dcclient.h>
 #include <wx/notebook.h>
 #include <wx/listbook.h>
 #include <wx/simplebook.h>
@@ -54,6 +57,7 @@
 #include "UnsavedChangesDialog.hpp"
 #include "MsgDialog.hpp"
 #include "Notebook.hpp"
+#include "Widgets/Label.hpp"
 #include "GUI_Factories.hpp"
 #include "GUI_ObjectList.hpp"
 #include "NotificationManager.hpp"
@@ -93,6 +97,40 @@ wxDEFINE_EVENT(EVT_UPDATE_PRESET_CB, SimpleEvent);
 wxDEFINE_EVENT(EVT_BACKUP_POST, wxCommandEvent);
 wxDEFINE_EVENT(EVT_LOAD_URL, wxCommandEvent);
 wxDEFINE_EVENT(EVT_LOAD_PRINTER_URL, LoadPrinterViewEvent);
+
+namespace {
+std::string current_printer_model()
+{
+    if (!wxGetApp().preset_bundle)
+        return {};
+    return wxGetApp().preset_bundle->printers.get_edited_preset().config.opt_string("printer_model");
+}
+
+bool is_chromaset_printer()
+{
+    return boost::algorithm::icontains(current_printer_model(), "ChromaSet");
+}
+
+bool is_quadro_printer()
+{
+    return boost::algorithm::icontains(current_printer_model(), "Quadro");
+}
+
+bool show_print_plate_action()
+{
+    return !is_chromaset_printer();
+}
+
+bool show_remote_print_action()
+{
+    return !is_quadro_printer();
+}
+
+wxString chromaset_remote_print_label()
+{
+    return _L("Remote print");
+}
+} // namespace
 
 enum class ERescaleTarget
 {
@@ -481,6 +519,17 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     Bind(wxEVT_ACTIVATE, [this](wxActivateEvent& event) {
         if (m_plater != nullptr && event.GetActive())
             m_plater->on_activate();
+        if (event.GetActive()) {
+            for (wxWindowList::compatibility_iterator node = wxTopLevelWindows.GetFirst();
+                 node;
+                 node = node->GetNext()) {
+                wxDialog *dlg = dynamic_cast<wxDialog *>(node->GetData());
+                if (dlg != nullptr && dlg->IsShown())
+                    dlg->Raise();
+            }
+            if (!dialogStack.empty() && dialogStack.front() != nullptr)
+                dialogStack.front()->Raise();
+        }
         event.Skip();
     });
 
@@ -578,9 +627,7 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
         if (evt.CmdDown() && evt.GetKeyCode() == 'P')
 #endif
         {
-            // Orca: Use GUI_App::open_preferences instead of direct call so windows associations are updated on exit
-            wxGetApp().open_preferences();
-            plater()->get_current_canvas3D()->force_set_focus();
+            wxGetApp().CallAfter([] { wxGetApp().open_preferences(); });
             return;
         }
 
@@ -1084,6 +1131,8 @@ void MainFrame::show_option(bool show)
             m_print_btn->Hide();
             m_slice_option_btn->Hide();
             m_print_option_btn->Hide();
+            if (m_print_panel)
+                m_print_panel->Hide();
             Layout();
         }
     } else {
@@ -1092,9 +1141,25 @@ void MainFrame::show_option(bool show)
             m_print_btn->Show();
             m_slice_option_btn->Show();
             m_print_option_btn->Show();
+            if (m_print_panel)
+                m_print_panel->Show();
             Layout();
         }
     }
+    update_device_refresh_button();
+}
+
+void MainFrame::update_device_refresh_button()
+{
+    if (m_device_refresh_panel == nullptr)
+        return;
+    const bool on_device = m_tabpanel != nullptr && m_tabpanel->GetSelection() == tpMonitor;
+    if (m_device_refresh_panel->IsShown() == on_device)
+        return;
+    m_device_refresh_panel->Show(on_device);
+    if (wxWindow *parent = m_device_refresh_panel->GetParent())
+        parent->Layout();
+    Layout();
 }
 
 void MainFrame::init_tabpanel() {
@@ -1122,6 +1187,7 @@ void MainFrame::init_tabpanel() {
         int sel = m_tabpanel->GetSelection();
         //wxString page_text = m_tabpanel->GetPageText(sel);
         m_last_selected_tab = m_tabpanel->GetSelection();
+        update_device_refresh_button();
         if (panel == m_plater) {
             if (sel == tp3DEditor) {
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLVIEWTOOLBAR_3D));
@@ -1227,71 +1293,57 @@ void MainFrame::init_tabpanel() {
     }
 }
 
-// SoftFever
+// SoftFever: Device tab is always MonitorPanel. Toggle BBL-only auxiliary tabs and CoPrint UI mode.
 void MainFrame::show_device(bool bBBLPrinter) {
-    auto idx = -1;
+    if (m_monitor != nullptr) {
+        MonitorPanel::DeviceUiMode mode = MonitorPanel::DeviceUiMode::Bambu;
+        if (!bBBLPrinter)
+            mode = is_chromaset_printer() ? MonitorPanel::DeviceUiMode::CoPrintLegacy
+                                          : MonitorPanel::DeviceUiMode::CoPrint;
+        m_monitor->configure_device_ui(mode);
+    }
+
     if (bBBLPrinter) {
-        if (m_tabpanel->FindPage(m_monitor) != wxNOT_FOUND)
-            return;
-        // Remove printer view
-        if (m_printer_view != nullptr && (idx = m_tabpanel->FindPage(m_printer_view)) != wxNOT_FOUND) {
-            m_printer_view->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-
-        // Create/insert monitor page
-        if (!m_monitor) {
-            m_monitor = new MonitorPanel(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
-            m_monitor->SetBackgroundColour(*wxWHITE);
-        }
-        m_monitor->Show(false);
-        m_tabpanel->InsertPage(tpMonitor, m_monitor, _L("Device"), std::string("tab_monitor_active"), std::string("tab_monitor_active"));
-
         if (wxGetApp().is_enable_multi_machine()) {
             if (!m_multi_machine) {
                 m_multi_machine = new MultiMachinePage(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
                 m_multi_machine->SetBackgroundColour(*wxWHITE);
             }
-            // TODO: change the bitmap
-            m_multi_machine->Show(false);
-            m_tabpanel->InsertPage(tpMultiDevice, m_multi_machine, _L("Multi-device"), std::string("tab_multi_active"),
-                                   std::string("tab_multi_active"), false);
+            if (m_tabpanel->FindPage(m_multi_machine) == wxNOT_FOUND) {
+                m_multi_machine->Show(false);
+                m_tabpanel->InsertPage(tpMultiDevice, m_multi_machine, _L("Multi-device"),
+                                       std::string("tab_multi_active"), std::string("tab_multi_active"), false);
+            }
         }
         if (!m_calibration) {
             m_calibration = new CalibrationPanel(m_tabpanel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
             m_calibration->SetBackgroundColour(*wxWHITE);
         }
-        m_calibration->Show(false);
-        // Calibration is always the last page, so don't use InsertPage here. Otherwise, if multi_machine page is not enabled,
-        // the calibration tab won't be properly added as well, due to the TabPosition::tpCalibration no longer matches the real tab position.
-        m_tabpanel->AddPage(m_calibration, _L("Calibration"), std::string("tab_calibration_active"),
-                               std::string("tab_calibration_active"), false);
-
+        if (m_tabpanel->FindPage(m_calibration) == wxNOT_FOUND) {
+            m_calibration->Show(false);
+            m_tabpanel->AddPage(m_calibration, _L("Calibration"), std::string("tab_calibration_active"),
+                                std::string("tab_calibration_active"), false);
+        }
 #ifdef _MSW_DARK_MODE
         wxGetApp().UpdateDarkUIWin(this);
-#endif // _MSW_DARK_MODE
-
-    } else {
-        if (m_printer_view != nullptr && m_tabpanel->FindPage(m_printer_view) != wxNOT_FOUND)
-            return;
-
-        if ((idx = m_tabpanel->FindPage(m_calibration)) != wxNOT_FOUND) {
-            m_calibration->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-        if ((idx = m_tabpanel->FindPage(m_multi_machine)) != wxNOT_FOUND) {
-            m_multi_machine->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-        if ((idx = m_tabpanel->FindPage(m_monitor)) != wxNOT_FOUND) {
-            m_monitor->Show(false);
-            m_tabpanel->RemovePage(idx);
-        }
-        ensure_printer_web_view_created();
-        m_printer_view->Show(false);
-        m_tabpanel->InsertPage(tpMonitor, m_printer_view, _L("Device"), std::string("tab_monitor_active"),
-                               std::string("tab_monitor_active"));
+#endif
+        return;
     }
+
+    int idx = -1;
+    if ((idx = m_tabpanel->FindPage(m_calibration)) != wxNOT_FOUND) {
+        m_calibration->Show(false);
+        m_tabpanel->RemovePage(idx);
+    }
+    if (m_multi_machine != nullptr && (idx = m_tabpanel->FindPage(m_multi_machine)) != wxNOT_FOUND) {
+        m_multi_machine->Show(false);
+        m_tabpanel->RemovePage(idx);
+    }
+}
+
+DeviceDashboard::MoonrakerDeviceController* MainFrame::coprint_device_controller()
+{
+    return m_monitor != nullptr ? m_monitor->coprint_device_controller() : nullptr;
 }
 
 void MainFrame::ensure_printer_web_view_created()
@@ -1651,6 +1703,24 @@ bool MainFrame::can_reslice() const
     return (m_plater != nullptr) && !m_plater->model().objects.empty();
 }
 
+namespace {
+void paint_header_gap_panel(wxPanel *panel)
+{
+    panel->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    panel->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    panel->Bind(wxEVT_PAINT, [panel](wxPaintEvent &) {
+        wxPaintDC dc(panel);
+        wxWindow *host = panel->GetParent();
+        wxColour  bg   = panel->GetBackgroundColour();
+        if (host && host->GetBackgroundColour().IsOk())
+            bg = host->GetBackgroundColour();
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(bg.IsOk() ? bg : wxColour(59, 68, 70)));
+        dc.DrawRectangle(wxPoint(0, 0), panel->GetClientSize());
+    });
+}
+} // namespace
+
 wxBoxSizer* MainFrame::create_side_tools()
 {
     enable_multi_machine = wxGetApp().is_enable_multi_machine();
@@ -1660,13 +1730,18 @@ wxBoxSizer* MainFrame::create_side_tools()
     m_slice_select = eSlicePlate;
     m_print_select = ePrintPlate;
 
-    auto slice_panel = new wxPanel(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxTRANSPARENT_WINDOW);
-    auto print_panel = new wxPanel(this,wxID_ANY,wxDefaultPosition,wxDefaultSize,wxTRANSPARENT_WINDOW);
+    auto slice_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    m_print_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    m_device_refresh_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
+    paint_header_gap_panel(slice_panel);
+    paint_header_gap_panel(m_print_panel);
+    paint_header_gap_panel(m_device_refresh_panel);
 
     m_slice_btn = new SideButton(slice_panel, _L("Slice plate"), "");
     m_slice_option_btn = new SideButton(slice_panel, "", "sidebutton_dropdown", 0, 14);
-    m_print_btn = new SideButton(print_panel, _L("Print plate"), "");
-    m_print_option_btn = new SideButton(print_panel, "", "sidebutton_dropdown", 0, 14);
+    m_print_btn = new SideButton(m_print_panel, _L("Print plate"), "");
+    m_print_option_btn = new SideButton(m_print_panel, "", "sidebutton_dropdown", 0, 14);
+    m_device_refresh_btn = new SideButton(m_device_refresh_panel, _L("Refresh"), "");
 
     auto slice_sizer = new wxBoxSizer(wxHORIZONTAL);
     slice_sizer->Add(m_slice_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
@@ -1676,15 +1751,23 @@ wxBoxSizer* MainFrame::create_side_tools()
     auto print_sizer = new wxBoxSizer(wxHORIZONTAL);
     print_sizer->Add(m_print_option_btn, 0, wxRIGHT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
     print_sizer->Add(m_print_btn, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, FromDIP(1));
-    print_panel->SetSizer(print_sizer);
+    m_print_panel->SetSizer(print_sizer);
+
+    auto refresh_sizer = new wxBoxSizer(wxHORIZONTAL);
+    refresh_sizer->Add(m_device_refresh_btn, 0, wxALIGN_CENTER_VERTICAL, 0);
+    m_device_refresh_panel->SetSizer(refresh_sizer);
+    m_device_refresh_panel->Hide();
 
     update_side_button_style();
     m_slice_option_btn->Enable();
     m_print_option_btn->Enable();
+    m_device_refresh_btn->Enable();
     sizer->Add(FromDIP(15), 0, 0, 0, 0);
     sizer->Add(slice_panel);
     sizer->Add(FromDIP(15), 0, 0, 0, 0);
-    sizer->Add(print_panel);
+    sizer->Add(m_print_panel);
+    sizer->Add(FromDIP(15), 0, 0, 0, 0);
+    sizer->Add(m_device_refresh_panel);
     sizer->Add(FromDIP(19), 0, 0, 0, 0);
 
     sizer->Layout();
@@ -1788,6 +1871,11 @@ wxBoxSizer* MainFrame::create_side_tools()
                  wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_PRINT_MULTI_MACHINE));*/
         });
 
+    m_device_refresh_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent &) {
+        if (m_monitor != nullptr)
+            m_monitor->force_refresh_device();
+    });
+
     m_slice_option_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent& event)
         {
             if(m_slice_option_pop_up)
@@ -1828,8 +1916,39 @@ wxBoxSizer* MainFrame::create_side_tools()
             SidePopup* p = new SidePopup(this);
 
             if (wxGetApp().preset_bundle
-                && !wxGetApp().preset_bundle->is_bbl_vendor()) {
-                // ThirdParty Buttons
+                && (!wxGetApp().preset_bundle->is_bbl_vendor() || is_chromaset_printer())) {
+                // Third-party and ChromaSet: Start Print + Orca remote print + export G-code.
+                // Only create menu items that belong to this printer; unused children of
+                // SidePopup still paint at (0,0) and stay clickable under the main button.
+                if (show_print_plate_action()) {
+                    SideButton* print_plate_btn = new SideButton(p, _L("Print plate"), "");
+                    print_plate_btn->SetCornerRadius(0);
+                    print_plate_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
+                        m_print_btn->SetLabel(_L("Print plate"));
+                        m_print_select = ePrintPlate;
+                        m_print_enable = get_enable_print_status();
+                        m_print_btn->Enable(m_print_enable);
+                        this->Layout();
+                        p->Dismiss();
+                    });
+                    p->append_button(print_plate_btn);
+                }
+
+                if (show_remote_print_action()) {
+                    const wxString remote_label = chromaset_remote_print_label();
+                    SideButton* remote_print_btn = new SideButton(p, remote_label, "");
+                    remote_print_btn->SetCornerRadius(0);
+                    remote_print_btn->Bind(wxEVT_BUTTON, [this, p, remote_label](wxCommandEvent&) {
+                        m_print_btn->SetLabel(remote_label);
+                        m_print_select = eSendGcode;
+                        m_print_enable = get_enable_print_status();
+                        m_print_btn->Enable(m_print_enable);
+                        this->Layout();
+                        p->Dismiss();
+                    });
+                    p->append_button(remote_print_btn);
+                }
+
                 SideButton* export_gcode_btn = new SideButton(p, _L("Export G-code file"), "");
                 export_gcode_btn->SetCornerRadius(0);
                 export_gcode_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
@@ -1840,20 +1959,6 @@ wxBoxSizer* MainFrame::create_side_tools()
                     this->Layout();
                     p->Dismiss();
                     });
-
-                // upload and print
-                SideButton* send_gcode_btn = new SideButton(p, _L("Print"), "");
-                send_gcode_btn->SetCornerRadius(0);
-                send_gcode_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
-                    m_print_btn->SetLabel(_L("Print"));
-                    m_print_select = eSendGcode;
-                    m_print_enable = get_enable_print_status();
-                    m_print_btn->Enable(m_print_enable);
-                    this->Layout();
-                    p->Dismiss();
-                    });
-
-                p->append_button(send_gcode_btn);
                 p->append_button(export_gcode_btn);
             }
             else {
@@ -1878,6 +1983,21 @@ wxBoxSizer* MainFrame::create_side_tools()
                     this->Layout();
                     p->Dismiss();
                     });
+
+                SideButton* remote_print_btn = nullptr;
+                if (show_remote_print_action()) {
+                    const wxString remote_label = chromaset_remote_print_label();
+                    remote_print_btn = new SideButton(p, remote_label, "");
+                    remote_print_btn->SetCornerRadius(0);
+                    remote_print_btn->Bind(wxEVT_BUTTON, [this, p, remote_label](wxCommandEvent&) {
+                        m_print_btn->SetLabel(remote_label);
+                        m_print_select = eSendGcode;
+                        m_print_enable = get_enable_print_status();
+                        m_print_btn->Enable(m_print_enable);
+                        this->Layout();
+                        p->Dismiss();
+                    });
+                }
 
                 SideButton* print_all_btn = new SideButton(p, _L("Print all"), "");
                 print_all_btn->SetCornerRadius(0);
@@ -1946,13 +2066,22 @@ wxBoxSizer* MainFrame::create_side_tools()
                     }
                 }
 
-                p->append_button(print_plate_btn);
-                if (support_print_all) {
+                if (show_print_plate_action())
+                    p->append_button(print_plate_btn);
+                else
+                    print_plate_btn->Hide();
+                if (remote_print_btn)
+                    p->append_button(remote_print_btn);
+                if (support_print_all)
                     p->append_button(print_all_btn);
-                }
+                else
+                    print_all_btn->Hide();
                 if (support_send) {
                     p->append_button(send_to_printer_btn);
                     p->append_button(send_to_printer_all_btn);
+                } else {
+                    send_to_printer_btn->Hide();
+                    send_to_printer_all_btn->Hide();
                 }
                 if (enable_multi_machine) {
                     SideButton* print_multi_machine_btn = new SideButton(p, _L("Send to Multi-device"), "");
@@ -2186,6 +2315,18 @@ void MainFrame::update_side_button_style()
     m_print_option_btn->SetExtraSize(wxSize(FromDIP(10), FromDIP(10)));
     m_print_option_btn->SetIconOffset(FromDIP(2));
     m_print_option_btn->SetMinSize(wxSize(FromDIP(24), FromDIP(24)));
+
+    if (m_device_refresh_btn != nullptr) {
+        m_device_refresh_btn->SetFont(Label::Body_14);
+        m_device_refresh_btn->SetLayoutStyle(1);
+        m_device_refresh_btn->SetTextLayout(SideButton::EHorizontalOrientation::HO_Center, 0);
+        m_device_refresh_btn->SetCornerRadius(FromDIP(8));
+        m_device_refresh_btn->SetExtraSize(wxSize(0, 0));
+        const wxSize refresh_size(FromDIP(100), FromDIP(24));
+        m_device_refresh_btn->SetMinSize(refresh_size);
+        m_device_refresh_btn->SetMaxSize(refresh_size);
+        m_device_refresh_btn->SetSize(refresh_size);
+    }
 }
 
 void MainFrame::update_slice_print_status(SlicePrintEventType event, bool can_slice, bool can_print)
@@ -2254,6 +2395,8 @@ void MainFrame::on_dpi_changed(const wxRect& suggested_rect)
     m_print_btn->Rescale();
     m_slice_option_btn->Rescale();
     m_print_option_btn->Rescale();
+    if (m_device_refresh_btn != nullptr)
+        m_device_refresh_btn->Rescale();
 
     // update Plater
     wxGetApp().plater()->msw_rescale();
@@ -3031,20 +3174,11 @@ void MainFrame::init_menubar_as_editor()
         [this](wxCommandEvent &) { Slic3r::GUI::about();},
         "", nullptr, []() { return true; }, this, 0);
     append_menu_item(
-        parent_menu, wxID_ANY, _L("Preferences") + "\t" + ctrl + ",", "",
-        [this](wxCommandEvent &) {
-            PreferencesDialog dlg(this);
-            dlg.ShowModal();
-            plater()->get_current_canvas3D()->force_set_focus();
-#if ENABLE_GCODE_LINES_ID_IN_H_SLIDER
-            if (dlg.seq_top_layer_only_changed() || dlg.seq_seq_top_gcode_indices_changed())
-#else
-            if (dlg.seq_top_layer_only_changed())
-#endif
-                plater()->reload_print();
+        parent_menu, wxID_ANY, _L("Settings") + "\t" + ctrl + ",", "",
+        [](wxCommandEvent &) {
+            wxGetApp().CallAfter([] { wxGetApp().open_preferences(); });
         },
         "", nullptr, []() { return true; }, this, 1);
-    //parent_menu->Insert(1, preference_item);
 #endif
     // Help menu
     auto helpMenu = generate_help_menu();
@@ -3058,11 +3192,10 @@ void MainFrame::init_menubar_as_editor()
     //BBS add Preference
 
     append_menu_item(
-        m_topbar->GetTopMenu(), wxID_ANY, _L("Preferences") + "\t" + ctrl + "P", "",
+        m_topbar->GetTopMenu(), wxID_ANY, _L("Settings") + "\t" + ctrl + "P", "",
         [this](wxCommandEvent &) {
             // Orca: Use GUI_App::open_preferences instead of direct call so windows associations are updated on exit
             wxGetApp().open_preferences();
-            plater()->get_current_canvas3D()->force_set_focus();
         },
         "", nullptr, []() { return true; }, this);
     //m_topbar->AddDropDownMenuItem(preference_item);
@@ -3306,6 +3439,30 @@ void MainFrame::init_menubar_as_editor()
     // wx bug: https://trac.wxwidgets.org/ticket/18328
     wxMenu* apple_menu = m_menubar->OSXGetAppleMenu();
     if (apple_menu != nullptr) {
+        auto open_prefs = [](wxCommandEvent &) {
+            wxGetApp().CallAfter([] { wxGetApp().open_preferences(); });
+        };
+        bool has_prefs_row = false;
+        for (size_t i = 0; i < apple_menu->GetMenuItemCount(); ++i) {
+            wxMenuItem *it = apple_menu->FindItemByPosition(i);
+            if (it == nullptr || it->IsSeparator())
+                continue;
+            const wxString label = it->GetItemLabelText();
+            if (label.Find(_L("Preferences")) != wxNOT_FOUND || label.Find(_L("Settings")) != wxNOT_FOUND) {
+                has_prefs_row = true;
+                it->Enable(true);
+                break;
+            }
+        }
+        // wxID_PREFERENCES may already exist as a hidden Cocoa stub; that must
+        // not stop us from adding a real visible row.
+        if (!has_prefs_row) {
+            wxMenuItem *item = apple_menu->Insert(1, wxID_ANY, _L("Settings") + "\t" + ctrl + ",");
+            if (item != nullptr)
+                apple_menu->Bind(wxEVT_MENU, open_prefs, item->GetId());
+        }
+        apple_menu->Bind(wxEVT_MENU, open_prefs, wxID_PREFERENCES);
+        Bind(wxEVT_MENU, open_prefs, wxID_PREFERENCES);
         apple_menu->Bind(wxEVT_MENU, [this](wxCommandEvent &) {
             Close();
         }, wxID_EXIT);
@@ -3669,6 +3826,7 @@ void MainFrame::jump_to_monitor(std::string dev_id)
     if(!m_monitor)
         return;
     m_tabpanel->SetSelection(tpMonitor);
+    update_device_refresh_button();
     if (!dev_id.empty()) {
         ((MonitorPanel*)m_monitor)->select_machine(dev_id);
     }
@@ -3716,6 +3874,7 @@ void MainFrame::select_tab(size_t tab/* = size_t(-1)*/)
     };
 
     select(false);
+    update_device_refresh_button();
 }
 
 void MainFrame::request_select_tab(TabPosition pos)
@@ -3798,7 +3957,7 @@ void MainFrame::set_print_button_to_default(PrintSelectType select_type)
         m_print_btn->Enable(m_print_enable);
         this->Layout();
     } else if (select_type == PrintSelectType::eSendGcode) {
-        m_print_btn->SetLabel(_L("Print"));
+        m_print_btn->SetLabel(chromaset_remote_print_label());
         m_print_select = eSendGcode;
         if (m_print_enable)
             m_print_enable = get_enable_print_status() && can_send_gcode();
@@ -4120,6 +4279,12 @@ SettingsDialog::SettingsDialog(MainFrame* mainframe)
 #else
     SetIcon(wxIcon(var("CoPrintSlicer_128px.png"), wxBITMAP_TYPE_PNG));
 #endif // _WIN32
+
+#ifdef __APPLE__
+    // Hidden print-settings frame is titled "... Settings". macOS 13+ Settings
+    // menu targets it and aborts the process with no crash log.
+    macos_exclude_from_system_settings(this);
+#endif
 
     //just hide the Frame on closing
     this->Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent& evt) { this->Hide(); });

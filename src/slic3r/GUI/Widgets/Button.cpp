@@ -373,14 +373,7 @@ void Button::render(wxDC& dc)
         dc.SetPen(wxPen(*wxLIGHT_GREY));
         dc.DrawRectangle(pt, textSize.GetSize());
 #endif
-#ifdef __WXOSX__
-        pt.y -= this->textSize.x / 2;
-#endif
-#ifdef __APPLE__
-        if (Slic3r::is_mac_version_15()) {
-        pt.y -= FromDIP(1);
-    }
-#endif
+        // Removed macOS-specific Y offsets for consistent vertical centering across all platforms
         dc.DrawText(text, pt);
     }
 }
@@ -443,10 +436,14 @@ void Button::mouseReleased(wxMouseEvent& event)
         pressedDown = false;
         if (HasCapture())
             ReleaseMouse();
+        const wxPoint pos = event.GetPosition();
+        const wxRect bounds({0, 0}, GetSize());
         state_handler.set_state(0, StateHandler::Pressed);
-        wxRect hit_rect({0, 0}, GetSize());
+        if (!bounds.Contains(pos))
+            state_handler.set_state(0, StateHandler::Hovered);
+        wxRect hit_rect = bounds;
         hit_rect.Inflate(FromDIP(8));
-        if (hit_rect.Contains(event.GetPosition()))
+        if (hit_rect.Contains(pos))
             sendButtonEvent();
     }
 }

@@ -18,6 +18,7 @@ public:
     // BBS
     ButtonsListCtrl(wxWindow* parent, wxBoxSizer* side_tools = NULL);
     ~ButtonsListCtrl() {}
+    bool SetBackgroundColour(const wxColour &colour) override;
 
     void OnPaint(wxPaintEvent&);
     void SetSelection(int sel);

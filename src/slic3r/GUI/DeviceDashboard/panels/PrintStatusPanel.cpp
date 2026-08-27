@@ -2,14 +2,19 @@
 
 #include "../DeviceCardFrame.hpp"
 #include "../DeviceUiStyle.hpp"
-#include "../../Widgets/Button.hpp"
+#include "../../Widgets/Label.hpp"
 #include "../../Widgets/ProgressBar.hpp"
 #include "../../I18N.hpp"
 #include "libslic3r/Utils.hpp"
+#ifdef __APPLE__
+#include "../../../Utils/MacDarkMode.hpp"
+#endif
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
+#include <wx/dcgraph.h>
 #include <wx/dcmemory.h>
 #include <wx/font.h>
 #include <wx/image.h>
@@ -31,6 +36,36 @@ bool set_label_if_changed(wxStaticText* label, const wxString& text)
     return true;
 }
 
+void apply_status_text_style(wxStaticText* label, int point_size)
+{
+    if (label == nullptr)
+        return;
+    wxFont font = Label::sysFont(point_size, false);
+    font.SetWeight(wxFONTWEIGHT_LIGHT);
+    label->SetFont(font);
+    label->SetForegroundColour(wxColour("#434343"));
+}
+
+wxBitmap load_png_icon(wxWindow* host, const char* filename, int dip)
+{
+    wxImage img;
+    const wxString path = wxString::FromUTF8((resources_dir() + "/images/" + filename).c_str());
+    if (!img.LoadFile(path, wxBITMAP_TYPE_PNG) || !img.IsOk())
+        return {};
+
+#ifdef __APPLE__
+    const double scale = std::max(1.0, mac_max_scaling_factor());
+    const int px = std::max(1, (int) std::lround(dip * scale));
+    img.Rescale(px, px, wxIMAGE_QUALITY_HIGH);
+    return wxBitmap(std::move(img), -1, scale);
+#else
+    const int px = std::max(1, host->FromDIP(dip));
+    if (img.GetWidth() != px || img.GetHeight() != px)
+        img.Rescale(px, px, wxIMAGE_QUALITY_HIGH);
+    return wxBitmap(img);
+#endif
+}
+
 } // namespace
 
 PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
@@ -40,114 +75,99 @@ PrintStatusPanel::PrintStatusPanel(wxWindow* parent)
 
     auto* root = new wxBoxSizer(wxVERTICAL);
     m_frame = new DeviceCardFrame(this, wxString::FromUTF8("Print Status"));
-    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::page_background());
+    m_frame->content_parent()->SetBackgroundColour(DeviceUiStyle::card_background());
 
     auto* content_sizer = new wxBoxSizer(wxHORIZONTAL);
+    content_sizer->SetMinSize(wxSize(-1, FromDIP(120) + FromDIP(42)));
 
-    m_thumbnail_host = new wxPanel(m_frame->content_parent(), wxID_ANY);
-    m_thumbnail_host->SetBackgroundColour(*wxBLACK);
-    m_thumbnail_host->SetMinSize(wxSize(FromDIP(240), FromDIP(170)));
-    auto* thumbnail_sizer = new wxBoxSizer(wxVERTICAL);
-    m_thumbnail = new wxStaticBitmap(m_thumbnail_host, wxID_ANY, make_thumbnail_placeholder());
-    m_thumbnail->SetBackgroundColour(*wxBLACK);
-    m_thumbnail->SetMinSize(wxSize(FromDIP(220), FromDIP(150)));
-    m_thumbnail->SetMaxSize(wxSize(FromDIP(220), FromDIP(150)));
-    thumbnail_sizer->AddStretchSpacer(1);
-    thumbnail_sizer->Add(m_thumbnail, 0, wxALIGN_CENTER);
-    thumbnail_sizer->AddStretchSpacer(1);
-    m_thumbnail_host->SetSizer(thumbnail_sizer);
-    content_sizer->Add(m_thumbnail_host, 0, wxEXPAND | wxRIGHT, FromDIP(14));
+    const wxSize thumb_size(FromDIP(120), FromDIP(120));
+    m_thumbnail = new wxStaticBitmap(m_frame->content_parent(), wxID_ANY, make_thumbnail_placeholder());
+    m_thumbnail->SetBackgroundColour(wxColour("#EFEEED"));
+    m_thumbnail->SetMinSize(thumb_size);
+    m_thumbnail->SetMaxSize(thumb_size);
+    content_sizer->Add(m_thumbnail, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(14));
 
     auto* details = new wxPanel(m_frame->content_parent(), wxID_ANY);
-    details->SetBackgroundColour(DeviceUiStyle::page_background());
+    details->SetBackgroundColour(DeviceUiStyle::card_background());
     auto* details_sizer = new wxBoxSizer(wxVERTICAL);
 
-    auto* printing_label = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("Printing File:"));
-    printing_label->SetForegroundColour(DeviceUiStyle::accent());
     m_file_name = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("N/A"),
         wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
-    m_file_name->SetForegroundColour(DeviceUiStyle::text_primary());
+    apply_status_text_style(m_file_name, 16);
     m_file_name->SetMinSize(wxSize(FromDIP(120), -1));
-    details_sizer->Add(printing_label, 0, wxBOTTOM, FromDIP(2));
     details_sizer->Add(m_file_name, 0, wxBOTTOM, FromDIP(8));
 
+    auto* total_row = new wxBoxSizer(wxHORIZONTAL);
+    auto* timer_icon = new wxStaticBitmap(details, wxID_ANY, load_png_icon(this, "cop_timer.png", 16));
+    timer_icon->SetMinSize(wxSize(FromDIP(16), FromDIP(16)));
+    timer_icon->SetBackgroundColour(DeviceUiStyle::card_background());
     m_elapsed_time = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("Total: N/A"));
-    m_elapsed_time->SetForegroundColour(DeviceUiStyle::text_primary());
-    details_sizer->Add(m_elapsed_time, 0, wxBOTTOM, FromDIP(10));
+    apply_status_text_style(m_elapsed_time, 12);
+    total_row->Add(timer_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(6));
+    total_row->Add(m_elapsed_time, 0, wxALIGN_CENTER_VERTICAL);
+    details_sizer->Add(total_row, 0, wxBOTTOM, FromDIP(10));
 
     m_progress = new ProgressBar(details, wxID_ANY, 100, wxDefaultPosition, wxSize(-1, FromDIP(28)), true);
     m_progress->SetMinSize(wxSize(-1, FromDIP(28)));
     m_progress->SetMaxSize(wxSize(-1, FromDIP(28)));
     m_progress->SetRadius(FromDIP(14));
-    m_progress->SetPadding(FromDIP(3));
+    m_progress->SetPadding(FromDIP(1));
     m_progress->SetProgressForedColour(wxColour(132, 162, 188));
     m_progress->SetProgressBackgroundColour(wxColour(126, 158, 184));
-    m_progress->SetBackgroundColour(DeviceUiStyle::page_background());
+    m_progress->SetBackgroundColour(DeviceUiStyle::card_background());
+    wxFont progress_font = Label::sysFont(10, false);
+    progress_font.SetWeight(wxFONTWEIGHT_MEDIUM);
+    m_progress->SetFont(progress_font);
     details_sizer->Add(m_progress, 0, wxEXPAND | wxBOTTOM, FromDIP(10));
 
     auto* lower_row = new wxBoxSizer(wxHORIZONTAL);
     m_layer_info = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("Layer: N/A/N/A"));
-    m_layer_info->SetForegroundColour(DeviceUiStyle::text_primary());
+    apply_status_text_style(m_layer_info, 12);
     lower_row->Add(m_layer_info, 1, wxALIGN_CENTER_VERTICAL);
     m_remaining_time = new wxStaticText(details, wxID_ANY, wxString::FromUTF8("Remaining: N/A"));
-    m_remaining_time->SetForegroundColour(DeviceUiStyle::text_primary());
+    apply_status_text_style(m_remaining_time, 12);
     lower_row->Add(m_remaining_time, 0, wxALIGN_CENTER_VERTICAL);
     details_sizer->Add(lower_row, 0, wxEXPAND);
 
-    auto* action_row = new wxBoxSizer(wxHORIZONTAL);
-    m_pause_button = new Button(details, wxString::FromUTF8("Pause"), "print_control_pause_amber", 0, 14);
-    m_pause_button->SetMinSize(wxSize(FromDIP(80), FromDIP(40)));
-    m_pause_button->SetMaxSize(wxSize(FromDIP(80), FromDIP(40)));
-    m_pause_button->SetCornerRadius(FromDIP(8));
-    m_pause_button->SetBackgroundColor(StateColor(
-        std::pair(wxColour(0xF2, 0xEE, 0xE8), (int) StateColor::Disabled),
-        std::pair(wxColour(0xF8, 0xE5, 0xC9), (int) StateColor::Pressed),
-        std::pair(wxColour(0xFF, 0xF2, 0xE4), (int) StateColor::Hovered),
-        std::pair(wxColour(0xFF, 0xF9, 0xF1), (int) StateColor::Normal)));
-    m_pause_button->SetBorderColor(StateColor(
-        std::pair(wxColour(0xC8, 0xC0, 0xB6), (int) StateColor::Disabled),
-        std::pair(wxColour(0xBD, 0x82, 0x3D), (int) StateColor::Pressed),
-        std::pair(wxColour(0xE2, 0xAD, 0x70), (int) StateColor::Hovered),
-        std::pair(wxColour(0xD7, 0xA4, 0x6D), (int) StateColor::Normal)));
-    m_pause_button->SetTextColor(StateColor(
-        std::pair(wxColour(0xB9, 0xB3, 0xAA), (int) StateColor::Disabled),
-        std::pair(wxColour(0xB7, 0x78, 0x2E), (int) StateColor::Pressed),
-        std::pair(wxColour(0xDE, 0x9D, 0x55), (int) StateColor::Hovered),
-        std::pair(wxColour(0xD7, 0xA4, 0x6D), (int) StateColor::Normal)));
-    m_stop_button = new Button(details, wxString::FromUTF8("Stop"), "print_control_stop_red", 0, 14);
-    m_stop_button->SetMinSize(wxSize(FromDIP(80), FromDIP(40)));
-    m_stop_button->SetMaxSize(wxSize(FromDIP(80), FromDIP(40)));
-    m_stop_button->SetCornerRadius(FromDIP(8));
-    m_stop_button->SetBackgroundColor(StateColor(
-        std::pair(wxColour(0xF2, 0xEC, 0xEC), (int) StateColor::Disabled),
-        std::pair(wxColour(0xFF, 0xDF, 0xDF), (int) StateColor::Pressed),
-        std::pair(wxColour(0xFF, 0xEF, 0xEF), (int) StateColor::Hovered),
-        std::pair(wxColour(0xFF, 0xF9, 0xF9), (int) StateColor::Normal)));
-    m_stop_button->SetBorderColor(StateColor(
-        std::pair(wxColour(0xC8, 0xB8, 0xB8), (int) StateColor::Disabled),
-        std::pair(wxColour(0xE9, 0x55, 0x4E), (int) StateColor::Pressed),
-        std::pair(wxColour(0xFF, 0x66, 0x5C), (int) StateColor::Hovered),
-        std::pair(wxColour(0xFF, 0x7D, 0x72), (int) StateColor::Normal)));
-    m_stop_button->SetTextColor(StateColor(
-        std::pair(wxColour(0xBA, 0xAD, 0xAD), (int) StateColor::Disabled),
-        std::pair(wxColour(0xE8, 0x4C, 0x45), (int) StateColor::Pressed),
-        std::pair(wxColour(0xFF, 0x5B, 0x52), (int) StateColor::Hovered),
-        std::pair(wxColour(0xFF, 0x7D, 0x72), (int) StateColor::Normal)));
-    action_row->Add(m_pause_button, 0, wxRIGHT, FromDIP(10));
-    action_row->Add(m_stop_button, 0);
-    details_sizer->Add(action_row, 0, wxTOP, FromDIP(14));
+    details->SetSizer(details_sizer);
+    content_sizer->Add(details, 1, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(15));
 
-    m_pause_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-        if (m_pause_handler)
+    auto* buttons = new wxPanel(m_frame->content_parent(), wxID_ANY);
+    buttons->SetBackgroundColour(DeviceUiStyle::card_background());
+    auto* btn_sizer = new wxBoxSizer(wxHORIZONTAL);
+    const wxSize icon_size(FromDIP(20), FromDIP(20));
+    m_pause_bitmap = load_png_icon(this, "pause.png", 20);
+    m_resume_bitmap = load_png_icon(this, "resume.png", 20);
+    m_pause_icon = new wxStaticBitmap(buttons, wxID_ANY, m_pause_bitmap);
+    m_pause_icon->SetMinSize(icon_size);
+    m_pause_icon->SetMaxSize(icon_size);
+    m_pause_icon->SetCursor(wxCursor(wxCURSOR_HAND));
+    m_pause_icon->SetBackgroundColour(DeviceUiStyle::card_background());
+    m_stop_icon = new wxStaticBitmap(buttons, wxID_ANY, load_png_icon(this, "stop.png", 20));
+    m_stop_icon->SetMinSize(icon_size);
+    m_stop_icon->SetMaxSize(icon_size);
+    m_stop_icon->SetCursor(wxCursor(wxCURSOR_HAND));
+    m_stop_icon->SetBackgroundColour(DeviceUiStyle::card_background());
+    btn_sizer->Add(m_pause_icon, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(13));
+    btn_sizer->Add(m_stop_icon, 0, wxALIGN_CENTER_VERTICAL);
+    buttons->SetSizer(btn_sizer);
+    m_pause_icon->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
+        if (!m_print_actions_enabled)
+            return;
+        if (m_print_paused) {
+            if (m_resume_handler)
+                m_resume_handler();
+        } else if (m_pause_handler) {
             m_pause_handler();
+        }
     });
-    m_stop_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
-        if (m_stop_handler)
+    m_stop_icon->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent&) {
+        if (m_print_actions_enabled && m_stop_handler)
             m_stop_handler();
     });
+    set_print_actions_enabled(false);
+    content_sizer->Add(buttons, 0, wxALIGN_CENTER_VERTICAL | wxTOP, FromDIP(22));
 
-    details->SetSizer(details_sizer);
-    content_sizer->Add(details, 1, wxEXPAND);
     m_frame->set_content(content_sizer);
     root->Add(m_frame, 1, wxEXPAND);
     SetSizer(root);
@@ -172,6 +192,10 @@ void PrintStatusPanel::apply_state(const PrintJobState& state)
         layer_text = wxString::Format("Layer: %d/N/A", state.current_layer);
     set_label_if_changed(m_layer_info, layer_text);
     set_label_if_changed(m_remaining_time, wxString::FromUTF8("Remaining: ") + time_text(active ? state.remaining_seconds : -1));
+    set_print_actions_enabled(active);
+    set_pause_resume_icon(active && state.state == PrintCommandState::Paused);
+    if (!active)
+        reset_thumbnail_placeholder();
 
     if (file_layout_needed) {
         Freeze();
@@ -180,9 +204,42 @@ void PrintStatusPanel::apply_state(const PrintJobState& state)
     }
 }
 
+void PrintStatusPanel::set_print_actions_enabled(bool enabled)
+{
+    if (m_print_actions_enabled == enabled)
+        return;
+    m_print_actions_enabled = enabled;
+
+    const wxCursor cursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW);
+    if (m_pause_icon != nullptr) {
+        m_pause_icon->Enable(enabled);
+        m_pause_icon->SetCursor(cursor);
+    }
+    if (m_stop_icon != nullptr) {
+        m_stop_icon->Enable(enabled);
+        m_stop_icon->SetCursor(cursor);
+    }
+}
+
+void PrintStatusPanel::set_pause_resume_icon(bool paused)
+{
+    if (m_pause_icon == nullptr || m_print_paused == paused)
+        return;
+    m_print_paused = paused;
+    const wxBitmap &bitmap = paused && m_resume_bitmap.IsOk() ? m_resume_bitmap : m_pause_bitmap;
+    if (bitmap.IsOk())
+        m_pause_icon->SetBitmap(bitmap);
+    m_pause_icon->Refresh();
+}
+
 void PrintStatusPanel::set_pause_handler(ActionHandler handler)
 {
     m_pause_handler = std::move(handler);
+}
+
+void PrintStatusPanel::set_resume_handler(ActionHandler handler)
+{
+    m_resume_handler = std::move(handler);
 }
 
 void PrintStatusPanel::set_stop_handler(ActionHandler handler)
@@ -201,39 +258,50 @@ void PrintStatusPanel::reset_thumbnail_placeholder()
 
 wxBitmap PrintStatusPanel::make_thumbnail_placeholder()
 {
-    const int width = FromDIP(220);
-    const int height = FromDIP(150);
+    const int width = FromDIP(120);
+    const int height = FromDIP(120);
     wxBitmap bitmap(width, height);
 
     wxMemoryDC dc(bitmap);
-    dc.SetBackground(wxBrush(*wxBLACK));
+    dc.SetBackground(wxBrush(wxColour("#EFEEED")));
     dc.Clear();
 
     wxFont font = GetFont();
-    font.SetPointSize(std::max(18, font.GetPointSize() + 12));
+    font.SetPointSize(12);
     font.SetWeight(wxFONTWEIGHT_BOLD);
     dc.SetFont(font);
-    dc.SetTextForeground(wxColour(0xF4, 0xF6, 0xF8));
 
     const wxString text = wxString::FromUTF8("Co Print");
     const wxSize text_size = dc.GetTextExtent(text);
-    const int logo_size = FromDIP(56);
-    const int gap = FromDIP(12);
-    const int group_width = logo_size + gap + text_size.GetWidth();
-    const int start_x = std::max(FromDIP(12), (width - group_width) / 2);
+    const int gap = FromDIP(4);
     const int center_y = height / 2;
+    const int logo_w = FromDIP(14);
+    const int logo_h = FromDIP(21);
 
-    wxImage logo(wxString::FromUTF8((resources_dir() + "/images/CoPrintSlicer_192px_transparent.png").c_str()), wxBITMAP_TYPE_PNG);
+    wxImage logo(wxString::FromUTF8((resources_dir() + "/images/CoPrintLogo.png").c_str()), wxBITMAP_TYPE_PNG);
     bool drew_logo = false;
-
-    if (logo.IsOk()) {
-        logo.Rescale(logo_size, logo_size, wxIMAGE_QUALITY_HIGH);
-        dc.DrawBitmap(wxBitmap(logo), start_x, center_y - logo_size / 2, true);
+    if (logo.IsOk() && logo.GetWidth() > 0 && logo.GetHeight() > 0) {
+        logo.Rescale(logo_w, logo_h, wxIMAGE_QUALITY_HIGH);
+        if (!logo.HasAlpha())
+            logo.InitAlpha();
+        if (unsigned char* alpha = logo.GetAlpha()) {
+            const int pixels = logo.GetWidth() * logo.GetHeight();
+            for (int i = 0; i < pixels; ++i)
+                alpha[i] = static_cast<unsigned char>(alpha[i] * 30 / 100);
+        }
         drew_logo = true;
     }
 
-    const int text_x = drew_logo ? start_x + logo_size + gap : (width - text_size.GetWidth()) / 2;
-    dc.DrawText(text, text_x, center_y - text_size.GetHeight() / 2);
+    const int group_width = (drew_logo ? logo_w + gap : 0) + text_size.GetWidth();
+    const int start_x = std::max(FromDIP(4), (width - group_width) / 2);
+    wxGCDC gcdc(dc);
+    gcdc.SetFont(font);
+    if (drew_logo)
+        gcdc.DrawBitmap(wxBitmap(logo), start_x, center_y - logo_h / 2, true);
+
+    const int text_x = drew_logo ? start_x + logo_w + gap : (width - text_size.GetWidth()) / 2;
+    gcdc.SetTextForeground(wxColour(0xAD, 0xAB, 0xAC, 76));
+    gcdc.DrawText(text, text_x, center_y - text_size.GetHeight() / 2);
 
     dc.SelectObject(wxNullBitmap);
     return bitmap;

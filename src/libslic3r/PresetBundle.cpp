@@ -676,16 +676,19 @@ bool is_foreign_printer_preset(const Preset &preset)
     return true;
 }
 
-std::string map_filament_type_to_coprint_generic(const std::string &filament_type)
+std::string map_filament_type_to_coprint_generic(const std::string &filament_type, bool is_quadro)
 {
-    const std::string t = boost::algorithm::to_upper_copy(filament_type);
+    const std::string t      = boost::algorithm::to_upper_copy(filament_type);
+    const std::string suffix = is_quadro ? " (Quadro)" : " (ChromaSet)";
     if (t.find("TPU") != std::string::npos)
-        return "CoPrint Generic TPU";
+        return "Co Print TPU" + suffix;
     if (t.find("PETG") != std::string::npos)
-        return "CoPrint Generic PETG";
-    if (t.find("ABS") != std::string::npos || t.find("ASA") != std::string::npos)
-        return "CoPrint Generic ABS";
-    return "CoPrint Generic PLA";
+        return "Co Print PETG" + suffix;
+    if (t.find("ASA") != std::string::npos)
+        return "Co Print ASA" + suffix;
+    if (t.find("ABS") != std::string::npos)
+        return "Co Print ABS" + suffix;
+    return "Co Print PLA" + suffix;
 }
 
 std::string format_nozzle_diameter(double diameter)
@@ -777,37 +780,157 @@ bool select_coprint_printer(PresetCollection &printers, const Preset &target)
     printers.get_edited_preset().is_visible   = true;
     return ok && is_coprint_printer_preset(printers.get_edited_preset());
 }
+
+bool config_name_or_model_is_coprint(const std::string &printer_id, const std::string &printer_model)
+{
+    if (boost::algorithm::icontains(printer_id, "Co Print"))
+        return true;
+    return boost::algorithm::istarts_with(printer_model, "Co Print");
+}
+
+const Preset *find_named_coprint_printer(const PresetCollection &printers, const std::string &name)
+{
+    if (name.empty())
+        return nullptr;
+    const Preset *preset = printers.find_preset(name, false);
+    if (preset == nullptr || !is_coprint_printer_preset(*preset))
+        return nullptr;
+    if (preset->is_project_embedded || preset->is_external)
+        return nullptr;
+    return preset;
+}
+
+void apply_coprint_target_to_config(DynamicPrintConfig &config, const Preset &coprint_printer)
+{
+    if (auto *printer_id = config.option<ConfigOptionString>("printer_settings_id", true))
+        printer_id->value = coprint_printer.name;
+    if (auto *model = config.option<ConfigOptionString>("printer_model", true))
+        model->value = coprint_printer.config.opt_string("printer_model");
+    if (auto *variant = config.option<ConfigOptionString>("printer_variant", true))
+        variant->value = coprint_printer.config.opt_string("printer_variant");
+    if (const auto *defaults = coprint_printer.config.option<ConfigOptionStrings>("default_print_profile");
+        defaults && !defaults->values.empty()) {
+        if (auto *print_id = config.option<ConfigOptionString>("print_settings_id", true))
+            print_id->value = defaults->values.front();
+    } else if (const auto *default_print = coprint_printer.config.option<ConfigOptionString>("default_print_profile")) {
+        if (!default_print->value.empty()) {
+            if (auto *print_id = config.option<ConfigOptionString>("print_settings_id", true))
+                print_id->value = default_print->value;
+        }
+    }
+
+    if (auto *filament_ids = config.option<ConfigOptionStrings>("filament_settings_id", true)) {
+        const bool is_quadro = boost::algorithm::icontains(coprint_printer.name, "Quadro");
+        const auto *filament_types = config.option<ConfigOptionStrings>("filament_type");
+        for (size_t i = 0; i < filament_ids->values.size(); ++i) {
+            std::string ftype = "PLA";
+            if (filament_types && i < filament_types->values.size())
+                ftype = filament_types->values[i];
+            filament_ids->values[i] = map_filament_type_to_coprint_generic(ftype, is_quadro);
+        }
+    }
+    if (auto *inherits = config.option<ConfigOptionStrings>("inherits_group", true)) {
+        for (size_t i = 0; i < inherits->values.size(); ++i)
+            inherits->values[i].clear();
+    }
+    if (auto *diff = config.option<ConfigOptionStrings>("different_settings_to_system", true)) {
+        for (auto &v : diff->values)
+            v.clear();
+    }
+}
+
+bool select_coprint_printer_and_process(PresetBundle &bundle, const Preset &target)
+{
+    if (!select_coprint_printer(bundle.printers, target))
+        return false;
+    if (const auto *defaults = bundle.printers.get_edited_preset().config.option<ConfigOptionStrings>("default_print_profile");
+        defaults && !defaults->values.empty()) {
+        if (Preset *proc = bundle.prints.find_preset(defaults->values.front(), false)) {
+            proc->is_visible = true;
+            bundle.prints.select_preset_by_name(proc->name, true);
+        }
+    } else if (const auto *default_print = bundle.printers.get_edited_preset().config.option<ConfigOptionString>("default_print_profile")) {
+        if (!default_print->value.empty()) {
+            if (Preset *proc = bundle.prints.find_preset(default_print->value, false)) {
+                proc->is_visible = true;
+                bundle.prints.select_preset_by_name(proc->name, true);
+            }
+        }
+    }
+    return true;
+}
 } // namespace
 
-void PresetBundle::enforce_coprint_identity()
+bool PresetBundle::config_uses_coprint_printer(const DynamicPrintConfig &config)
+{
+    std::string printer_id;
+    std::string printer_model;
+    if (const auto *opt = config.option<ConfigOptionString>("printer_settings_id"))
+        printer_id = opt->value;
+    if (const auto *opt = config.option<ConfigOptionString>("printer_model"))
+        printer_model = opt->value;
+    return config_name_or_model_is_coprint(printer_id, printer_model);
+}
+
+std::string PresetBundle::coprint_printer_preset_from_config(const DynamicPrintConfig &config) const
+{
+    std::string printer_id;
+    if (const auto *opt = config.option<ConfigOptionString>("printer_settings_id"))
+        printer_id = opt->value;
+    if (const Preset *preset = printers.find_preset(printer_id, false);
+        preset != nullptr && is_coprint_printer_preset(*preset) && !preset->is_project_embedded && !preset->is_external)
+        return preset->name;
+
+    if (!config_uses_coprint_printer(config))
+        return {};
+
+    std::string model;
+    if (const auto *opt = config.option<ConfigOptionString>("printer_model"))
+        model = opt->value;
+    std::string nozzle = "0.4";
+    if (const auto *opt = config.option<ConfigOptionFloats>("nozzle_diameter"); opt && !opt->values.empty())
+        nozzle = format_nozzle_diameter(opt->values.front());
+    if (!model.empty()) {
+        const std::string guess = model + " " + nozzle + " nozzle";
+        if (const Preset *preset = printers.find_preset(guess, false);
+            preset != nullptr && is_coprint_printer_preset(*preset) && !preset->is_project_embedded && !preset->is_external)
+            return preset->name;
+    }
+    if (boost::algorithm::icontains(printer_id, "Co Print"))
+        return printer_id;
+    return {};
+}
+
+void PresetBundle::enforce_coprint_identity(const std::string &preferred_printer_preset)
 {
     bool changed = false;
 
     // 1) Printer MUST be Co Print ChromaSet or Quadro. Never keep Bambu/other vendors.
+    //    A preferred target (user dialog / last-used / embedded Co Print) wins over auto ChromaSet.
     {
         Preset &current_printer = this->printers.get_edited_preset();
-        if (is_foreign_printer_preset(current_printer)) {
+        const Preset *target = find_named_coprint_printer(this->printers, preferred_printer_preset);
+        if (target != nullptr && current_printer.name != target->name) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": using preferred printer '" << current_printer.name
+                                       << "' -> '" << target->name << "'";
+            if (select_coprint_printer_and_process(*this, *target))
+                changed = true;
+            else
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to select Co Print printer '" << target->name << "'";
+        } else if (is_foreign_printer_preset(current_printer)) {
             std::string nozzle = "0.4";
             if (const auto *opt = current_printer.config.option<ConfigOptionFloats>("nozzle_diameter");
                 opt && !opt->values.empty())
                 nozzle = format_nozzle_diameter(opt->values.front());
 
-            const Preset *target = find_coprint_printer(this->printers, nozzle);
+            target = find_coprint_printer(this->printers, nozzle);
             if (target != nullptr) {
                 BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": forcing printer '" << current_printer.name
                                            << "' -> '" << target->name << "' (visible=" << target->is_visible << ")";
-                if (select_coprint_printer(this->printers, *target)) {
+                if (select_coprint_printer_and_process(*this, *target))
                     changed = true;
-                    if (const auto *defaults = this->printers.get_edited_preset().config.option<ConfigOptionStrings>("default_print_profile");
-                        defaults && !defaults->values.empty()) {
-                        if (Preset *proc = this->prints.find_preset(defaults->values.front(), false)) {
-                            proc->is_visible = true;
-                            this->prints.select_preset_by_name(proc->name, true);
-                        }
-                    }
-                } else {
+                else
                     BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": failed to select Co Print printer '" << target->name << "'";
-                }
             } else {
                 BOOST_LOG_TRIVIAL(error) << __FUNCTION__
                                          << ": no Co Print ChromaSet/Quadro printer preset found; refusing to keep '"
@@ -816,18 +939,20 @@ void PresetBundle::enforce_coprint_identity()
         }
     }
 
-    // 2) Filaments MUST be CoPrint Generic *; never keep Bambu/other vendor filaments.
+    // 2) Filaments MUST be Co Print *; never keep Bambu/other vendor filaments.
     //    Slot count and project colours stay as loaded from the 3MF.
+    const bool is_quadro = boost::algorithm::icontains(this->printers.get_edited_preset().name, "Quadro");
     for (size_t i = 0; i < this->filament_presets.size(); ++i) {
         const Preset *current = this->filaments.find_preset(this->filament_presets[i], false);
         if (is_coprint_filament_preset(current))
             continue;
 
         const std::string filament_type = current ? current->config.opt_string("filament_type", 0u) : std::string("PLA");
-        const std::string target_name   = map_filament_type_to_coprint_generic(filament_type);
+        const std::string target_name   = map_filament_type_to_coprint_generic(filament_type, is_quadro);
         Preset *target                  = this->filaments.find_preset(target_name, false);
         if (target == nullptr) {
-            for (const char *fallback : {"CoPrint Generic PLA", "CoPrint Generic PETG", "CoPrint Generic ABS", "CoPrint Generic TPU"}) {
+            const std::string suffix = is_quadro ? " (Quadro)" : " (ChromaSet)";
+            for (const std::string fallback : {"Co Print PLA" + suffix, "Co Print PETG" + suffix, "Co Print ABS" + suffix, "Co Print TPU" + suffix}) {
                 target = this->filaments.find_preset(fallback, false);
                 if (target)
                     break;
@@ -3540,7 +3665,7 @@ unsigned int PresetBundle::sync_ams_list(std::vector<std::pair<DynamicPrintConfi
                         maps.erase(j);
                     }
                 }
-                ams_filament_presets.push_back("CoPrint Generic PLA");//for unknow matieral
+                ams_filament_presets.push_back("Co Print PLA (ChromaSet)");//for unknow matieral
                 auto default_unknown_color = "#CECECE";
                 ams_filament_colors.push_back(default_unknown_color);
                 ams_filament_color_types.push_back("1");
@@ -4620,45 +4745,19 @@ static void convert_filament_preset_name(std::string& machine_name, std::string&
 // is_external == false on if called from ConfigWizard
 void PresetBundle::load_config_file_config(const std::string &name_or_path, bool is_external, DynamicPrintConfig &&config, Semver file_version, bool selected)
 {
+    this->load_config_file_config(name_or_path, is_external, std::move(config), file_version, selected, std::string());
+}
+
+void PresetBundle::load_config_file_config(const std::string &name_or_path, bool is_external, DynamicPrintConfig &&config, Semver file_version, bool selected, const std::string &coprint_target_printer)
+{
     // CoPrintSlicer: rewrite foreign project identity before any external preset is installed/selected.
-    if (is_external) {
-        std::string nozzle = "0.4";
-        if (const auto *opt = config.option<ConfigOptionFloats>("nozzle_diameter"); opt && !opt->values.empty())
-            nozzle = format_nozzle_diameter(opt->values.front());
-
-        if (const Preset *printer = find_coprint_printer(this->printers, nozzle)) {
-            if (auto *printer_id = config.option<ConfigOptionString>("printer_settings_id", true))
-                printer_id->value = printer->name;
-            if (auto *model = config.option<ConfigOptionString>("printer_model", true))
-                model->value = printer->config.opt_string("printer_model");
-            if (auto *variant = config.option<ConfigOptionString>("printer_variant", true))
-                variant->value = printer->config.opt_string("printer_variant");
-            if (const auto *defaults = printer->config.option<ConfigOptionStrings>("default_print_profile");
-                defaults && !defaults->values.empty()) {
-                if (auto *print_id = config.option<ConfigOptionString>("print_settings_id", true))
-                    print_id->value = defaults->values.front();
-            }
-            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": sanitized external printer -> '" << printer->name << "'";
-        }
-
-        if (auto *filament_ids = config.option<ConfigOptionStrings>("filament_settings_id", true)) {
-            const auto *filament_types = config.option<ConfigOptionStrings>("filament_type");
-            for (size_t i = 0; i < filament_ids->values.size(); ++i) {
-                std::string ftype = "PLA";
-                if (filament_types && i < filament_types->values.size())
-                    ftype = filament_types->values[i];
-                filament_ids->values[i] = map_filament_type_to_coprint_generic(ftype);
-            }
-        }
-        if (auto *inherits = config.option<ConfigOptionStrings>("inherits_group", true)) {
-            // Keep print/printer inherits empty so system Co Print profiles are used as-is.
-            // Filament inherits slot indices: [print, filament0..N-1, printer]
-            for (size_t i = 0; i < inherits->values.size(); ++i)
-                inherits->values[i].clear();
-        }
-        if (auto *diff = config.option<ConfigOptionStrings>("different_settings_to_system", true)) {
-            for (auto &v : diff->values)
-                v.clear();
+    // Native Co Print projects keep their printer/filaments. Foreign projects are remapped only when
+    // a target printer was chosen (dialog / restore last-used). Never auto-pick ChromaSet here.
+    if (is_external && !config_uses_coprint_printer(config)) {
+        const Preset *coprint_printer = find_named_coprint_printer(this->printers, coprint_target_printer);
+        if (coprint_printer != nullptr) {
+            apply_coprint_target_to_config(config, *coprint_printer);
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << ": sanitized external printer -> '" << coprint_printer->name << "'";
         }
     }
 
@@ -4975,7 +5074,7 @@ void PresetBundle::load_config_file_config(const std::string &name_or_path, bool
 
     // CoPrint: foreign projects (BBL/etc.) keep geometry & colours but adopt Co Print identity.
     if (is_external)
-        this->enforce_coprint_identity();
+        this->enforce_coprint_identity(coprint_target_printer);
 
     //BBS
     //const std::string &physical_printer = config.option<ConfigOptionString>("physical_printer_settings_id", true)->value;

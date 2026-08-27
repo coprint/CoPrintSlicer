@@ -14,10 +14,15 @@
 #include "GLCanvas3D.hpp"
 #include "Plater.hpp"
 #include "Camera.hpp"
+#include "2DBed.hpp"
 
 #include <glad/gl.h>
 
+#include <algorithm>
+#include <iterator>
+
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/log/trivial.hpp>
 
@@ -31,6 +36,23 @@ static const float GROUND_Z = -0.04f;
 
 namespace Slic3r {
 namespace GUI {
+
+bool is_coprint_quadro_printer()
+{
+    auto bundle = wxGetApp().preset_bundle;
+    if (bundle == nullptr)
+        return false;
+    const auto *opt = bundle->printers.get_edited_preset().config.opt<ConfigOptionString>("printer_model");
+    return opt != nullptr && boost::algorithm::icontains(opt->value, "Quadro");
+}
+
+bool Bed3D::is_quadro_bed() const
+{
+    if (boost::algorithm::icontains(m_model_filename, "Quadro") ||
+        boost::algorithm::icontains(m_texture_filename, "Quadro"))
+        return true;
+    return is_coprint_quadro_printer();
+}
 
 bool init_model_from_poly(GLModel &model, const ExPolygon &poly, float z)
 {
@@ -184,8 +206,8 @@ const float Bed3D::Axes::DefaultTipLength = 5.0f;
 // ORCA make bed colors accessable for 2D bed
 ColorRGBA Bed3D::DEFAULT_MODEL_COLOR             = { 0.3255f, 0.337f, 0.337f, 1.0f };
 ColorRGBA Bed3D::DEFAULT_MODEL_COLOR_DARK        = { 0.255f, 0.255f, 0.283f, 1.0f };
-ColorRGBA Bed3D::DEFAULT_SOLID_GRID_COLOR        = { 0.9f, 0.9f, 0.9f, 1.0f };
-ColorRGBA Bed3D::DEFAULT_TRANSPARENT_GRID_COLOR  = { 0.9f, 0.9f, 0.9f, 0.6f };
+ColorRGBA Bed3D::DEFAULT_SOLID_GRID_COLOR        = { 133.0f / 255.0f, 139.0f / 255.0f, 136.0f / 255.0f, 1.0f }; // #858B88
+ColorRGBA Bed3D::DEFAULT_TRANSPARENT_GRID_COLOR  = { 133.0f / 255.0f, 139.0f / 255.0f, 136.0f / 255.0f, 1.0f }; // #858B88
 
 ColorRGBA Bed3D::AXIS_X_COLOR = ColorRGBA::X();
 ColorRGBA Bed3D::AXIS_Y_COLOR = ColorRGBA::Y();
@@ -251,10 +273,10 @@ void Bed3D::Axes::render()
 bool Bed3D::set_shape(const Pointfs& printable_area, const double printable_height, std::vector<Pointfs> extruder_areas, std::vector<double> extruder_heights, const std::string& custom_model, bool force_as_custom,
     const Vec2d position, bool with_reset)
 {
-    /*auto check_texture = [](const std::string& texture) {
+    auto check_texture = [](const std::string& texture) {
         boost::system::error_code ec; // so the exists call does not throw (e.g. after a permission problem)
         return !texture.empty() && (boost::algorithm::iends_with(texture, ".png") || boost::algorithm::iends_with(texture, ".svg")) && boost::filesystem::exists(texture, ec);
-    };*/
+    };
 
     auto check_model = [](const std::string& model) {
         boost::system::error_code ec;
@@ -273,11 +295,11 @@ bool Bed3D::set_shape(const Pointfs& printable_area, const double printable_heig
         texture = system_texture;
     }
 
-    /*std::string texture_filename = custom_texture.empty() ? texture : custom_texture;
+    std::string texture_filename = texture;
     if (! texture_filename.empty() && ! check_texture(texture_filename)) {
         BOOST_LOG_TRIVIAL(error) << "Unable to load bed texture: " << texture_filename;
         texture_filename.clear();
-    }*/
+    }
 
     std::string model_filename = custom_model.empty() ? model : custom_model;
     if (! model_filename.empty() && ! check_model(model_filename)) {
@@ -316,12 +338,14 @@ bool Bed3D::set_shape(const Pointfs& printable_area, const double printable_heig
     else
         m_build_volume = BuildVolume { printable_area, printable_height, m_extruder_shapes, m_extruder_heights };
     m_type = type;
-    //m_texture_filename = texture_filename;
+    m_texture_filename = texture_filename;
     m_model_filename = model_filename;
     //BBS add default bed
     m_triangles.reset();
+    m_gridlines.reset();
+    m_texture_quad.reset();
     if (with_reset) {
-        //m_texture.reset();
+        m_texture.reset();
         m_model.reset();
     }
     //BBS: add part plate logic, always update model offset
@@ -450,8 +474,8 @@ std::tuple<Bed3D::Type, std::string, std::string> Bed3D::detect_type(const Point
                             model_filename = bundle->get_stl_model_for_printer_model(printer_model->value);
                         }
                     }
-                    //std::string model_filename = PresetUtils::system_printer_bed_model(*curr);
-                    //std::string texture_filename = PresetUtils::system_printer_bed_texture(*curr);
+                    // CoPrint: re-enabled, used by render_texture() to draw the bed_texture image.
+                    texture_filename = PresetUtils::system_printer_bed_texture(*curr);
                     if (!model_filename.empty())
                         return { Type::System, model_filename, texture_filename };
                 }
@@ -472,149 +496,95 @@ void Bed3D::render_axes()
 
 void Bed3D::render_system(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom)
 {
-    render_model(view_matrix, projection_matrix);
+    if (!bottom)
+        // Quadro and ChromaSet: STL plate from above. SVG lettering is drawn after the PartPlate grid.
+        render_model(view_matrix, projection_matrix);
+    else
+        render_gridlines(view_matrix, projection_matrix);
 
-    /*if (show_texture)
-        render_texture(bottom, canvas);*/
+    if (!bottom && !boost::algorithm::iends_with(m_texture_filename, ".svg"))
+        // Opaque PNG beds stay in this pass so the plate grid can overlay them.
+        render_texture(bottom, canvas);
 }
 
-/*void Bed3D::render_texture(bool bottom, GLCanvas3D& canvas)
+void Bed3D::render_svg_overlay(GLCanvas3D& canvas, bool bottom)
 {
-    GLTexture* texture = const_cast<GLTexture*>(&m_texture);
-    GLTexture* temp_texture = const_cast<GLTexture*>(&m_temp_texture);
+    if (bottom)
+        return;
+    if (!boost::algorithm::iends_with(m_texture_filename, ".svg"))
+        return;
+    render_texture(bottom, canvas);
+}
 
+// CoPrint: draws m_texture_filename (the machine's bed_texture) over a quad that covers the
+// printable area plus any part of the bed model that extends beyond it (see update_texture_quad()),
+// so bed artwork with e.g. non-printable handle tabs baked in lines up with the actual model shape.
+// Adapted from the previous (GLModel/GLTexture API from before the GLModel refactor) implementation
+// to the current APIs; modeled after PartPlate::render_logo_texture() which uses the same approach.
+void Bed3D::render_texture(bool bottom, GLCanvas3D& canvas)
+{
     if (m_texture_filename.empty()) {
-        texture->reset();
-        render_default(bottom, false);
+        m_texture.reset();
         return;
     }
 
-    if (texture->get_id() == 0 || texture->get_source() != m_texture_filename) {
-        texture->reset();
+    if (m_texture.get_id() == 0 || m_texture.get_source() != m_texture_filename) {
+        m_texture.reset();
+        m_texture_quad.reset();
 
-        if (boost::algorithm::iends_with(m_texture_filename, ".svg")) {
-            // use higher resolution images if graphic card and opengl version allow
-            GLint max_tex_size = OpenGLManager::get_gl_info().get_max_tex_size();
-            if (temp_texture->get_id() == 0 || temp_texture->get_source() != m_texture_filename) {
-                // generate a temporary lower resolution texture to show while no main texture levels have been compressed
-                if (!temp_texture->load_from_svg_file(m_texture_filename, false, false, false, max_tex_size / 8)) {
-                    render_default(bottom, false);
-                    return;
-                }
-                canvas.request_extra_frame();
-            }
-
-            // starts generating the main texture, compression will run asynchronously
-            if (!texture->load_from_svg_file(m_texture_filename, true, true, true, max_tex_size)) {
-                render_default(bottom, false);
-                return;
-            }
-        }
-        else if (boost::algorithm::iends_with(m_texture_filename, ".png")) {
-            // generate a temporary lower resolution texture to show while no main texture levels have been compressed
-            if (temp_texture->get_id() == 0 || temp_texture->get_source() != m_texture_filename) {
-                if (!temp_texture->load_from_file(m_texture_filename, false, GLTexture::None, false)) {
-                    render_default(bottom, false);
-                    return;
-                }
-                canvas.request_extra_frame();
-            }
-
-            // starts generating the main texture, compression will run asynchronously
-            if (!texture->load_from_file(m_texture_filename, true, GLTexture::MultiThreaded, true)) {
-                render_default(bottom, false);
-                return;
-            }
-        }
-        else {
-            render_default(bottom, false);
+        // Cap like PartPlate (2048). Full GL max is 8192 on Windows; SVG mipmaps
+        // at that size freeze Prepare/Preview, and async DXT5 leaves a black plate
+        // until the compressor finishes (Mac often has no S3TC so it showed sooner).
+        const GLint max_tex_size = OpenGLManager::get_gl_info().get_max_tex_size();
+        const GLint bed_tex_size = std::min(max_tex_size, 2048);
+        const bool loaded = boost::algorithm::iends_with(m_texture_filename, ".svg")
+            ? m_texture.load_from_svg_file(m_texture_filename, false, false, true, bed_tex_size)
+            : m_texture.load_from_file(m_texture_filename, false, GLTexture::None, true);
+        if (!loaded) {
+            BOOST_LOG_TRIVIAL(warning) << __FUNCTION__ << boost::format(": failed to load bed texture from %1%") % m_texture_filename;
             return;
         }
     }
-    else if (texture->unsent_compressed_data_available()) {
+    else if (m_texture.unsent_compressed_data_available()) {
         // sends to gpu the already available compressed levels of the main texture
-        texture->send_compressed_data_to_gpu();
-
-        // the temporary texture is not needed anymore, reset it
-        if (temp_texture->get_id() != 0)
-            temp_texture->reset();
-
+        m_texture.send_compressed_data_to_gpu();
         canvas.request_extra_frame();
     }
 
-    if (m_triangles.get_vertices_count() > 0) {
-        GLShaderProgram* shader = wxGetApp().get_shader("printbed");
-        if (shader != nullptr) {
-            shader->start_using();
-            const Camera& camera = wxGetApp().plater()->get_camera();
-            shader->set_uniform("view_model_matrix", camera.get_view_matrix());
-            shader->set_uniform("projection_matrix", camera.get_projection_matrix());
-            shader->set_uniform("transparent_background", bottom);
-            shader->set_uniform("svg_source", boost::algorithm::iends_with(m_texture.get_source(), ".svg"));
+    update_texture_quad();
+    if (!m_texture_quad.is_initialized())
+        return;
 
-            unsigned int* vbo_id = const_cast<unsigned int*>(&m_vbo_id);
+    GLShaderProgram* shader = wxGetApp().get_shader("printbed");
+    if (shader == nullptr)
+        return;
 
-            if (*vbo_id == 0) {
-                glsafe(::glGenBuffers(1, vbo_id));
-                glsafe(::glBindBuffer(GL_ARRAY_BUFFER, *vbo_id));
-                glsafe(::glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)m_triangles.get_vertices_data_size(), (const GLvoid*)m_triangles.get_vertices_data(), GL_STATIC_DRAW));
-                glsafe(::glBindBuffer(GL_ARRAY_BUFFER, 0));
-            }
+    shader->start_using();
+    const Camera& camera = wxGetApp().plater()->get_camera();
+    shader->set_uniform("view_model_matrix", camera.get_view_matrix());
+    shader->set_uniform("projection_matrix", camera.get_projection_matrix());
+    shader->set_uniform("transparent_background", bottom);
+    // svg_source paints an opaque grey quad and would hide the plate grid under the artwork.
+    shader->set_uniform("svg_source", false);
 
-            glsafe(::glEnable(GL_DEPTH_TEST));
-            if (bottom)
-                glsafe(::glDepthMask(GL_FALSE));
+    glsafe(::glEnable(GL_DEPTH_TEST));
+    glsafe(::glDepthMask(GL_FALSE));
+    glsafe(::glEnable(GL_BLEND));
+    glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+    if (bottom)
+        glsafe(::glFrontFace(GL_CW));
 
-            glsafe(::glEnable(GL_BLEND));
-            glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+    glsafe(::glBindTexture(GL_TEXTURE_2D, (GLuint)m_texture.get_id()));
+    m_texture_quad.render();
+    glsafe(::glBindTexture(GL_TEXTURE_2D, 0));
 
-            if (bottom)
-                glsafe(::glFrontFace(GL_CW));
+    if (bottom)
+        glsafe(::glFrontFace(GL_CCW));
+    glsafe(::glDisable(GL_BLEND));
+    glsafe(::glDepthMask(GL_TRUE));
 
-            unsigned int stride = m_triangles.get_vertex_data_size();
-
-            GLint position_id = shader->get_attrib_location("v_position");
-            GLint tex_coords_id = shader->get_attrib_location("v_tex_coords");
-
-            // show the temporary texture while no compressed data is available
-            GLuint tex_id = (GLuint)temp_texture->get_id();
-            if (tex_id == 0)
-                tex_id = (GLuint)texture->get_id();
-
-            glsafe(::glBindTexture(GL_TEXTURE_2D, tex_id));
-            glsafe(::glBindBuffer(GL_ARRAY_BUFFER, *vbo_id));
-
-            if (position_id != -1) {
-                glsafe(::glEnableVertexAttribArray(position_id));
-                glsafe(::glVertexAttribPointer(position_id, 3, GL_FLOAT, GL_FALSE, stride, (GLvoid*)(intptr_t)m_triangles.get_position_offset()));
-            }
-            if (tex_coords_id != -1) {
-                glsafe(::glEnableVertexAttribArray(tex_coords_id));
-                glsafe(::glVertexAttribPointer(tex_coords_id, 2, GL_FLOAT, GL_FALSE, stride, (GLvoid*)(intptr_t)m_triangles.get_tex_coords_offset()));
-            }
-
-            glsafe(::glDrawArrays(GL_TRIANGLES, 0, (GLsizei)m_triangles.get_vertices_count()));
-
-            if (tex_coords_id != -1)
-                glsafe(::glDisableVertexAttribArray(tex_coords_id));
-
-            if (position_id != -1)
-                glsafe(::glDisableVertexAttribArray(position_id));
-
-            glsafe(::glBindBuffer(GL_ARRAY_BUFFER, 0));
-            glsafe(::glBindTexture(GL_TEXTURE_2D, 0));
-
-            if (bottom)
-                glsafe(::glFrontFace(GL_CCW));
-
-            glsafe(::glDisable(GL_BLEND));
-            if (bottom)
-                glsafe(::glDepthMask(GL_TRUE));
-
-            shader->stop_using();
-        }
-    }
-}*/
+    shader->stop_using();
+}
 
 //BBS: add part plate related logic
 void Bed3D::update_model_offset()
@@ -630,6 +600,7 @@ void Bed3D::update_model_offset()
     const_cast<BoundingBoxf3 &>(m_printable_bounding_box) = calc_printable_bounding_box();
     const_cast<BoundingBoxf3 &>(m_extended_bounding_box)  = calc_extended_bounding_box();
     m_triangles.reset();
+    m_texture_quad.reset(); // CoPrint: depends on the model offset, rebuild it too.
 }
 
 void Bed3D::update_bed_triangles()
@@ -667,6 +638,136 @@ void Bed3D::update_bed_triangles()
     // update extended bounding box
     const_cast<BoundingBoxf3 &>(m_printable_bounding_box) = calc_printable_bounding_box();
     const_cast<BoundingBoxf3 &>(m_extended_bounding_box)  = calc_extended_bounding_box();
+}
+
+// CoPrint: build a GLModel of line segments (used for the bed grid reference lines).
+static bool init_model_from_lines(GLModel& model, const Lines& lines, float z)
+{
+    if (lines.empty())
+        return false;
+
+    GLModel::Geometry init_data;
+    init_data.format = { GLModel::Geometry::EPrimitiveType::Lines, GLModel::Geometry::EVertexLayout::P3 };
+    init_data.reserve_vertices(2 * lines.size());
+    init_data.reserve_indices(2 * lines.size());
+
+    for (const Line& l : lines) {
+        init_data.add_vertex(Vec3f(unscale<float>(l.a.x()), unscale<float>(l.a.y()), z));
+        init_data.add_vertex(Vec3f(unscale<float>(l.b.x()), unscale<float>(l.b.y()), z));
+        const unsigned int vertices_counter = (unsigned int) init_data.vertices_count();
+        init_data.add_line(vertices_counter - 2, vertices_counter - 1);
+    }
+
+    model.init_from(std::move(init_data));
+    return true;
+}
+
+// CoPrint: rebuild the bed grid reference lines from the raw bed shape (world coordinates).
+// Kept independent from the STL model's own offset/transform so it stays correctly aligned
+// regardless of whether a bed_model (STL) is used or not, and regardless of view angle.
+void Bed3D::update_gridlines()
+{
+    if (m_gridlines.is_initialized() || m_bed_shape.size() < 3)
+        return;
+
+    std::vector<Vec2d> world_shape;
+    world_shape.reserve(m_bed_shape.size());
+    for (const Vec2d& p : m_bed_shape)
+        world_shape.emplace_back(p + m_position);
+    const ExPolygon poly{ Polygon::new_scale(world_shape) };
+    const BoundingBox bed_bbox = poly.contour.bounding_box();
+
+    const int step_mm = Bed_2D::calculate_grid_step(bed_bbox, scale_(1.00));
+    const coord_t step = scale_(double(step_mm));
+    Polylines axes_lines;
+    for (coord_t x = bed_bbox.min.x(); x <= bed_bbox.max.x(); x += step) {
+        Polyline line;
+        line.append(Point(x, bed_bbox.min.y()));
+        line.append(Point(x, bed_bbox.max.y()));
+        axes_lines.push_back(line);
+    }
+    for (coord_t y = bed_bbox.min.y(); y <= bed_bbox.max.y(); y += step) {
+        Polyline line;
+        line.append(Point(bed_bbox.min.x(), y));
+        line.append(Point(bed_bbox.max.x(), y));
+        axes_lines.push_back(line);
+    }
+
+    // clip with a slightly grown expolygon because our lines lay on the contours and may get erroneously clipped
+    Lines gridlines = to_lines(intersection_pl(axes_lines, offset_ex(poly, (float) SCALED_EPSILON)));
+
+    // append bed contour
+    const Lines contour_lines = to_lines(poly);
+    std::copy(contour_lines.begin(), contour_lines.end(), std::back_inserter(gridlines));
+
+    if (!init_model_from_lines(m_gridlines, gridlines, GROUND_Z + 0.02f))
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": Unable to create bed grid lines\n";
+}
+
+// CoPrint: textured quad for bed_texture. ChromaSet covers the printable rectangle.
+// Quadro SVG is a drawing of the whole PEI sheet (printable square + handle tabs), so
+// the quad follows the STL's world XY instead of being squashed into 300×300.
+void Bed3D::update_texture_quad()
+{
+    if (m_texture_quad.is_initialized())
+        return;
+
+    if (m_bed_shape.empty())
+        return;
+
+    // start from the raw printable area extents (no axes/tip-radius padding, unlike m_printable_bounding_box)
+    // Offset by m_position so the texture follows the currently selected part plate.
+    Vec2d min = m_bed_shape.front() + m_position;
+    Vec2d max = min;
+    for (const Vec2d& p : m_bed_shape) {
+        const Vec2d world = p + m_position;
+        min = min.cwiseMin(world).eval();
+        max = max.cwiseMax(world).eval();
+    }
+
+    if (is_quadro_bed()) {
+        BoundingBoxf3 model_bb = m_model.get_bounding_box();
+        if (model_bb.defined) {
+            // STL is centered on the body; offset places the square on the printable area and
+            // lets the front/back tabs hang outside (front ~Y<0). Same aspect as the SVG.
+            model_bb.translate(m_model_offset);
+            min.x() = model_bb.min.x();
+            min.y() = model_bb.min.y();
+            max.x() = model_bb.max.x();
+            max.y() = model_bb.max.y();
+        }
+    }
+
+    const std::vector<Vec2d> rect = { { min.x(), min.y() }, { max.x(), min.y() }, { max.x(), max.y() }, { min.x(), max.y() } };
+    const ExPolygon poly{ Polygon::new_scale(rect) };
+    if (!init_model_from_poly(m_texture_quad, poly, GROUND_Z + 0.02f))
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": Unable to create bed texture quad\n";
+}
+
+void Bed3D::render_gridlines(const Transform3d& view_matrix, const Transform3d& projection_matrix)
+{
+    update_gridlines();
+    if (!m_gridlines.is_initialized())
+        return;
+
+    GLShaderProgram* shader = wxGetApp().get_shader("flat");
+    if (shader == nullptr)
+        return;
+
+    shader->start_using();
+    shader->set_uniform("view_model_matrix", view_matrix);
+    shader->set_uniform("projection_matrix", projection_matrix);
+
+    glsafe(::glEnable(GL_DEPTH_TEST));
+    glsafe(::glEnable(GL_BLEND));
+    glsafe(::glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA));
+    glsafe(::glLineWidth(1.5f * m_scale_factor));
+
+    m_gridlines.set_color(DEFAULT_TRANSPARENT_GRID_COLOR);
+    m_gridlines.render();
+
+    glsafe(::glDisable(GL_BLEND));
+    shader->stop_using();
 }
 
 void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& projection_matrix)
@@ -718,15 +819,18 @@ void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& proj
 
 void Bed3D::render_custom(GLCanvas3D& canvas, const Transform3d& view_matrix, const Transform3d& projection_matrix, bool bottom)
 {
-    if (m_model_filename.empty()) {
+    if (m_model_filename.empty() && m_texture_filename.empty()) {
         render_default(bottom, view_matrix, projection_matrix);
         return;
     }
 
-    render_model(view_matrix, projection_matrix);
-
-    /*if (show_texture)
-        render_texture(bottom, canvas);*/
+    if (!bottom)
+        // CoPrint: hide the STL from the top view for now — the PNG already has the plate
+        // silhouette (tabs + back slot). The mesh silhouette does not match the artwork.
+        render_texture(bottom, canvas);
+    else
+        // CoPrint: the STL bed model is hidden when viewed from below, show grid reference lines instead.
+        render_gridlines(view_matrix, projection_matrix);
 }
 
 void Bed3D::render_default(bool bottom, const Transform3d& view_matrix, const Transform3d& projection_matrix)
@@ -756,12 +860,13 @@ void Bed3D::render_default(bool bottom, const Transform3d& view_matrix, const Tr
             glsafe(::glDepthMask(GL_TRUE));
         }
 
-        /*if (!picking) {
-            // draw grid
+        // CoPrint: draw grid reference lines (re-enabled; upstream had this disabled).
+        update_gridlines();
+        if (m_gridlines.is_initialized()) {
             glsafe(::glLineWidth(1.5f * m_scale_factor));
-            m_gridlines.set_color(picking ? DEFAULT_SOLID_GRID_COLOR : DEFAULT_TRANSPARENT_GRID_COLOR);
+            m_gridlines.set_color(DEFAULT_TRANSPARENT_GRID_COLOR);
             m_gridlines.render();
-        }*/
+        }
 
         glsafe(::glDisable(GL_BLEND));
 

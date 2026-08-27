@@ -22,7 +22,7 @@ static const wxFont& TAB_BUTTON_FONT_SEL = Label::Head_14;
 
 
 static const int BUTTON_DEF_HEIGHT = 46;
-static const int BUTTON_DEF_WIDTH  = 220;
+static const int BUTTON_DEF_WIDTH  = 254;
 
 
 TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools) :
@@ -32,6 +32,16 @@ TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools)
     SetDoubleBuffered(true);
 #endif //__WINDOWS__
     SetBackgroundColour(TAB_BUTTON_BG);
+#ifdef __WXMSW__
+    // wxControl does not paint unused client area; without this the space
+    // below the tab buttons shows the Tabbook page background (#EEEEEF).
+    Bind(wxEVT_ERASE_BACKGROUND, [this](wxEraseEvent &event) {
+        if (wxDC *dc = event.GetDC()) {
+            dc->SetBackground(wxBrush(GetBackgroundColour()));
+            dc->Clear();
+        }
+    });
+#endif
 
     int em = em_unit(this);
     // BBS: no gap
@@ -54,6 +64,8 @@ TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools)
     m_buttons_sizer = new wxFlexGridSizer(1, m_btn_margin, m_btn_margin);
     m_sizer->Add(m_buttons_sizer, 0, wxLEFT | wxTOP, m_btn_margin);
     m_sizer->AddStretchSpacer(1);
+    if (wxWindow *host = GetParent())
+        host->SetBackgroundColour(TAB_BUTTON_BG);
 }
 
 void TabButtonsListCtrl::OnPaint(wxPaintEvent &)
@@ -133,7 +145,7 @@ bool TabButtonsListCtrl::InsertPage(size_t n, const wxString &text, bool bSelect
     btn->SetMinSize({BUTTON_DEF_WIDTH * em / 10, BUTTON_DEF_HEIGHT * em / 10});
 
     btn->SetBackgroundColor(TAB_BUTTON_BG);
-    btn->SetTextColor(*wxBLACK);
+    btn->SetTextColor(wxColour("#434343"));
     btn->Bind(wxEVT_BUTTON, [this, btn](wxCommandEvent& event) {
         if (auto it = std::find(m_pageButtons.begin(), m_pageButtons.end(), btn); it != m_pageButtons.end()) {
             auto sel = it - m_pageButtons.begin();
@@ -209,6 +221,21 @@ void TabButtonsListCtrl::SetFooterText(const wxString& text)
         m_footer_text->SetLabel(text);
     }
     m_sizer->Layout();
+}
+
+void TabButtonsListCtrl::showPage(size_t n, bool show)
+{
+    if (n >= m_pageButtons.size())
+        return;
+    TabButton *btn = m_pageButtons[n];
+    btn->Show(show);
+    if (m_buttons_sizer != nullptr) {
+        m_buttons_sizer->Show(btn, show, true);
+        m_buttons_sizer->Layout();
+    }
+    if (m_sizer != nullptr)
+        m_sizer->Layout();
+    Layout();
 }
 
 //#endif // _WIN32

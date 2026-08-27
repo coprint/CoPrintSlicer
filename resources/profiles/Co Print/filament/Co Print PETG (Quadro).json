@@ -1,0 +1,47 @@
+{
+	"type": "filament",
+	"name": "Co Print PETG (Quadro)",
+	"inherits": "Co Print PLA (Quadro)",
+	"from": "system",
+	"setting_id": "k4m484S1samBGEVd",
+	"filament_id": "GFL99",
+	"instantiation": "true",
+	"filament_vendor": [
+		"Co Print"
+	],
+	"fan_max_speed": [
+		"90"
+	],
+	"fan_min_speed": [
+		"60"
+	],
+	"filament_deretraction_speed": [
+		"50"
+	],
+	"filament_retraction_length": [
+		"1.2"
+	],
+	"filament_retraction_speed": [
+		"50"
+	],
+	"filament_type": [
+		"PETG"
+	],
+	"hot_plate_temp": [
+		"70"
+	],
+	"hot_plate_temp_initial_layer": [
+		"70"
+	],
+	"nozzle_temperature": [
+		"240"
+	],
+	"nozzle_temperature_initial_layer": [
+		"240"
+	],
+	"compatible_printers": [
+		"Co Print Quadro 0.2 nozzle",
+		"Co Print Quadro 0.4 nozzle",
+		"Co Print Quadro 0.6 nozzle"
+	]
+}

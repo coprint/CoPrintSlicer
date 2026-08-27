@@ -10,6 +10,8 @@
 #include "libslic3r/Geometry.hpp"
 #include "libslic3r/ClipperUtils.hpp"
 
+#include <cmath>
+
 namespace Slic3r {
 namespace GUI {
 
@@ -26,13 +28,25 @@ wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(32 * wxGetApp().em_unit(), -
 
 int Bed_2D::calculate_grid_step(const BoundingBox& bb, const double& scale)
 {
-    // Orca: use 500 x 500 bed size as baseline.
-    int min_edge = (bb.size() * (1 / scale)).minCoeff(); // Get short edge 
-                                           // if the grid is too dense, we increase the step
-    return   min_edge >= 6000 ? 100        // Short edge >= 6000mm  Main Grid: 5 x 100 = 500mm
-           : min_edge >= 1200 ? 50         // Short edge >= 1200mm  Main Grid: 5 x 50  = 250mm
-           : min_edge >= 600  ? 20         // Short edge >= 600mm   Main Grid: 5 x 20  = 100mm
-           : 10;                           // Short edge <  600mm   Main Grid: 5 x 10  =  50mm
+    const int min_edge = int(std::lround((bb.size().cast<double>() * (1.0 / scale)).minCoeff()));
+    if (min_edge <= 0)
+        return 20;
+
+    // Prefer 5 major cells along the short edge when they tile it exactly.
+    // 300 mm → 60 mm major / 12 mm minor → 5×5 = 25 large squares.
+    constexpr int k_major_count = 5;
+    constexpr int k_minor_per_major = 5;
+    if (min_edge % k_major_count == 0) {
+        const int major = min_edge / k_major_count;
+        if (major % k_minor_per_major == 0)
+            return major / k_minor_per_major;
+        return std::max(1, major);
+    }
+
+    return   min_edge >= 6000 ? 100
+           : min_edge >= 1200 ? 50
+           : min_edge >= 600  ? 20
+           : 20;
 }
 
 std::vector<Polylines> Bed_2D::generate_grid(const ExPolygon& poly, const BoundingBox& bb, const Vec2d& origin, const double& step, const double& scale)
