@@ -275,8 +275,11 @@ std::string friendly_host_from_address(const std::string& addr)
     const auto slash = value.find('/');
     if (slash != std::string::npos)
         value = value.substr(0, slash);
-    if (value.size() > 5 && value.compare(value.size() - 5, 5, ":7125") == 0)
-        value.resize(value.size() - 5);
+    if (std::count(value.begin(), value.end(), ':') == 1) {
+        const auto colon = value.rfind(':');
+        if (colon != std::string::npos)
+            value = value.substr(0, colon);
+    }
     return value;
 }
 
@@ -920,7 +923,7 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
         texts->SetBackgroundColour(kAutoCardBg);
         texts->SetCursor(wxCursor(wxCURSOR_HAND));
         auto* texts_sizer = new wxBoxSizer(wxVERTICAL);
-        const wxString name = from_u8(printer.name.empty() ? printer.ip : printer.name);
+        const wxString name = from_u8(printer.name.empty() ? host_without_port(printer.ip) : printer.name);
         auto* name_lbl = new wxStaticText(texts, wxID_ANY, name, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
         wxFont name_font = Label::sysFont(13, false);
         name_font.SetWeight(wxFONTWEIGHT_SEMIBOLD);
@@ -928,7 +931,7 @@ void CoPrintPrinterPicker::rebuild_auto_list(bool force)
         name_lbl->SetForegroundColour(kTextPrimary);
         name_lbl->SetBackgroundColour(kAutoCardBg);
         name_lbl->SetCursor(wxCursor(wxCURSOR_HAND));
-        const wxString ip = from_u8(printer.ip);
+        const wxString ip = from_u8(host_without_port(printer.ip));
         auto* ip_lbl = new wxStaticText(texts, wxID_ANY, ip, wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
         wxFont ip_font = Label::sysFont(10, false);
         ip_font.SetWeight(wxFONTWEIGHT_LIGHT);
@@ -1069,7 +1072,7 @@ void CoPrintPrinterPicker::add_discovered_printer(const CoprintMdnsPrinter& prin
     // not Moonraker. Probe Moonraker on 7125, same as IP Connect.
     machine.dev_ip = printer.ip;
     machine.dev_id = printer.id.empty() ? machine.dev_ip : printer.id;
-    machine.dev_name = printer.name.empty() ? printer.ip : printer.name;
+    machine.dev_name = printer.name.empty() ? host_without_port(printer.ip) : printer.name;
     machine.printer_type = printer.model.empty() ? std::string("Moonraker") : printer.model;
 
     std::weak_ptr<int> lifetime = m_lifetime_token;

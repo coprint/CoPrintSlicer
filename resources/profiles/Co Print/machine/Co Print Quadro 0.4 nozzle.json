@@ -69,10 +69,10 @@
         "Direct Drive"
     ],
     "extruder_variant_list": [
-        "Direct Drive Standard,Direct Drive High Flow",
-        "Direct Drive Standard,Direct Drive High Flow",
-        "Direct Drive Standard,Direct Drive High Flow",
-        "Direct Drive Standard,Direct Drive High Flow"
+        "Direct Drive Standard",
+        "Direct Drive Standard",
+        "Direct Drive Standard",
+        "Direct Drive Standard"
     ],
     "fan_kickstart": "0",
     "fan_speedup_overhangs": "1",
@@ -362,7 +362,7 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.3",
+    "version": "2.4.0.4",
     "wipe": [
         "0",
         "0",

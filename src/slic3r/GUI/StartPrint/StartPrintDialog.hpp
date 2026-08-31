@@ -58,6 +58,7 @@ public:
     void set_mapped_tool(int mapped_tool);
     void update_printer_tool(const wxColour &color, bool has_filament, int tool_1based);
     void set_interactive(bool interactive);
+    void set_input_enabled(bool enabled);
     void bind_tool_pick_handler(ToolPickHandler handler);
 
     int      model_slot_index() const { return m_model_slot_index; }
@@ -72,6 +73,7 @@ private:
     int            m_model_slot_index{0};
     int            m_mapped_tool{1};
     bool           m_interactive{false};
+    bool           m_input_enabled{true};
     wxColour       m_model_color;
     wxString       m_model_type_name;
     ToolPickHandler m_pick_handler;
@@ -88,6 +90,7 @@ public:
 
     void prepare(int print_plate_idx);
     void prepare_from_storage(PrinterStoragePrintRequest request);
+    std::string print_target_dev_id() const { return m_print_target_dev_id; }
 
     int ShowModal() override;
 
@@ -105,6 +108,7 @@ private:
     bool has_unloaded_mapping() const;
     void assign_tools_by_color();
     void sync_filaments_then_map(bool remap);
+    void clear_stale_printer_filament_ui();
     void show_tool_picker_for_slot(int model_slot, wxWindow *anchor);
 
     MachineObject *selected_machine() const;
@@ -121,7 +125,14 @@ private:
     void apply_storage_preview();
     void apply_storage_locks();
     void fill_storage_filament_slots();
-    void start_storage_print();
+    void start_print_job();
+    std::string tool_map_script() const;
+    std::string print_state_script() const;
+    void set_sending_ui(bool sending);
+    void set_send_status(const wxString &message);
+    void begin_device_countdown(const std::string &dev_id);
+    void on_countdown_tick(wxTimerEvent &event);
+    void open_device_page_and_close();
 
     Plater *m_plater{nullptr};
     int     m_print_plate_idx{0};
@@ -159,11 +170,18 @@ private:
 
     Button *m_cancel_button{nullptr};
     Button *m_start_button{nullptr};
+    wxPanel      *m_send_status_host{nullptr};
+    wxStaticText *m_send_status{nullptr};
 
     std::vector<std::string> m_printer_ids;
     wxTimer                  m_refresh_timer;
+    wxTimer                  m_countdown_timer;
+    int                      m_countdown_left{0};
+    std::string              m_print_target_dev_id;
     bool                     m_user_mapped_tools{false};
     bool                     m_filament_sync_done{false};
+    unsigned                 m_filament_sync_generation{0};
+    bool                     m_sending{false};
 };
 
 }} // namespace Slic3r::GUI

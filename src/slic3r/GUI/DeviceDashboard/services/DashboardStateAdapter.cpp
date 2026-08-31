@@ -75,6 +75,22 @@ int predicted_seconds(const MachineObject* machine)
     return -1;
 }
 
+std::string host_without_port(std::string value)
+{
+    const auto scheme = value.find("://");
+    if (scheme != std::string::npos)
+        value = value.substr(scheme + 3);
+    const auto slash = value.find('/');
+    if (slash != std::string::npos)
+        value = value.substr(0, slash);
+    if (std::count(value.begin(), value.end(), ':') == 1) {
+        const auto colon = value.rfind(':');
+        if (colon != std::string::npos)
+            value = value.substr(0, colon);
+    }
+    return value;
+}
+
 } // namespace
 
 DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
@@ -90,7 +106,7 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
 
     state.printer.id = machine->get_dev_id();
     state.printer.name = machine->get_dev_name();
-    state.printer.ip = machine->get_dev_ip();
+    state.printer.ip = host_without_port(machine->get_dev_ip());
     state.printer.type = machine->printer_type;
     state.printer.firmware_version = machine->get_ota_version();
 

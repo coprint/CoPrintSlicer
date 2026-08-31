@@ -18,6 +18,7 @@
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Preset.hpp"
 #include "libslic3r/Utils.hpp"
+#include "libslic3r/format.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
@@ -29,6 +30,7 @@
 #include <memory>
 #include <set>
 #include <thread>
+#include <wx/filename.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
 #include <wx/graphics.h>
@@ -39,6 +41,7 @@
 #include <wx/weakref.h>
 
 #include <boost/filesystem.hpp>
+#include <boost/log/trivial.hpp>
 #include <nlohmann/json.hpp>
 
 namespace fs = boost::filesystem;
@@ -73,12 +76,28 @@ MachineObject *find_machine_by_id(Slic3r::DeviceManager *dev_manager, const std:
     return dev_manager->find_lan_machine_for_agent_messages(dev_id);
 }
 
+std::string host_without_port(std::string value)
+{
+    const auto scheme = value.find("://");
+    if (scheme != std::string::npos)
+        value = value.substr(scheme + 3);
+    const auto slash = value.find('/');
+    if (slash != std::string::npos)
+        value = value.substr(0, slash);
+    if (std::count(value.begin(), value.end(), ':') == 1) {
+        const auto colon = value.rfind(':');
+        if (colon != std::string::npos)
+            value = value.substr(0, colon);
+    }
+    return value;
+}
+
 wxString format_printer_label(MachineObject *obj)
 {
     if (obj == nullptr)
         return wxEmptyString;
     wxString name = from_u8(obj->get_dev_name());
-    wxString ip = from_u8(obj->get_dev_ip());
+    wxString ip = from_u8(host_without_port(obj->get_dev_ip()));
     if (!ip.empty() && name != ip)
         return wxString::Format("%s (%s)", name, ip);
     return name.empty() ? ip : name;
@@ -121,47 +140,23 @@ std::string moonraker_base_url(const MachineObject *obj)
     return "http://" + host;
 }
 
-void send_tool_map_sync(MachineObject *obj, int model_slot_index, int physical_tool)
+bool post_moonraker_json(const std::string &url, const std::string &api_key,
+                         const nlohmann::json &payload, int timeout_max, std::string &error_message)
 {
-    const std::string base = moonraker_base_url(obj);
-    if (obj == nullptr || !obj->is_online() || base.empty())
-        return;
-
-    const int logical_index  = std::clamp(model_slot_index, 0, 3);
-    const int physical_index = std::clamp(physical_tool - 1, 0, 3);
-    const std::string script = "SET_TOOL_MAP LOGICAL=" + std::to_string(logical_index) +
-                               " PHYSICAL=" + std::to_string(physical_index);
-
-    nlohmann::json payload;
-    payload["script"] = script;
-    Http::post(base + "/printer/gcode/script")
-        .header("Content-Type", "application/json")
-        .set_post_body(payload.dump())
-        .timeout_connect(2)
-        .timeout_max(4)
-        .perform_sync();
-}
-
-bool start_printer_storage_print(const std::string &base_url, const std::string &api_key,
-                                 const std::string &path, std::string &error_message)
-{
-    if (path.empty() || base_url.empty()) {
-        error_message = "Missing printer URL or file path";
+    if (url.empty()) {
+        error_message = "Missing printer URL";
         return false;
     }
 
-    nlohmann::json payload;
-    payload["filename"] = path;
-
     bool ok = false;
     unsigned status = 0;
-    auto http = Http::post(base_url + "/printer/print/start");
+    auto http = Http::post(url);
     if (!api_key.empty())
         http.header("X-Api-Key", api_key);
     http.header("Content-Type", "application/json")
         .set_post_body(payload.dump())
         .timeout_connect(5)
-        .timeout_max(15)
+        .timeout_max(timeout_max)
         .on_complete([&](std::string, unsigned code) {
             status = code;
             ok = code >= 200 && code < 300;
@@ -176,6 +171,41 @@ bool start_printer_storage_print(const std::string &base_url, const std::string 
     if (!ok && error_message.empty())
         error_message = "HTTP " + std::to_string(status);
     return ok;
+}
+
+bool post_gcode_script(const std::string &base_url, const std::string &api_key,
+                       const std::string &script, std::string &error_message)
+{
+    if (script.empty())
+        return true;
+    nlohmann::json payload;
+    payload["script"] = script;
+    BOOST_LOG_TRIVIAL(info) << "StartPrint: gcode script\n" << script;
+    return post_moonraker_json(base_url + "/printer/gcode/script", api_key, payload, 8, error_message);
+}
+
+bool start_printer_storage_print(const std::string &base_url, const std::string &api_key,
+                                 const std::string &path, std::string &error_message)
+{
+    if (path.empty()) {
+        error_message = "Missing printer URL or file path";
+        return false;
+    }
+    nlohmann::json payload;
+    payload["filename"] = path;
+    BOOST_LOG_TRIVIAL(info) << "StartPrint: printer.print.start filename=" << path;
+    return post_moonraker_json(base_url + "/printer/print/start", api_key, payload, 15, error_message);
+}
+
+std::string remote_gcode_filename(const std::string &local_path)
+{
+    wxFileName fn(from_u8(local_path));
+    wxString name = fn.GetFullName();
+    if (name.empty())
+        name = "print.gcode";
+    if (!name.Lower().EndsWith(".gcode"))
+        name += ".gcode";
+    return into_u8(name);
 }
 
 std::vector<FilamentInfo> filament_rows_from_project()
@@ -967,7 +997,15 @@ void StartPrintFilamentSlot::set_interactive(bool interactive)
         style_block(m_printer_half, kDisconnectedToolFill, wxString::FromUTF8("/"));
         return;
     }
-    m_printer_half->SetCursor(wxCursor(wxCURSOR_HAND));
+    m_printer_half->SetCursor(wxCursor((m_interactive && m_input_enabled) ? wxCURSOR_HAND : wxCURSOR_ARROW));
+}
+
+void StartPrintFilamentSlot::set_input_enabled(bool enabled)
+{
+    m_input_enabled = enabled;
+    if (m_printer_half == nullptr)
+        return;
+    m_printer_half->SetCursor(wxCursor((m_interactive && m_input_enabled) ? wxCURSOR_HAND : wxCURSOR_ARROW));
 }
 
 void StartPrintFilamentSlot::update_printer_tool(const wxColour &color, bool has_filament, int tool_1based)
@@ -994,7 +1032,7 @@ void StartPrintFilamentSlot::bind_tool_pick_handler(ToolPickHandler handler)
 void StartPrintFilamentSlot::on_printer_half_clicked(wxMouseEvent &event)
 {
     event.Skip(false);
-    if (!m_interactive)
+    if (!m_interactive || !m_input_enabled)
         return;
     if (m_pick_handler)
         m_pick_handler(m_model_slot_index, m_printer_half);
@@ -1003,6 +1041,7 @@ void StartPrintFilamentSlot::on_printer_half_clicked(wxMouseEvent &event)
 StartPrintDialog::StartPrintDialog(wxWindow *parent)
     : DPIDialog(parent, wxID_ANY, _L("Start Print"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
     , m_refresh_timer(this)
+    , m_countdown_timer(this)
 {
     m_plater = wxGetApp().plater();
     build_ui();
@@ -1208,6 +1247,26 @@ void StartPrintDialog::build_ui()
     m_options_section->SetSizer(options_outer_sizer);
     main_sizer->Add(m_options_section, 0, wxEXPAND);
 
+    const int status_h = FromDIP(48);
+    m_send_status_host = new wxPanel(this, wxID_ANY);
+    m_send_status_host->SetBackgroundColour(kPageBackground);
+    m_send_status_host->SetMinSize(wxSize(-1, status_h));
+    m_send_status_host->SetMaxSize(wxSize(-1, status_h));
+    auto *status_sizer = new wxBoxSizer(wxVERTICAL);
+    m_send_status = new wxStaticText(m_send_status_host, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+        wxALIGN_CENTRE_HORIZONTAL | wxST_NO_AUTORESIZE);
+    m_send_status->SetForegroundColour(kTextMuted);
+    {
+        wxFont font = m_send_status->GetFont();
+        font.SetPointSize(10);
+        m_send_status->SetFont(font);
+    }
+    status_sizer->AddStretchSpacer();
+    status_sizer->Add(m_send_status, 0, wxEXPAND);
+    status_sizer->AddStretchSpacer();
+    m_send_status_host->SetSizer(status_sizer);
+    main_sizer->Add(m_send_status_host, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, margin);
+
     main_sizer->AddStretchSpacer();
 
     auto *footer = new wxBoxSizer(wxHORIZONTAL);
@@ -1223,7 +1282,7 @@ void StartPrintDialog::build_ui()
     main_sizer->Add(footer, 0, wxEXPAND | wxBOTTOM, FromDIP(16));
 
     SetSizer(main_sizer);
-    SetMinSize(wxSize(FromDIP(540), FromDIP(580)));
+    SetMinSize(wxSize(FromDIP(540), FromDIP(640)));
 }
 
 void StartPrintDialog::bind_events()
@@ -1233,6 +1292,7 @@ void StartPrintDialog::bind_events()
     m_cancel_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_cancel, this);
     m_start_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_start_print, this);
     m_refresh_timer.Bind(wxEVT_TIMER, &StartPrintDialog::on_timer, this);
+    m_countdown_timer.Bind(wxEVT_TIMER, &StartPrintDialog::on_countdown_tick, this);
 
     m_task_name_edit_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_task_name_edit, this);
     m_task_name_input->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &) { on_task_name_enter(); });
@@ -1256,7 +1316,7 @@ void StartPrintDialog::bind_events()
 
 void StartPrintDialog::on_task_name_edit(wxCommandEvent &event)
 {
-    if (m_storage_mode)
+    if (m_storage_mode || m_sending)
         return;
     (void) event;
     m_is_rename_mode = true;
@@ -1349,6 +1409,11 @@ void StartPrintDialog::prepare(int print_plate_idx)
     m_storage_file_path.clear();
     m_locked_machine_id.clear();
     m_storage_request = {};
+    m_print_target_dev_id.clear();
+    m_countdown_timer.Stop();
+    m_countdown_left = 0;
+    set_sending_ui(false);
+    set_send_status(wxEmptyString);
 }
 
 void StartPrintDialog::prepare_from_storage(PrinterStoragePrintRequest request)
@@ -1358,6 +1423,11 @@ void StartPrintDialog::prepare_from_storage(PrinterStoragePrintRequest request)
     m_storage_request = std::move(request);
     m_storage_file_path = m_storage_request.file_path;
     m_locked_machine_id = m_storage_request.machine_id;
+    m_print_target_dev_id.clear();
+    m_countdown_timer.Stop();
+    m_countdown_left = 0;
+    set_sending_ui(false);
+    set_send_status(wxEmptyString);
 }
 
 void StartPrintDialog::on_dpi_changed(const wxRect &suggested_rect)
@@ -1422,6 +1492,7 @@ int StartPrintDialog::ShowModal()
     m_refresh_timer.Start(kRefreshIntervalMs);
     const int result = DPIDialog::ShowModal();
     m_refresh_timer.Stop();
+    m_countdown_timer.Stop();
     return result;
 }
 
@@ -1438,7 +1509,7 @@ void StartPrintDialog::reset_print_options()
 void StartPrintDialog::apply_storage_locks()
 {
     if (m_printer_combo != nullptr)
-        m_printer_combo->Enable(!m_storage_mode);
+        m_printer_combo->Enable(!m_storage_mode && !m_sending);
     if (m_refresh_button != nullptr)
         m_refresh_button->Show(!m_storage_mode);
     if (m_task_name_edit_button != nullptr)
@@ -1540,15 +1611,11 @@ void StartPrintDialog::fill_storage_filament_slots()
     refresh_filament_printer_sides();
 }
 
-void StartPrintDialog::start_storage_print()
+void StartPrintDialog::start_print_job()
 {
     MachineObject *obj = selected_machine();
     if (obj == nullptr || !obj->is_online() || obj->is_in_printing()) {
         show_error(this, _L("Selected printer is not ready."));
-        return;
-    }
-    if (m_storage_file_path.empty()) {
-        show_error(this, _L("Print file is missing."));
         return;
     }
     if (has_unloaded_mapping()) {
@@ -1556,33 +1623,208 @@ void StartPrintDialog::start_storage_print()
         return;
     }
 
-    for (int i = 0; i < 4; ++i) {
-        if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
-            continue;
-        send_tool_map_sync(obj, m_filament_slots[i]->model_slot_index(), m_filament_slots[i]->get_mapped_tool());
+    const std::string tool_map = tool_map_script();
+    const std::string print_state = print_state_script();
+    const std::string base = moonraker_base_url(obj);
+    if (base.empty()) {
+        show_error(this, _L("Selected printer is not ready."));
+        return;
     }
 
-    m_start_button->Enable(false);
-    m_cancel_button->Enable(false);
-
-    const std::string path = m_storage_file_path;
-    const std::string base = moonraker_base_url(obj);
     std::string api_key = obj->get_access_code();
     if (api_key.empty())
         api_key = obj->get_user_access_code();
-    std::thread([base, api_key, path, weak_dlg = wxWeakRef<StartPrintDialog>(this)]() {
+    const std::string dev_id = obj->get_dev_id();
+    m_print_target_dev_id = dev_id;
+
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    if (dev_manager)
+        dev_manager->set_selected_machine(dev_id);
+
+    NetworkAgent *agent = nullptr;
+    PrintParams params;
+    std::string remote_filename;
+    const bool upload_first = !m_storage_mode;
+
+    if (upload_first) {
+        PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
+        if (!plate_ready_for_device_print(plate)) {
+            show_error(this, _L("Slice the plate before starting a print."));
+            return;
+        }
+        agent = wxGetApp().getAgent();
+        if (agent == nullptr) {
+            show_error(this, _L("Printer network agent is not available."));
+            return;
+        }
+        const std::string gcode_path = plate->get_gcode_filename();
+        if (gcode_path.empty()) {
+            show_error(this, _L("Slice the plate before starting a print."));
+            return;
+        }
+        params.dev_id          = dev_id;
+        params.dev_ip          = obj->get_dev_ip();
+        params.dev_name        = obj->get_dev_name();
+        params.connection_type = obj->connection_type();
+        params.filename        = gcode_path;
+        params.dst_file        = gcode_path;
+        params.task_name       = m_task_name_label != nullptr ? m_task_name_label->GetLabel().utf8_string() : std::string();
+        params.project_name    = params.task_name;
+        params.plate_index     = m_print_plate_idx + 1;
+        params.password        = obj->get_access_code();
+        params.use_ssl_for_ftp = obj->local_use_ssl_for_ftp;
+        params.use_ssl_for_mqtt = obj->local_use_ssl;
+        remote_filename = remote_gcode_filename(gcode_path);
+        agent->connect_printer(dev_id, obj->get_dev_ip(), "", obj->get_access_code(), obj->local_use_ssl);
+    } else {
+        if (m_storage_file_path.empty()) {
+            show_error(this, _L("Print file is missing."));
+            return;
+        }
+        remote_filename = m_storage_file_path;
+    }
+
+    m_refresh_timer.Stop();
+    set_sending_ui(true);
+    set_send_status(_L("Sending print job..."));
+
+    std::thread([agent, params, upload_first, base, api_key, tool_map, print_state, remote_filename,
+                 dev_id, weak_dlg = wxWeakRef<StartPrintDialog>(this)]() {
         std::string error;
-        const bool ok = start_printer_storage_print(base, api_key, path, error);
-        wxGetApp().CallAfter([weak_dlg, ok, error]() {
+        bool ok = true;
+        if (upload_first) {
+            const int upload = agent->start_send_gcode_to_sdcard(params, nullptr, nullptr, nullptr);
+            if (upload != BAMBU_NETWORK_SUCCESS) {
+                ok = false;
+                error = "G-code upload failed";
+            }
+        }
+        if (ok && !post_gcode_script(base, api_key, tool_map, error))
+            ok = false;
+        if (ok && !post_gcode_script(base, api_key, print_state, error))
+            ok = false;
+        if (ok && !start_printer_storage_print(base, api_key, remote_filename, error))
+            ok = false;
+
+        wxGetApp().CallAfter([weak_dlg, ok, error, dev_id]() {
             StartPrintDialog *dlg = weak_dlg.get();
             if (dlg == nullptr)
                 return;
-            if (!ok)
+            if (!ok) {
+                dlg->set_sending_ui(false);
+                dlg->set_send_status(wxEmptyString);
+                dlg->apply_storage_locks();
+                dlg->update_start_button_state();
+                dlg->refresh_filament_printer_sides();
+                dlg->m_refresh_timer.Start(kRefreshIntervalMs);
                 show_error(dlg, error.empty() ? _L("Failed to start print. Check the printer connection and try again.")
                                               : wxString::FromUTF8(error));
-            dlg->EndModal(ok ? wxID_OK : wxID_CANCEL);
+                return;
+            }
+            dlg->begin_device_countdown(dev_id);
         });
     }).detach();
+}
+
+std::string StartPrintDialog::tool_map_script() const
+{
+    std::string script;
+    for (int i = 0; i < 4; ++i) {
+        if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
+            continue;
+        const int logical = std::clamp(m_filament_slots[i]->model_slot_index(), 0, 3);
+        const int physical = std::clamp(m_filament_slots[i]->get_mapped_tool() - 1, 0, 3);
+        if (!script.empty())
+            script += "\n";
+        script += "SET_TOOL_MAP LOGICAL=" + std::to_string(logical) +
+                  " PHYSICAL=" + std::to_string(physical);
+    }
+    return script;
+}
+
+std::string StartPrintDialog::print_state_script() const
+{
+    const int bed = (m_bed_leveling != nullptr && m_bed_leveling->GetValue()) ? 1 : 0;
+    const int flow = (m_flow_calibration != nullptr && m_flow_calibration->GetValue()) ? 1 : 0;
+    const int timelapse = (m_timelapse != nullptr && m_timelapse->GetValue()) ? 1 : 0;
+    return std::string("SET_GCODE_VARIABLE MACRO=PRINT_STATE VARIABLE=bed_leveling VALUE=") + std::to_string(bed) +
+           "\nSET_GCODE_VARIABLE MACRO=PRINT_STATE VARIABLE=flow_calibration VALUE=" + std::to_string(flow) +
+           "\nSET_GCODE_VARIABLE MACRO=PRINT_STATE VARIABLE=record_timelapse VALUE=" + std::to_string(timelapse);
+}
+
+void StartPrintDialog::set_sending_ui(bool sending)
+{
+    m_sending = sending;
+    if (m_printer_combo != nullptr)
+        m_printer_combo->Enable(!sending && !m_storage_mode);
+    if (m_refresh_button != nullptr)
+        m_refresh_button->Enable(!sending);
+    if (m_task_name_edit_button != nullptr)
+        m_task_name_edit_button->Enable(!sending && !m_storage_mode);
+    if (m_cancel_button != nullptr)
+        m_cancel_button->Enable(!sending);
+    if (m_start_button != nullptr)
+        m_start_button->Enable(false);
+    if (m_bed_leveling != nullptr)
+        m_bed_leveling->Enable(!sending);
+    if (m_timelapse != nullptr)
+        m_timelapse->Enable(!sending);
+    if (m_flow_calibration != nullptr)
+        m_flow_calibration->Enable(!sending);
+    if (m_options_section != nullptr)
+        m_options_section->Enable(!sending);
+    for (StartPrintFilamentSlot *slot : m_filament_slots) {
+        if (slot != nullptr)
+            slot->set_input_enabled(!sending);
+    }
+    if (!sending)
+        update_start_button_state();
+}
+
+void StartPrintDialog::set_send_status(const wxString &message)
+{
+    if (m_send_status == nullptr)
+        return;
+    m_send_status->SetLabel(message);
+    const int wrap_w = m_send_status_host != nullptr
+        ? std::max(FromDIP(280), m_send_status_host->GetClientSize().GetWidth())
+        : FromDIP(280);
+    if (!message.empty())
+        m_send_status->Wrap(wrap_w);
+    if (m_send_status_host != nullptr)
+        m_send_status_host->Layout();
+    m_send_status->Refresh();
+}
+
+void StartPrintDialog::begin_device_countdown(const std::string &dev_id)
+{
+    m_print_target_dev_id = dev_id;
+    m_countdown_left = 5;
+    set_send_status(from_u8(format(
+        _u8L("Successfully sent. Will automatically jump to the device page in %ss"),
+        std::to_string(m_countdown_left))));
+    m_countdown_timer.Start(1000);
+}
+
+void StartPrintDialog::on_countdown_tick(wxTimerEvent &)
+{
+    --m_countdown_left;
+    if (m_countdown_left <= 0) {
+        open_device_page_and_close();
+        return;
+    }
+    set_send_status(from_u8(format(
+        _u8L("Successfully sent. Will automatically jump to the device page in %ss"),
+        std::to_string(m_countdown_left))));
+}
+
+void StartPrintDialog::open_device_page_and_close()
+{
+    m_countdown_timer.Stop();
+    m_countdown_left = 0;
+    if (MainFrame *frame = wxGetApp().mainframe)
+        frame->jump_to_monitor(m_print_target_dev_id);
+    EndModal(wxID_OK);
 }
 
 void StartPrintDialog::refresh_from_plate()
@@ -1809,6 +2051,10 @@ void StartPrintDialog::refresh_filament_printer_sides()
     } catch (...) {
         // Silently fail if the whole function crashes
     }
+    for (StartPrintFilamentSlot *slot : m_filament_slots) {
+        if (slot != nullptr)
+            slot->set_input_enabled(!m_sending);
+    }
     update_filament_mapping_hint();
     update_start_button_state();
 }
@@ -1933,10 +2179,16 @@ void StartPrintDialog::assign_tools_by_color()
 
 void StartPrintDialog::sync_filaments_then_map(bool remap)
 {
+    const unsigned generation = ++m_filament_sync_generation;
+    const std::string machine_id = selected_machine_id();
     wxWeakRef<StartPrintDialog> weak(this);
-    auto after = [weak, remap]() {
+    auto after = [weak, remap, generation, machine_id]() {
         StartPrintDialog *dlg = weak.get();
         if (dlg == nullptr)
+            return;
+        if (dlg->m_filament_sync_generation != generation)
+            return;
+        if (dlg->selected_machine_id() != machine_id)
             return;
         dlg->m_filament_sync_done = true;
         if (dlg->m_storage_mode)
@@ -1958,8 +2210,22 @@ void StartPrintDialog::sync_filaments_then_map(bool remap)
     after();
 }
 
+void StartPrintDialog::clear_stale_printer_filament_ui()
+{
+    for (int i = 0; i < 4; ++i) {
+        if (m_printer_tool_swatches[i] != nullptr)
+            m_printer_tool_swatches[i]->set_tool(wxNullColour, false);
+        if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())
+            continue;
+        const int tool = m_filament_slots[i]->get_mapped_tool();
+        m_filament_slots[i]->update_printer_tool(wxNullColour, false, tool);
+    }
+}
+
 void StartPrintDialog::show_tool_picker_for_slot(int model_slot, wxWindow *anchor)
 {
+    if (m_sending)
+        return;
     if (model_slot < 0 || model_slot >= 4 || anchor == nullptr)
         return;
 
@@ -2022,6 +2288,8 @@ void StartPrintDialog::update_printer_status()
             m_printer_tool_swatches[i]->set_tool(info.color, info.has_filament);
         }
         refresh_filament_printer_sides();
+    } else {
+        clear_stale_printer_filament_ui();
     }
 
     if (!obj->is_online()) {
@@ -2046,6 +2314,8 @@ void StartPrintDialog::update_start_button_state()
     MachineObject *obj = selected_machine();
     if (m_start_button == nullptr)
         return;
+    if (m_sending)
+        return;
     const bool slice_ready = m_storage_mode ? !m_storage_file_path.empty() : plate_ready_for_device_print(plate);
     const bool printer_connected = obj && obj->is_online();
     const bool printer_ready = printer_connected && !obj->is_in_printing();
@@ -2067,6 +2337,8 @@ void StartPrintDialog::update_start_button_state()
 
 void StartPrintDialog::on_refresh_printers(wxCommandEvent &)
 {
+    if (m_sending)
+        return;
     refresh_printer_list();
     update_printer_status();
     update_start_button_state();
@@ -2074,7 +2346,7 @@ void StartPrintDialog::on_refresh_printers(wxCommandEvent &)
 
 void StartPrintDialog::on_printer_changed(wxCommandEvent &)
 {
-    if (m_storage_mode)
+    if (m_storage_mode || m_sending)
         return;
     auto *dev_manager = wxGetApp().getDeviceManager();
     const int selection = m_printer_combo->GetSelection();
@@ -2082,90 +2354,35 @@ void StartPrintDialog::on_printer_changed(wxCommandEvent &)
         dev_manager->set_selected_machine(m_printer_ids[selection]);
     m_user_mapped_tools = false;
     m_filament_sync_done = false;
+    ++m_filament_sync_generation;
+    if (MainFrame *frame = wxGetApp().mainframe) {
+        if (auto *controller = frame->coprint_device_controller())
+            controller->reset_loaded_tool_filaments();
+    }
+    clear_stale_printer_filament_ui();
+    update_printer_status();
+    update_start_button_state();
     sync_filaments_then_map(true);
 }
 
 void StartPrintDialog::on_cancel(wxCommandEvent &)
 {
+    if (m_sending)
+        return;
     EndModal(wxID_CANCEL);
 }
 
 void StartPrintDialog::on_start_print(wxCommandEvent &)
 {
-    if (m_storage_mode) {
-        start_storage_print();
+    if (m_sending)
         return;
-    }
-
-    PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
-    if (!plate_ready_for_device_print(plate)) {
-        show_error(this, _L("Slice the plate before starting a print."));
-        return;
-    }
-
-    MachineObject *obj = selected_machine();
-    if (obj == nullptr || !obj->is_online() || obj->is_in_printing()) {
-        show_error(this, _L("Selected printer is not ready."));
-        return;
-    }
-
-    if (has_unloaded_mapping()) {
-        show_error(this, _L("Empty filament (EF). Map each color to a loaded tool before starting."));
-        return;
-    }
-
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    if (dev_manager)
-        dev_manager->set_selected_machine(obj->get_dev_id());
-
-    NetworkAgent *agent = wxGetApp().getAgent();
-    if (agent == nullptr) {
-        show_error(this, _L("Printer network agent is not available."));
-        return;
-    }
-
-    agent->connect_printer(obj->get_dev_id(), obj->get_dev_ip(), "", obj->get_access_code(), obj->local_use_ssl);
-
-    for (int i = 0; i < 4; ++i) {
-        if (!m_filament_slots[i]->IsShown())
-            continue;
-        send_tool_map_sync(obj, m_filament_slots[i]->model_slot_index(), m_filament_slots[i]->get_mapped_tool());
-    }
-
-    PrintParams params;
-    params.dev_id           = obj->get_dev_id();
-    params.dev_ip           = obj->get_dev_ip();
-    params.dev_name         = obj->get_dev_name();
-    params.connection_type  = obj->connection_type();
-    params.dst_file         = plate->get_gcode_filename();
-    params.task_name        = m_task_name_label->GetLabel().utf8_string();
-    params.project_name     = params.task_name;
-    params.plate_index      = m_print_plate_idx + 1;
-    params.task_bed_leveling     = m_bed_leveling->GetValue();
-    params.task_flow_cali        = m_flow_calibration->GetValue();
-    params.task_record_timelapse = m_timelapse->GetValue();
-    params.password              = obj->get_access_code();
-    params.use_ssl_for_ftp       = obj->local_use_ssl_for_ftp;
-    params.use_ssl_for_mqtt      = obj->local_use_ssl;
-
-    m_start_button->Enable(false);
-    m_cancel_button->Enable(false);
-
-    std::thread([agent, params, weak_dlg = wxWeakRef<StartPrintDialog>(this)]() {
-        const int result = agent->start_local_print(params, nullptr, nullptr);
-        wxGetApp().CallAfter([weak_dlg, result]() {
-            StartPrintDialog *dlg = weak_dlg.get();
-            if (dlg == nullptr)
-                return;
-            if (result != 0)
-                show_error(dlg, _L("Failed to start print. Check the printer connection and try again."));
-            dlg->EndModal(result == 0 ? wxID_OK : wxID_CANCEL);
-        });
-    }).detach();
+    start_print_job();
 }
 
 void StartPrintDialog::on_timer(wxTimerEvent &)
 {
+    if (m_sending)
+        return;
     update_printer_status();
     update_start_button_state();
 }

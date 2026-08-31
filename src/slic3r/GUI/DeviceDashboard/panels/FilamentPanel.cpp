@@ -231,8 +231,8 @@ public:
             }
             changed = true;
         }
-        if (changed)
-            Refresh();
+        (void)changed;
+        Refresh();
     }
 
 private:

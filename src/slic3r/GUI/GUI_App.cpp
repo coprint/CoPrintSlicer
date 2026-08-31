@@ -80,6 +80,9 @@
 #include "GeneratedConfig.hpp"
 
 #include "DeviceCore/DevManager.h"
+#include "PrinterWebView.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include "../Utils/PresetUpdater.hpp"
 #include "../Utils/PrintHost.hpp"
@@ -5485,6 +5488,20 @@ void GUI_App::check_new_version_sf(bool show_tips, int by_user)
     http.perform();
 }
 
+static void apply_filament_ws_to_device_views(const std::string &dev_id, const std::string &msg)
+{
+    MainFrame *frame = wxGetApp().mainframe;
+    if (frame == nullptr)
+        return;
+    // Device tab uses MonitorPanel's backend, not MainFrame::m_printer_view
+    // (that instance is created hidden and never shown for CoPrint).
+    PrinterWebView *backend = frame->m_monitor != nullptr ? frame->m_monitor->coprint_backend() : nullptr;
+    if (backend != nullptr)
+        backend->apply_notify_filament_changed(dev_id, msg);
+    if (frame->m_printer_view != nullptr && frame->m_printer_view != backend)
+        frame->m_printer_view->apply_notify_filament_changed(dev_id, msg);
+}
+
 // return true if handled
 bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
 {
@@ -5588,6 +5605,11 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
                 obj->update_device_cert_state(false);
             }
         }
+        return true;
+    }
+
+    if (msg.find("notify_filament_changed") != std::string::npos) {
+        apply_filament_ws_to_device_views(dev_id, msg);
         return true;
     }
 

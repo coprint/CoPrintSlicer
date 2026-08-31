@@ -121,9 +121,11 @@ public:
     /** Starts a background Moonraker filament_selections fetch; updates tool colour cache on the UI thread. */
     void sync_loaded_tool_filaments(MachineObject *obj, std::function<void()> on_done = {});
     void fetch_filament_selections(MachineObject *obj, std::function<void(bool ok)> on_done);
+    void reset_loaded_tool_filaments();
 
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
     bool get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const;
+    void apply_notify_filament_changed(const std::string &dev_id, const std::string &payload);
 
     void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
     void toggle_camera_timelapse();

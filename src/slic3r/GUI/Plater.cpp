@@ -2682,9 +2682,13 @@ void Sidebar::update_presets(Preset::Type preset_type)
                 }
             }
 
-            // Fallback for printers without rich extruder_variant_list (e.g. ChromaSet)
+            // Fallback for printers without rich extruder_variant_list (e.g. ChromaSet).
+            // High Flow is not offered until profiles have matching variant tables.
             if (!added_any) {
                 for (size_t i = 0; i < nozzle_volumes_def->enum_labels.size(); ++i) {
+                    if (nozzle_volumes_def->enum_keys_map &&
+                        nozzle_volumes_def->enum_keys_map->at(nozzle_volumes_def->enum_values[i]) == NozzleVolumeType::nvtHighFlow)
+                        continue;
                     if (nozzle_volumes->values[index] == static_cast<int>(i))
                         select = extruder.combo_flow->GetCount();
                     extruder.combo_flow->Append(_L(nozzle_volumes_def->enum_labels[i]), wxNullBitmap, (void *) (intptr_t) i);
@@ -10346,7 +10350,7 @@ void Plater::priv::on_action_print_plate(SimpleEvent&)
         m_start_print_dlg->prepare(partplate_list.get_curr_plate_index());
         if (m_start_print_dlg->ShowModal() == wxID_OK) {
             if (main_frame)
-                main_frame->request_select_tab(MainFrame::TabPosition::tpMonitor);
+                main_frame->jump_to_monitor(m_start_print_dlg->print_target_dev_id());
         }
     } else {
         q->send_gcode_legacy(PLATE_CURRENT_IDX, nullptr, true);

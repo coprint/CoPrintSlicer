@@ -37,6 +37,12 @@ void MoonrakerDeviceController::sync_loaded_tool_filaments(MachineObject* obj, s
         on_done();
 }
 
+void MoonrakerDeviceController::reset_loaded_tool_filaments()
+{
+    if (m_backend != nullptr)
+        m_backend->reset_loaded_tool_filaments();
+}
+
 void MoonrakerDeviceController::fetch_filament_selections(MachineObject* obj, std::function<void(bool ok)> on_done)
 {
     if (m_backend != nullptr)

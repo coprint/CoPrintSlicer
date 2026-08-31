@@ -288,6 +288,37 @@ static std::string slicer_name_from_coprint_device_name(const std::string &devic
     return {};
 }
 
+static void paint_filament_dashboard(DeviceDashboard::DeviceDashboardPage *page,
+                                     const DeviceDashboard::FilamentState &filament)
+{
+    if (page == nullptr)
+        return;
+    DeviceDashboard::FilamentPanel *fp = page->filament_panel();
+    if (fp == nullptr)
+        return;
+    fp->apply_state(filament);
+    fp->Refresh();
+    fp->Update();
+}
+
+static int json_int_flexible(const nlohmann::json &value, int fallback = 0)
+{
+    if (value.is_number_integer())
+        return value.get<int>();
+    if (value.is_number_unsigned())
+        return static_cast<int>(value.get<unsigned>());
+    if (value.is_number_float())
+        return static_cast<int>(std::lround(value.get<double>()));
+    if (value.is_string()) {
+        try {
+            return std::stoi(value.get<std::string>());
+        } catch (...) {
+            return fallback;
+        }
+    }
+    return fallback;
+}
+
 static std::string friendly_host_from_address(const std::string &addr)
 {
     std::string value = addr;
@@ -297,8 +328,11 @@ static std::string friendly_host_from_address(const std::string &addr)
     const auto slash_pos = value.find('/');
     if (slash_pos != std::string::npos)
         value = value.substr(0, slash_pos);
-    if (value.size() > 5 && value.compare(value.size() - 5, 5, ":7125") == 0)
-        value.resize(value.size() - 5);
+    if (std::count(value.begin(), value.end(), ':') == 1) {
+        const auto colon = value.rfind(':');
+        if (colon != std::string::npos)
+            value = value.substr(0, colon);
+    }
     return value;
 }
 
@@ -3372,7 +3406,7 @@ void PrinterWebView::show_add_printer_dialog()
                 nf.SetWeight(wxFONTWEIGHT_BOLD);
                 name->SetFont(nf);
                 vs->Add(name, 0);
-                wxString ip = from_u8(obj->get_dev_ip());
+                wxString ip = from_u8(friendly_host_from_address(obj->get_dev_ip()));
                 if (!ip.empty())
                     vs->Add(new wxStaticText(row, wxID_ANY, ip), 0);
                 hs->Add(vs, 1, wxALIGN_CENTER_VERTICAL);
@@ -4734,7 +4768,7 @@ void PrinterWebView::rebuild_sidebar_printer_list()
         name->SetFont(nf);
         content->Add(name, 0, wxEXPAND);
 
-        auto *ip = new wxStaticText(card, wxID_ANY, from_u8(machine->get_dev_ip()));
+        auto *ip = new wxStaticText(card, wxID_ANY, from_u8(friendly_host_from_address(machine->get_dev_ip())));
         ip->SetForegroundColour(k_muted);
         {
             wxFont f = ip->GetFont();
@@ -4936,7 +4970,7 @@ void PrinterWebView::update_dashboard_filament_state(const std::array<wxColour, 
     });
 
     if (m_dashboard_page != nullptr)
-        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+        paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
 }
 
 void PrinterWebView::set_filament_assigned_tool(int model_slot_index, int ui_tool, bool send_mapping_command)
@@ -4953,7 +4987,7 @@ void PrinterWebView::set_filament_assigned_tool(int model_slot_index, int ui_too
         state.filament.assigned_colors[model_slot_index] = m_filament_loaded_tool_colors[ui_tool - 1];
     });
     if (m_dashboard_page != nullptr)
-        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+        paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
 
     if (send_mapping_command)
         send_tool_map_command(model_slot_index, ui_tool);
@@ -5169,6 +5203,7 @@ void PrinterWebView::apply_filament_preview_fallback()
 void PrinterWebView::reset_filament_cache_and_ui()
 {
     ++m_filament_fetch_generation;
+    m_filament_snapshot_fetch_in_progress = false;
     m_filament_tool_has_color.fill(false);
     m_filament_loaded_tool_colors = {};
     m_filament_loaded_tool_materials.fill(wxString::FromUTF8("Empty"));
@@ -5187,7 +5222,7 @@ void PrinterWebView::reset_filament_cache_and_ui()
         }
     });
     if (m_dashboard_page != nullptr)
-        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+        paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
 }
 
 void PrinterWebView::apply_loaded_filament_cache(const std::array<wxColour, 4> &colors,
@@ -5226,7 +5261,7 @@ void PrinterWebView::apply_loaded_filament_cache(const std::array<wxColour, 4> &
         }
     });
     if (m_dashboard_page != nullptr)
-        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+        paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
 }
 
 void PrinterWebView::sync_model_colors_from_plater()
@@ -5327,16 +5362,11 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
     const wxString metadata_file_path = active_file_metadata_path(obj);
     const bool has_file = !metadata_file_path.empty();
 
-    if (obj == nullptr || !obj->is_online() || !klippy_is_ready(m_klippy_state) || base.empty()) {
+    // Moonraker LAN printers often have is_online() false until the first
+    // Bambu-style push. Do not wipe loaded tools or skip the DB fetch.
+    if (obj == nullptr || base.empty()) {
         m_filament_preview_fetch_key.clear();
         m_filament_preview_fetch_in_progress = false;
-        m_filament_tool_has_color.fill(false);
-        for (int i = 0; i < 4; ++i) {
-            m_filament_loaded_tool_colors[i] = wxColour();
-            m_filament_loaded_tool_materials[i] = wxString::FromUTF8("Empty");
-            m_filament_loaded_tool_brands[i].clear();
-            m_filament_tool_item_json[i].clear();
-        }
         apply_filament_preview_fallback();
         return;
     }
@@ -5381,16 +5411,16 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
         wxGetApp().CallAfter([this, lifetime, key, metadata_body, db_body, fetch_generation]() {
             if (lifetime.expired() || m_destroying)
                 return;
+            m_filament_preview_fetch_in_progress = false;
             if (fetch_generation != m_filament_fetch_generation)
                 return;
-            m_filament_preview_fetch_in_progress = false;
             if (key != m_filament_preview_fetch_key)
                 return;
 
             auto meta   = parse_filament_metadata(parse_json_body(metadata_body));
             auto loaded = parse_filament_db(parse_json_body(db_body));
             const bool keep_local = m_filament_db_write_in_progress || !m_pending_filament_posts.empty();
-            if (!keep_local) {
+            if (!keep_local && !db_body.empty()) {
                 apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
                                             loaded.item_json, loaded.tool_has_color);
             }
@@ -5440,6 +5470,12 @@ void PrinterWebView::sync_loaded_tool_filaments(MachineObject *obj, std::functio
     });
 }
 
+void PrinterWebView::reset_loaded_tool_filaments()
+{
+    reset_filament_cache_and_ui();
+    m_filament_snapshot_ready = false;
+}
+
 void PrinterWebView::fetch_filament_selections(MachineObject *obj, std::function<void(bool ok)> on_done)
 {
     auto finish = [on_done = std::move(on_done)](bool ok) {
@@ -5483,13 +5519,21 @@ void PrinterWebView::fetch_filament_selections(MachineObject *obj, std::function
         wxGetApp().CallAfter([this, lifetime, db_body, http_ok, finish, machine_id, fetch_generation]() {
             auto *dev_manager = wxGetApp().getDeviceManager();
             MachineObject *current = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-            const bool same_machine = current != nullptr && current->get_dev_id() == machine_id;
-            bool ok = http_ok && !lifetime.expired() && !m_destroying && same_machine
+            MachineObject *fetched = dev_manager ? dev_manager->find_lan_machine_for_agent_messages(machine_id) : nullptr;
+            const bool other_printer = current != nullptr && fetched != nullptr && fetched != current &&
+                current->get_dev_id() != machine_id;
+            bool ok = http_ok && !lifetime.expired() && !m_destroying && !other_printer
                 && fetch_generation == m_filament_fetch_generation;
             if (ok && !m_filament_db_write_in_progress && m_pending_filament_posts.empty()) {
                 const auto loaded = parse_filament_db(parse_json_body(db_body));
                 apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
                                             loaded.item_json, loaded.tool_has_color);
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament_selections loaded for " << machine_id;
+            } else if (!ok) {
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament_selections skipped"
+                                        << " http_ok=" << http_ok
+                                        << " other_printer=" << other_printer
+                                        << " gen_ok=" << (fetch_generation == m_filament_fetch_generation);
             }
             finish(ok);
         });
@@ -5509,6 +5553,90 @@ bool PrinterWebView::get_loaded_tool_filament(int tool_0based, wxColour *color_o
     if (material_out)
         *material_out = m_filament_loaded_tool_materials[tool_0based];
     return true;
+}
+
+void PrinterWebView::apply_notify_filament_changed(const std::string &dev_id, const std::string &payload)
+{
+    if (m_destroying || payload.empty())
+        return;
+
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+
+    auto parsed = nlohmann::json::parse(payload, nullptr, false, true);
+    if (parsed.is_discarded() || !parsed.is_object())
+        return;
+
+    const nlohmann::json *item = nullptr;
+    if (parsed.contains("params") && parsed["params"].is_array() && !parsed["params"].empty()) {
+        if (parsed["params"][0].is_object())
+            item = &parsed["params"][0];
+        else if (parsed["params"][0].is_array() && !parsed["params"][0].empty() &&
+                 parsed["params"][0][0].is_object())
+            item = &parsed["params"][0][0];
+    } else if (parsed.contains("params") && parsed["params"].is_object())
+        item = &parsed["params"];
+    else if (parsed.contains("toolhead"))
+        item = &parsed;
+    if (item == nullptr)
+        return;
+
+    int toolhead = 0;
+    if ((*item).contains("toolhead"))
+        toolhead = json_int_flexible((*item)["toolhead"]);
+    if (toolhead < 1 || toolhead > 4) {
+        BOOST_LOG_TRIVIAL(warning) << "apply_notify_filament_changed: invalid toolhead=" << toolhead
+                                    << " payload=" << payload;
+        return;
+    }
+    const int tool = toolhead - 1;
+
+    ++m_filament_fetch_generation;
+    m_filament_snapshot_ready = true;
+    m_filament_snapshot_fetch_in_progress = false;
+
+    bool has_filament = true;
+    if ((*item).contains("has_filament") && (*item)["has_filament"].is_boolean())
+        has_filament = (*item)["has_filament"].get<bool>();
+
+    std::string hex;
+    if ((*item).contains("color_hex") && (*item)["color_hex"].is_string())
+        hex = (*item)["color_hex"].get<std::string>();
+    else if ((*item).contains("hex") && (*item)["hex"].is_string())
+        hex = (*item)["hex"].get<std::string>();
+    hex = normalize_filament_hex(hex);
+
+    std::string type;
+    if ((*item).contains("type") && (*item)["type"].is_string())
+        type = (*item)["type"].get<std::string>();
+    std::string brand;
+    if ((*item).contains("brand") && (*item)["brand"].is_string())
+        brand = (*item)["brand"].get<std::string>();
+
+    if (!has_filament) {
+        m_filament_tool_item_json[tool].clear();
+        m_filament_tool_has_color[tool] = false;
+        m_filament_loaded_tool_colors[tool] = wxColour();
+        m_filament_loaded_tool_materials[tool] = wxString::FromUTF8("Empty");
+        m_filament_loaded_tool_brands[tool].clear();
+    } else {
+        const wxColour colour = colour_from_hex(hex, wxColour());
+        m_filament_tool_has_color[tool] = colour.IsOk();
+        m_filament_loaded_tool_colors[tool] = colour;
+        m_filament_loaded_tool_materials[tool] = type.empty()
+            ? wxString::FromUTF8("?")
+            : wxString::FromUTF8(type);
+        m_filament_loaded_tool_brands[tool] = wxString::FromUTF8(brand);
+        m_filament_tool_item_json[tool] = item->dump();
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "apply_notify_filament_changed: T" << toolhead
+                            << " has_filament=" << has_filament << " type=" << type << " hex=" << hex
+                            << " dev_id=" << dev_id;
+
+    refresh_dashboard_panels(obj);
+    paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
+    reveal_dashboard_if_ready(obj);
 }
 
 bool PrinterWebView::show_filament_material_dialog(bool start_load_after_save, const wxPoint& /*anchor_screen_pos*/)
@@ -5587,7 +5715,7 @@ void PrinterWebView::clear_filament_selection_from_moonraker(int ui_tool)
         state.filament.tools[tool].material = wxString::FromUTF8("Empty");
     });
     if (m_dashboard_page != nullptr)
-        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+        paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
     queue_coprint_filament_write(coprint_filament_write_body(ui_tool, false, nullptr));
 }
 
@@ -5668,18 +5796,20 @@ void PrinterWebView::begin_filament_snapshot_fetch(MachineObject *obj)
 {
     if (m_filament_snapshot_ready || m_filament_snapshot_fetch_in_progress)
         return;
+    if (obj == nullptr || moonraker_base_url(obj).empty())
+        return;
+
     m_filament_snapshot_fetch_in_progress = true;
-    const std::string machine_id = obj != nullptr ? obj->get_dev_id() : std::string();
     std::weak_ptr<int> lifetime = m_lifetime_token;
-    fetch_filament_selections(obj, [this, lifetime, machine_id, fetch_generation = m_filament_fetch_generation](bool) {
+    fetch_filament_selections(obj, [this, lifetime, fetch_generation = m_filament_fetch_generation](bool ok) {
         if (lifetime.expired() || m_destroying)
             return;
+        m_filament_snapshot_fetch_in_progress = false;
         if (fetch_generation != m_filament_fetch_generation)
             return;
-        if (m_moonraker_status_machine_id != machine_id)
+        if (!ok)
             return;
         m_filament_snapshot_ready = true;
-        m_filament_snapshot_fetch_in_progress = false;
         auto *dev_manager = wxGetApp().getDeviceManager();
         reveal_dashboard_if_ready(dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
     });
@@ -6445,7 +6575,7 @@ void PrinterWebView::apply_filament_tool_selection(int tool_index)
         state.filament.selected_tool = tool_index;
     });
     if (m_dashboard_page != nullptr)
-        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+        paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
 }
 
 void PrinterWebView::apply_printer_status_tool_selection(int tool_index)
@@ -8423,8 +8553,11 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
     dashboard_state.filament.can_load_unload = dashboard_state.movement.can_move;
 
     m_dashboard_state_store.set_state(dashboard_state);
-    if (m_dashboard_page != nullptr && is_dashboard_snapshot_ready())
-        m_dashboard_page->apply_state(m_dashboard_state_store.state());
+    if (m_dashboard_page != nullptr) {
+        if (is_dashboard_snapshot_ready())
+            m_dashboard_page->apply_state(m_dashboard_state_store.state());
+        paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
+    }
     update_dashboard_connecting_overlay(obj);
 }
 
@@ -8776,7 +8909,7 @@ void PrinterWebView::refresh_layer_info_from_selected_machine()
     refresh_dashboard_panels(obj);
     if (session_ready && (machine_changed || periodic_heavy_refresh || has_active_job))
         update_preview_thumbnail(obj, has_active_job);
-    if (session_ready && (machine_changed || periodic_heavy_refresh || has_active_job))
+    if (obj != nullptr && (machine_changed || periodic_heavy_refresh || !m_filament_snapshot_ready))
         refresh_filament_preview_from_selected_machine();
     if (machine_changed || periodic_heavy_refresh) {
         refresh_connected_printer_header(obj);

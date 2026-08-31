@@ -3653,6 +3653,9 @@ void CloudTaskManagerPage::render_moonraker_model_files(const std::vector<Moonra
             if (obj != nullptr) {
                 wxString name = wxString::FromUTF8(obj->get_dev_name());
                 wxString ip = wxString::FromUTF8(obj->get_dev_ip());
+                const int colon = ip.Find(':');
+                if (colon != wxNOT_FOUND && ip.Mid(colon + 1).Find(':') == wxNOT_FOUND)
+                    ip = ip.Left(colon);
                 request.printer_label = (!ip.empty() && name != ip)
                     ? wxString::Format("%s (%s)", name, ip)
                     : (name.empty() ? ip : name);
