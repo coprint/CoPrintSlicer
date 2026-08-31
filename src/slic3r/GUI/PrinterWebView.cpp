@@ -5560,6 +5560,9 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_moonraker_available_tool_count = 0;
         m_moonraker_status_fetch_in_progress = false;
         m_moonraker_status_machine_id.clear();
+        m_homing_in_progress = false;
+        m_homing_saw_busy = false;
+        m_homing_started_ms = 0;
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
         reset_dashboard_snapshot();
@@ -5575,6 +5578,9 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_moonraker_available_tool_count = 0;
         m_moonraker_status_fetch_in_progress = false;
         m_moonraker_status_machine_id = machine_id;
+        m_homing_in_progress = false;
+        m_homing_saw_busy = false;
+        m_homing_started_ms = 0;
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
         reset_dashboard_snapshot();
@@ -5593,6 +5599,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         "&extruder3=temperature,target"
         "&heater_bed=temperature,target"
         "&toolhead=extruder"
+        "&idle_timeout=state"
         "&print_stats=filename,state,total_duration,print_duration,info"
         "&virtual_sdcard=progress";
     const std::string fan_query_url = base +
@@ -5932,6 +5939,17 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 }
             }
 
+            bool got_idle_timeout = false;
+            bool gcode_busy = false;
+            if (status.contains("idle_timeout") && status["idle_timeout"].is_object()) {
+                const auto &idle = status["idle_timeout"];
+                if (idle.contains("state") && idle["state"].is_string()) {
+                    got_idle_timeout = true;
+                    gcode_busy = to_lower_ascii(idle["state"].get<std::string>()) == "printing";
+                }
+            }
+            update_dashboard_homing(gcode_busy, got_idle_timeout);
+
             if (status.contains("heater_bed") && status["heater_bed"].is_object()) {
                 const auto &bed = status["heater_bed"];
                 if (bed.contains("temperature") && bed["temperature"].is_number()) {
@@ -6136,6 +6154,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 patched.connection.message = klippy_state_label(m_klippy_state);
                 patched.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
                 patched.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, patched.print_job);
+                patched.movement.is_homing = m_homing_in_progress;
                 patched.filament.can_load_unload = patched.movement.can_move;
                 if (active_tool_index >= 0 && active_tool_index < patched.movement.available_tool_count && m_dashboard_page->printer_status_panel() != nullptr)
                     m_dashboard_page->printer_status_panel()->set_active_tool(active_tool_index);
@@ -6241,11 +6260,63 @@ void PrinterWebView::apply_printer_status_tool_selection(int tool_index)
 
     m_selected_extruder_index = tool_index;
 
-    if (m_dashboard_page != nullptr)
-        m_dashboard_page->printer_status_panel()->set_active_tool(m_selected_extruder_index);
+    m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
+        state.movement.selected_tool = tool_index;
+        const int tool_count = std::max(1, state.movement.available_tool_count);
+        for (int i = 0; i < DeviceDashboard::MaxDashboardTools; ++i)
+            state.tools[i].active = i == tool_index && i < tool_count;
+    });
 
-    refresh_layer_info_from_selected_machine();
+    if (m_dashboard_page != nullptr) {
+        if (m_dashboard_page->printer_status_panel() != nullptr)
+            m_dashboard_page->printer_status_panel()->set_active_tool(m_selected_extruder_index);
+        if (m_dashboard_page->movement_panel() != nullptr)
+            m_dashboard_page->movement_panel()->apply_state(m_dashboard_state_store.state().movement);
+    }
+
     Layout();
+}
+
+void PrinterWebView::begin_dashboard_homing()
+{
+    m_homing_in_progress = true;
+    m_homing_saw_busy = false;
+    m_homing_started_ms = wxGetUTCTimeMillis();
+    m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
+        state.movement.is_homing = true;
+    });
+    if (m_dashboard_page != nullptr && m_dashboard_page->movement_panel() != nullptr)
+        m_dashboard_page->movement_panel()->apply_state(m_dashboard_state_store.state().movement);
+}
+
+void PrinterWebView::clear_dashboard_homing()
+{
+    if (!m_homing_in_progress)
+        return;
+    m_homing_in_progress = false;
+    m_homing_saw_busy = false;
+    m_homing_started_ms = 0;
+    m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
+        state.movement.is_homing = false;
+    });
+    if (m_dashboard_page != nullptr && m_dashboard_page->movement_panel() != nullptr)
+        m_dashboard_page->movement_panel()->apply_state(m_dashboard_state_store.state().movement);
+}
+
+void PrinterWebView::update_dashboard_homing(bool gcode_busy, bool got_idle_timeout)
+{
+    if (!m_homing_in_progress)
+        return;
+
+    if (got_idle_timeout && gcode_busy)
+        m_homing_saw_busy = true;
+
+    const wxLongLong elapsed = wxGetUTCTimeMillis() - m_homing_started_ms;
+    const bool timed_out = elapsed > 120000;
+    const bool finished_busy = got_idle_timeout && m_homing_saw_busy && !gcode_busy;
+    const bool never_started = got_idle_timeout && !m_homing_saw_busy && !gcode_busy && elapsed > 8000;
+    if (finished_busy || never_started || timed_out)
+        clear_dashboard_homing();
 }
 
 bool PrinterWebView::send_toolhead_fan_speed_command(int tool_index, int fan_percent)
@@ -7952,8 +8023,8 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
     case DeviceDashboard::DeviceCommandKind::SelectTool:
         if (command.tool_index < 0 || command.tool_index >= m_dashboard_state_store.state().movement.available_tool_count)
             return;
-        if (!send_tool_select_command(command.tool_index))
-            apply_printer_status_tool_selection(command.tool_index);
+        send_tool_select_command(command.tool_index);
+        apply_printer_status_tool_selection(command.tool_index);
         break;
     case DeviceDashboard::DeviceCommandKind::SelectFilamentTool:
         apply_filament_tool_selection(command.tool_index);
@@ -8006,13 +8077,18 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
             obj->command_task_abort();
         break;
     case DeviceDashboard::DeviceCommandKind::Home: {
+        if (m_homing_in_progress)
+            return;
+        begin_dashboard_homing();
         const std::string home_script =
             print_blocks_manual_controls(m_dashboard_state_store.state().print_job) ? "G28 X" : "G28";
         if (send_klipper_gcode_script(home_script))
             break;
-        if (obj == nullptr || !obj->is_online())
-            return;
-        obj->command_go_home();
+        if (obj != nullptr && obj->is_online()) {
+            obj->command_go_home();
+            break;
+        }
+        clear_dashboard_homing();
         break;
     }
     case DeviceDashboard::DeviceCommandKind::SetPrintSpeed: {
@@ -8148,6 +8224,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
     dashboard_state.connection.message = klippy_state_label(m_klippy_state);
     dashboard_state.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
     dashboard_state.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, dashboard_state.print_job);
+    dashboard_state.movement.is_homing = m_homing_in_progress;
     dashboard_state.filament.can_load_unload = dashboard_state.movement.can_move;
 
     m_dashboard_state_store.set_state(dashboard_state);
@@ -8163,6 +8240,7 @@ void PrinterWebView::apply_klippy_connection_ui(MachineObject *obj)
     patched.connection.message = klippy_state_label(m_klippy_state);
     patched.connection.can_send_commands = dashboard_commands_allowed(obj, m_klippy_state);
     patched.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, patched.print_job);
+    patched.movement.is_homing = m_homing_in_progress;
     patched.filament.can_load_unload = patched.movement.can_move;
     m_dashboard_state_store.set_state(patched);
     if (m_dashboard_page != nullptr &&

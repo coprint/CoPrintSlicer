@@ -182,6 +182,9 @@ private:
     void stop_camera_stream();
     void handle_camera_webview_title(const wxString &title);
     void apply_printer_status_tool_selection(int tool_index);
+    void begin_dashboard_homing();
+    void clear_dashboard_homing();
+    void update_dashboard_homing(bool gcode_busy, bool got_idle_timeout);
     void apply_nozzle_target_temperature(int extruder_index, int temperature);
     void apply_bed_target_temperature(int temperature);
     void prompt_ps_target_temperature(bool is_bed, int extruder_index);
@@ -325,6 +328,9 @@ private:
     wxStaticText *m_update_version_value{ nullptr };
     DeviceDashboard::DeviceStateStore m_dashboard_state_store;
     double m_axis_move_step{ 1.0 };
+    bool m_homing_in_progress{ false };
+    bool m_homing_saw_busy{ false };
+    wxLongLong m_homing_started_ms{ 0 };
     int m_zoomFactor{ 100 };
     std::shared_ptr<int> m_lifetime_token{ std::make_shared<int>(1) };
     bool m_destroying{ false };

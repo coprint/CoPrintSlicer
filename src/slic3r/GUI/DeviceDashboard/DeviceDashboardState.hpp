@@ -109,6 +109,7 @@ struct MovementState {
     double selected_distance_mm{1.0};
     int print_speed_percent{100};
     bool can_move{false};
+    bool is_homing{false};
 };
 
 struct DeviceDashboardState {

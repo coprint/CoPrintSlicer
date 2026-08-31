@@ -658,11 +658,11 @@ MovementPanel::MovementPanel(wxWindow* parent)
     // Z+ butonu — rectangle_10 SVG şekli üzerine +Z etiketi
     auto* z_plus_host = new ZAxisShapeButton(content, wxString::FromUTF8("rectangle_10"), wxString::FromUTF8("+Z"));
     m_z_plus_host = z_plus_host;
-    z_plus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, -1.0); });
+    z_plus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, 1.0); });
 
     auto* z_minus_host = new ZAxisShapeButton(content, wxString::FromUTF8("rectangle_12"), wxString::FromUTF8("-Z"));
     m_z_minus_host = z_minus_host;
-    z_minus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, 1.0); });
+    z_minus_host->set_click_handler([this]() { dispatch_axis(Axis::Z, -1.0); });
 
     z_col->AddSpacer(d(this, 48));
     z_col->Add(z_plus_host, 0, wxALIGN_CENTER_HORIZONTAL | wxBOTTOM, d(this, 10));
@@ -712,6 +712,9 @@ void MovementPanel::apply_state(const MovementState& state)
     set_active_tool_button(state.selected_tool);
     set_active_distance_button(state.selected_distance_mm);
     set_controls_enabled(state.can_move);
+    if (m_center_button != nullptr)
+        set_button_enabled(m_center_button, state.can_move && !state.is_homing, kJoystickButtonBg, kJoystickButtonDisabled);
+    refresh_selection_styles();
 }
 
 void MovementPanel::set_command_handler(CommandHandler handler)
@@ -809,8 +812,31 @@ void MovementPanel::set_active_distance_button(double distance_mm)
             m_distance_button_active[i]);
 }
 
+void MovementPanel::refresh_selection_styles()
+{
+    if (!m_controls_enabled)
+        return;
+
+    for (int i = 0; i < MaxDashboardTools; ++i)
+        m_tool_button_active[i] = -1;
+    for (int i = 0; i < 4; ++i)
+        m_distance_button_active[i] = -1;
+
+    for (int i = 0; i < MaxDashboardTools; ++i) {
+        if (i >= m_available_tool_count)
+            continue;
+        set_button_active(m_tool_buttons[i], i == m_selected_tool, m_tool_button_active[i], true);
+    }
+    for (int i = 0; i < 4; ++i)
+        set_button_active(
+            m_distance_buttons[i],
+            std::abs(DistanceOptions[i] - m_selected_distance_mm) < 0.01,
+            m_distance_button_active[i]);
+}
+
 void MovementPanel::set_controls_enabled(bool enabled)
 {
+    m_controls_enabled = enabled;
     if (m_xy_area != nullptr) {
         m_xy_area->Enable(enabled);
         m_xy_area->SetCursor(wxCursor(enabled ? wxCURSOR_HAND : wxCURSOR_ARROW));

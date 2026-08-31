@@ -36,6 +36,7 @@ private:
     void set_active_tool_button(int tool_index);
     void set_available_tool_count(int tool_count);
     void set_active_distance_button(double distance_mm);
+    void refresh_selection_styles();
     void set_controls_enabled(bool enabled);
 
     wxBoxSizer* m_controls_sizer{nullptr};
@@ -51,6 +52,7 @@ private:
     double m_selected_distance_mm{1.0};
     int m_selected_tool{0};
     int m_available_tool_count{MaxDashboardTools};
+    bool m_controls_enabled{true};
     CommandHandler m_command_handler;
 };
 
