@@ -22,6 +22,7 @@
 #include "slic3r/GUI/DeviceDashboard/panels/CameraPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/FilamentSelectDialog.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/FilamentPanel.hpp"
+#include "slic3r/GUI/DeviceDashboard/panels/MovementPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/PrinterStatusPanel.hpp"
 #include "slic3r/GUI/DeviceDashboard/panels/PrintStatusPanel.hpp"
 #include "slic3r/GUI/Widgets/Button.hpp"
@@ -422,6 +423,78 @@ static std::string trim_ascii(const std::string &value)
     while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])))
         --end;
     return value.substr(begin, end - begin);
+}
+
+static nlohmann::json json_result_object(nlohmann::json payload)
+{
+    if (payload.contains("result") && payload["result"].is_object())
+        payload = payload["result"];
+    return payload.is_object() ? payload : nlohmann::json::object();
+}
+
+static std::string json_first_string(const nlohmann::json &object, std::initializer_list<const char *> keys)
+{
+    if (!object.is_object())
+        return {};
+    for (const char *key : keys) {
+        if (object.contains(key) && object[key].is_string()) {
+            const std::string value = trim_ascii(object[key].get<std::string>());
+            if (!value.empty())
+                return value;
+        }
+    }
+    return {};
+}
+
+static std::string serial_from_coprint_info(const std::string &body)
+{
+    if (body.empty())
+        return {};
+    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
+    if (parsed.is_discarded())
+        return {};
+    nlohmann::json payload = json_result_object(std::move(parsed));
+    std::string serial = json_first_string(payload,
+        {"serial", "serial_number", "serial_no", "sn", "device_serial"});
+    if (serial.empty() && payload.contains("device") && payload["device"].is_object())
+        serial = json_first_string(payload["device"],
+            {"serial", "serial_number", "serial_no", "sn", "device_serial"});
+    return serial;
+}
+
+static std::string os_version_from_coprint_info(const std::string &body)
+{
+    if (body.empty())
+        return {};
+    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
+    if (parsed.is_discarded())
+        return {};
+    nlohmann::json payload = json_result_object(std::move(parsed));
+    std::string os_version = json_first_string(payload,
+        {"os_version", "os", "operating_system", "distro"});
+    if (os_version.empty() && payload.contains("device") && payload["device"].is_object())
+        os_version = json_first_string(payload["device"],
+            {"os_version", "os", "operating_system", "distro"});
+    return os_version;
+}
+
+static std::string os_version_from_system_info(const std::string &body)
+{
+    if (body.empty())
+        return {};
+    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
+    if (parsed.is_discarded())
+        return {};
+    nlohmann::json payload = json_result_object(std::move(parsed));
+    nlohmann::json dist = nlohmann::json::object();
+    if (payload.contains("system_info") && payload["system_info"].is_object()) {
+        const auto &system_info = payload["system_info"];
+        if (system_info.contains("distribution") && system_info["distribution"].is_object())
+            dist = system_info["distribution"];
+    } else if (payload.contains("distribution") && payload["distribution"].is_object()) {
+        dist = payload["distribution"];
+    }
+    return json_first_string(dist, {"name", "version", "id"});
 }
 
 static std::string display_name_from_coprint_info_body(const std::string &body)
@@ -5563,6 +5636,8 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_homing_in_progress = false;
         m_homing_saw_busy = false;
         m_homing_started_ms = 0;
+        m_device_serial.clear();
+        m_device_os_version.clear();
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
         reset_dashboard_snapshot();
@@ -5581,6 +5656,8 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_homing_in_progress = false;
         m_homing_saw_busy = false;
         m_homing_started_ms = 0;
+        m_device_serial.clear();
+        m_device_os_version.clear();
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
         reset_dashboard_snapshot();
@@ -5614,6 +5691,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         std::string body;
         std::string fan_body;
         std::string coprint_info_body;
+        std::string system_info_body;
         std::string metadata_body;
         std::string server_info_body;
         Http::get(base + "/server/info")
@@ -5630,6 +5708,26 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         const bool klippy_ready = klippy_is_ready(probed_klippy);
         std::string objects_list_body;
         std::string hostname_hint;
+
+        Http::get(base + "/machine/coprint/info")
+            .timeout_connect(2)
+            .timeout_max(5)
+            .on_complete([&](std::string response, unsigned status) {
+                if (status == 200)
+                    coprint_info_body = std::move(response);
+            })
+            .on_error([](std::string, std::string, unsigned) {})
+            .perform_sync();
+
+        Http::get(base + "/machine/system_info")
+            .timeout_connect(2)
+            .timeout_max(5)
+            .on_complete([&](std::string response, unsigned status) {
+                if (status == 200)
+                    system_info_body = std::move(response);
+            })
+            .on_error([](std::string, std::string, unsigned) {})
+            .perform_sync();
 
         // Temperatures, fans, files, and identity only while Klippy is ready.
         if (klippy_ready) {
@@ -5682,16 +5780,6 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 .on_error([](std::string, std::string, unsigned) {})
                 .perform_sync();
 
-            Http::get(base + "/machine/coprint/info")
-                .timeout_connect(2)
-                .timeout_max(5)
-                .on_complete([&](std::string response, unsigned status) {
-                    if (status == 200)
-                        coprint_info_body = std::move(response);
-                })
-                .on_error([](std::string, std::string, unsigned) {})
-                .perform_sync();
-
             Http::get(base + "/printer/objects/list")
                 .timeout_connect(2)
                 .timeout_max(4)
@@ -5738,7 +5826,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             capture_hostname("/machine/system_info");
         }
 
-        wxGetApp().CallAfter([this, lifetime, machine_id, body, fan_body, coprint_info_body, objects_list_body, metadata_body, hostname_hint, base, server_info_body]() {
+        wxGetApp().CallAfter([this, lifetime, machine_id, body, fan_body, coprint_info_body, system_info_body, objects_list_body, metadata_body, hostname_hint, base, server_info_body]() {
             if (lifetime.expired() || m_destroying)
                 return;
             if (m_moonraker_status_machine_id == machine_id)
@@ -5747,6 +5835,20 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
             if (obj == nullptr || obj->get_dev_id() != machine_id)
                 return;
+
+            {
+                const std::string serial = serial_from_coprint_info(coprint_info_body);
+                if (!serial.empty())
+                    m_device_serial = serial;
+                std::string os_version = os_version_from_coprint_info(coprint_info_body);
+                if (os_version.empty())
+                    os_version = os_version_from_system_info(system_info_body);
+                if (!os_version.empty())
+                    m_device_os_version = os_version;
+                if (m_update_page != nullptr && m_update_page->IsShownOnScreen())
+                    refresh_update_page_from_selected_machine();
+                refresh_printer_info_labels(obj);
+            }
 
             const bool moonraker_reachable = !server_info_body.empty();
             if (!moonraker_reachable) {
@@ -8408,20 +8510,16 @@ void PrinterWebView::refresh_printer_info_labels(MachineObject *obj)
         obj != nullptr ? obj->get_printer_type_display_str() : "N/A");
 
     if (m_printer_serial_value != nullptr) {
-        wxString serial = obj != nullptr ? from_u8(obj->get_dev_id()) : "N/A";
+        wxString serial = "N/A";
+        if (!m_device_serial.empty())
+            serial = from_u8(m_device_serial);
         set_text_if_changed(m_printer_serial_value, serial.MakeUpper());
     }
 
     if (m_printer_firmware_value != nullptr) {
         wxString version = "N/A";
-        if (obj != nullptr) {
-            auto ota_it = obj->module_vers.find("ota");
-            version = ota_it != obj->module_vers.end()
-                ? ota_it->second.sw_ver
-                : from_u8(obj->get_ota_version());
-            if (version.empty())
-                version = "N/A";
-        }
+        if (!m_device_os_version.empty())
+            version = from_u8(m_device_os_version);
         set_text_if_changed(m_printer_firmware_value, version);
     }
 
@@ -8687,8 +8785,19 @@ void PrinterWebView::refresh_update_page_from_selected_machine()
         m_update_model_value->SetLabelText(obj->get_printer_type_display_str());
 
     if (m_update_serial_value != nullptr) {
-        wxString serial = from_u8(obj->get_dev_id());
-        m_update_serial_value->SetLabelText(serial.MakeUpper());
+        if (!m_device_serial.empty()) {
+            wxString serial = from_u8(m_device_serial);
+            m_update_serial_value->SetLabelText(serial.MakeUpper());
+        } else {
+            m_update_serial_value->SetLabelText("-");
+        }
+    }
+
+    if (m_update_version_value != nullptr) {
+        if (!m_device_os_version.empty())
+            m_update_version_value->SetLabelText(from_u8(m_device_os_version));
+        else
+            m_update_version_value->SetLabelText("-");
     }
 
     wxString current_version = "-";
@@ -8696,20 +8805,10 @@ void PrinterWebView::refresh_update_page_from_selected_machine()
     auto ota_it = obj->module_vers.find("ota");
     if (ota_it != obj->module_vers.end())
         current_version = ota_it->second.sw_ver;
-
     if (!obj->ota_new_version_number.empty())
         next_version = from_u8(obj->ota_new_version_number);
     else if (ota_it != obj->module_vers.end())
         next_version = ota_it->second.sw_new_ver;
-
-    if (m_update_version_value != nullptr) {
-        if (!next_version.empty() && next_version != current_version && current_version != "-")
-            m_update_version_value->SetLabelText(wxString::Format("%s -> %s", current_version, next_version));
-        else if (current_version != "-")
-            m_update_version_value->SetLabelText(wxString::Format("%s (Latest)", current_version));
-        else
-            m_update_version_value->SetLabelText("-");
-    }
 
     int progress = 0;
     wxString status = obj->is_connected() ? "Firmware is up to date" : "Printer offline";

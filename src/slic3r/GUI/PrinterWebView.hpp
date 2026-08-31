@@ -336,6 +336,8 @@ private:
     bool m_destroying{ false };
     int m_coprint_names_fetch_gen{ 0 };
     std::string m_last_refresh_machine_id;
+    std::string m_device_serial;
+    std::string m_device_os_version;
     int m_refresh_tick_counter{ 0 };
     wxLongLong m_dashboard_connect_started_ms{ 0 };
 
