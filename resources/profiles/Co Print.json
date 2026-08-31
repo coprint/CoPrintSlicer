@@ -1,6 +1,6 @@
 {
     "name": "Co Print",
-    "version": "02.04.00.20",
+    "version": "02.04.00.22",
     "force_update": "0",
     "description": "CoPrint configurations",
     "machine_model_list": [
@@ -137,6 +137,14 @@
             "sub_path": "filament/Co Print PLA (Quadro).json"
         },
         {
+            "name": "Co Print PLA-CF (ChromaSet)",
+            "sub_path": "filament/Co Print PLA-CF (ChromaSet).json"
+        },
+        {
+            "name": "Co Print PLA-CF (Quadro)",
+            "sub_path": "filament/Co Print PLA-CF (Quadro).json"
+        },
+        {
             "name": "Co Print ABS (ChromaSet)",
             "sub_path": "filament/Co Print ABS (ChromaSet).json"
         },
@@ -163,10 +171,6 @@
         {
             "name": "Co Print ASA (ChromaSet)",
             "sub_path": "filament/Co Print ASA (ChromaSet).json"
-        },
-        {
-            "name": "Co Print ASA (Quadro)",
-            "sub_path": "filament/Co Print ASA (Quadro).json"
         }
     ],
     "machine_list": [

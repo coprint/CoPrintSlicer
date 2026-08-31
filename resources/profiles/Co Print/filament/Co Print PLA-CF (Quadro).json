@@ -1,0 +1,20 @@
+{
+    "type": "filament",
+    "name": "Co Print PLA-CF (Quadro)",
+    "inherits": "Co Print PLA (Quadro)",
+    "from": "system",
+    "setting_id": "CPQPLACF01",
+    "filament_id": "GFL99",
+    "instantiation": "true",
+    "filament_vendor": [
+        "Co Print"
+    ],
+    "filament_type": [
+        "PLA-CF"
+    ],
+    "compatible_printers": [
+        "Co Print Quadro 0.2 nozzle",
+        "Co Print Quadro 0.4 nozzle",
+        "Co Print Quadro 0.6 nozzle"
+    ]
+}

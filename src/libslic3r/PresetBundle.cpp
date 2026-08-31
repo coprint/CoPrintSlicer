@@ -688,6 +688,8 @@ std::string map_filament_type_to_coprint_generic(const std::string &filament_typ
         return "Co Print ASA" + suffix;
     if (t.find("ABS") != std::string::npos)
         return "Co Print ABS" + suffix;
+    if (t.find("PLA-CF") != std::string::npos || t.find("PLA_CF") != std::string::npos || t.find("PLACF") != std::string::npos)
+        return "Co Print PLA-CF" + suffix;
     return "Co Print PLA" + suffix;
 }
 

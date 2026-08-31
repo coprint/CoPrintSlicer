@@ -138,6 +138,7 @@ private:
     void apply_filament_tool_selection(int tool_index);
     void refresh_filament_preview_from_selected_machine();
     void apply_filament_preview_fallback();
+    void reset_filament_cache_and_ui();
     void apply_loaded_filament_cache(const std::array<wxColour, 4> &colors,
                                      const std::array<wxString, 4> &materials,
                                      const std::array<wxString, 4> &brands,
@@ -162,8 +163,8 @@ private:
     void prompt_and_save_filament_selection_then_load();
     void save_filament_selection_to_moonraker(int ui_tool, const DeviceDashboard::FilamentSelection &selection);
     void clear_filament_selection_from_moonraker(int ui_tool);
-    void queue_filament_selections_write();
-    void start_filament_selections_write();
+    void queue_coprint_filament_write(std::string body);
+    void start_coprint_filament_write();
     void refresh_moonraker_status_from_selected_machine();
     void refresh_dashboard_panels(MachineObject *obj);
     void update_dashboard_connecting_overlay(MachineObject *obj);
@@ -272,8 +273,9 @@ private:
     std::array<wxString, 4> m_filament_loaded_tool_brands;
     std::array<std::string, 4> m_filament_tool_item_json;
     std::array<bool, 4> m_filament_tool_has_color{};
+    unsigned m_filament_fetch_generation{ 0 };
     bool m_filament_db_write_in_progress{ false };
-    bool m_filament_db_write_queued{ false };
+    std::vector<std::string> m_pending_filament_posts;
     // Colors synced from the Plater at upload time — used as fallback when
     // no printer metadata is available (e.g. printer is idle after upload).
     std::array<wxColour, 4> m_plater_synced_colors;

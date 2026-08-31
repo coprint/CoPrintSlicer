@@ -1417,6 +1417,68 @@ static nlohmann::json filament_item_from_selection(const DeviceDashboard::Filame
     return item;
 }
 
+static std::string normalize_filament_hex(std::string hex)
+{
+    hex = trim_ascii(hex);
+    if (!hex.empty() && hex.front() == '#')
+        hex.erase(hex.begin());
+    if (hex.size() != 6)
+        return {};
+    for (char &ch : hex) {
+        if (!std::isxdigit(static_cast<unsigned char>(ch)))
+            return {};
+        ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    }
+    return "#" + hex;
+}
+
+static std::string coprint_filament_write_body(int toolhead,
+    bool has_filament,
+    const DeviceDashboard::FilamentSelection *selection)
+{
+    nlohmann::json payload;
+    payload["toolhead"] = toolhead;
+    payload["has_filament"] = has_filament;
+    if (!has_filament || selection == nullptr)
+        return payload.dump();
+
+    const std::string hex = normalize_filament_hex(into_u8(selection->color_hex));
+    if (!hex.empty())
+        payload["hex"] = hex;
+    const std::string brand = into_u8(selection->brand);
+    if (!brand.empty())
+        payload["brand"] = brand;
+    const std::string type = into_u8(selection->type);
+    if (!type.empty())
+        payload["type"] = type;
+    const std::string color = into_u8(selection->color);
+    if (!color.empty())
+        payload["color"] = color;
+    payload["temp_min"] = selection->temp_min;
+    payload["temp_max"] = selection->temp_max;
+    payload["pressure_advance"] = selection->pressure_advance;
+    return payload.dump();
+}
+
+static void log_coprint_filament_response(const std::string &response, unsigned http_status)
+{
+    BOOST_LOG_TRIVIAL(info) << "PrinterWebView: coprint filament saved http=" << http_status;
+    auto parsed = nlohmann::json::parse(response, nullptr, false, true);
+    if (parsed.is_discarded())
+        return;
+    if (parsed.contains("result") && parsed["result"].is_object())
+        parsed = parsed["result"];
+    if (!parsed.is_object() || !parsed.contains("status") || !parsed["status"].is_string())
+        return;
+    const std::string status = parsed["status"].get<std::string>();
+    if (status == "error") {
+        std::string message;
+        if (parsed.contains("message") && parsed["message"].is_string())
+            message = parsed["message"].get<std::string>();
+        BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: coprint filament save rejected: " << message;
+    }
+}
+
 static LoadedFilamentResult parse_filament_db(nlohmann::json db)
 {
     LoadedFilamentResult result;
@@ -5104,6 +5166,30 @@ void PrinterWebView::apply_filament_preview_fallback()
         colors);
 }
 
+void PrinterWebView::reset_filament_cache_and_ui()
+{
+    ++m_filament_fetch_generation;
+    m_filament_tool_has_color.fill(false);
+    m_filament_loaded_tool_colors = {};
+    m_filament_loaded_tool_materials.fill(wxString::FromUTF8("Empty"));
+    m_filament_loaded_tool_brands.fill(wxString());
+    m_filament_tool_item_json = {};
+    m_filament_assigned_tool_mapping = {1, 2, 3, 4};
+    m_pending_filament_posts.clear();
+    m_filament_preview_fetch_in_progress = false;
+    m_filament_preview_fetch_key.clear();
+
+    m_dashboard_state_store.update([](DeviceDashboard::DeviceDashboardState &state) {
+        for (int i = 0; i < DeviceDashboard::MaxDashboardTools; ++i) {
+            state.filament.tools[i].color = wxColour();
+            state.filament.tools[i].material = wxString::FromUTF8("Empty");
+            state.filament.assigned_colors[i] = wxColour();
+        }
+    });
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
+}
+
 void PrinterWebView::apply_loaded_filament_cache(const std::array<wxColour, 4> &colors,
                                                  const std::array<wxString, 4> &materials,
                                                  const std::array<wxString, 4> &brands,
@@ -5125,6 +5211,22 @@ void PrinterWebView::apply_loaded_filament_cache(const std::array<wxColour, 4> &
             m_filament_loaded_tool_brands[i] = brands[i];
         }
     }
+
+    m_dashboard_state_store.update([&](DeviceDashboard::DeviceDashboardState &state) {
+        for (int i = 0; i < DeviceDashboard::MaxDashboardTools; ++i) {
+            if (m_filament_tool_has_color[i]) {
+                state.filament.tools[i].color = m_filament_loaded_tool_colors[i];
+                state.filament.tools[i].material = is_empty_filament_material(m_filament_loaded_tool_materials[i])
+                    ? wxString::FromUTF8("Empty")
+                    : m_filament_loaded_tool_materials[i];
+            } else {
+                state.filament.tools[i].color = wxColour();
+                state.filament.tools[i].material = wxString::FromUTF8("Empty");
+            }
+        }
+    });
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
 }
 
 void PrinterWebView::sync_model_colors_from_plater()
@@ -5255,7 +5357,8 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
     const std::string db_url = base + "/server/database/item?namespace=coprint&key=filament_selections";
 
     std::weak_ptr<int> lifetime = m_lifetime_token;
-    std::thread([this, lifetime, key, metadata_url, db_url]() {
+    const unsigned fetch_generation = m_filament_fetch_generation;
+    std::thread([this, lifetime, key, metadata_url, db_url, fetch_generation]() {
         auto fetch_json_text = [](const std::string &url) {
             std::string body;
             if (url.empty())
@@ -5275,8 +5378,10 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
         const std::string metadata_body = fetch_json_text(metadata_url);
         const std::string db_body = fetch_json_text(db_url);
 
-        wxGetApp().CallAfter([this, lifetime, key, metadata_body, db_body]() {
+        wxGetApp().CallAfter([this, lifetime, key, metadata_body, db_body, fetch_generation]() {
             if (lifetime.expired() || m_destroying)
+                return;
+            if (fetch_generation != m_filament_fetch_generation)
                 return;
             m_filament_preview_fetch_in_progress = false;
             if (key != m_filament_preview_fetch_key)
@@ -5284,7 +5389,7 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
 
             auto meta   = parse_filament_metadata(parse_json_body(metadata_body));
             auto loaded = parse_filament_db(parse_json_body(db_body));
-            const bool keep_local = m_filament_db_write_in_progress || m_filament_db_write_queued;
+            const bool keep_local = m_filament_db_write_in_progress || !m_pending_filament_posts.empty();
             if (!keep_local) {
                 apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
                                             loaded.item_json, loaded.tool_has_color);
@@ -5353,7 +5458,9 @@ void PrinterWebView::fetch_filament_selections(MachineObject *obj, std::function
     }
 
     std::weak_ptr<int> lifetime = m_lifetime_token;
-    std::thread([this, lifetime, base, finish = std::move(finish)]() {
+    const unsigned fetch_generation = m_filament_fetch_generation;
+    const std::string machine_id = obj->get_dev_id();
+    std::thread([this, lifetime, base, machine_id, fetch_generation, finish = std::move(finish)]() {
         std::string db_body;
         bool http_ok = false;
         Http::get(base + "/server/database/item?namespace=coprint&key=filament_selections")
@@ -5373,9 +5480,13 @@ void PrinterWebView::fetch_filament_selections(MachineObject *obj, std::function
             })
             .perform_sync();
 
-        wxGetApp().CallAfter([this, lifetime, db_body, http_ok, finish]() {
-            bool ok = http_ok && !lifetime.expired() && !m_destroying;
-            if (ok && !m_filament_db_write_in_progress && !m_filament_db_write_queued) {
+        wxGetApp().CallAfter([this, lifetime, db_body, http_ok, finish, machine_id, fetch_generation]() {
+            auto *dev_manager = wxGetApp().getDeviceManager();
+            MachineObject *current = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+            const bool same_machine = current != nullptr && current->get_dev_id() == machine_id;
+            bool ok = http_ok && !lifetime.expired() && !m_destroying && same_machine
+                && fetch_generation == m_filament_fetch_generation;
+            if (ok && !m_filament_db_write_in_progress && m_pending_filament_posts.empty()) {
                 const auto loaded = parse_filament_db(parse_json_body(db_body));
                 apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
                                             loaded.item_json, loaded.tool_has_color);
@@ -5459,7 +5570,7 @@ void PrinterWebView::save_filament_selection_to_moonraker(int ui_tool, const Dev
 {
     ui_tool = std::max(1, std::min(4, ui_tool));
     m_filament_tool_item_json[ui_tool - 1] = filament_item_from_selection(selection).dump();
-    queue_filament_selections_write();
+    queue_coprint_filament_write(coprint_filament_write_body(ui_tool, true, &selection));
 }
 
 void PrinterWebView::clear_filament_selection_from_moonraker(int ui_tool)
@@ -5477,78 +5588,56 @@ void PrinterWebView::clear_filament_selection_from_moonraker(int ui_tool)
     });
     if (m_dashboard_page != nullptr)
         m_dashboard_page->filament_panel()->apply_state(m_dashboard_state_store.state().filament);
-    queue_filament_selections_write();
+    queue_coprint_filament_write(coprint_filament_write_body(ui_tool, false, nullptr));
 }
 
-void PrinterWebView::queue_filament_selections_write()
+void PrinterWebView::queue_coprint_filament_write(std::string body)
 {
-    if (m_destroying)
+    if (m_destroying || body.empty())
         return;
-    if (m_filament_db_write_in_progress) {
-        m_filament_db_write_queued = true;
+    m_pending_filament_posts.push_back(std::move(body));
+    if (!m_filament_db_write_in_progress)
+        start_coprint_filament_write();
+}
+
+void PrinterWebView::start_coprint_filament_write()
+{
+    if (m_destroying || m_pending_filament_posts.empty()) {
+        m_filament_db_write_in_progress = false;
         return;
     }
-    start_filament_selections_write();
-}
 
-void PrinterWebView::start_filament_selections_write()
-{
     auto *dev_manager = wxGetApp().getDeviceManager();
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
     const std::string base = moonraker_base_url(obj);
     if (obj == nullptr || !obj->is_online() || base.empty()) {
         m_filament_db_write_in_progress = false;
-        m_filament_db_write_queued = false;
+        m_pending_filament_posts.clear();
         return;
     }
 
-    nlohmann::json value = nlohmann::json::object();
-    for (int i = 0; i < 4; ++i) {
-        const bool empty_slot = !m_filament_tool_has_color[i] &&
-            is_empty_filament_material(m_filament_loaded_tool_materials[i]);
-        if (empty_slot)
-            continue;
+    std::string api_key = obj->get_access_code();
+    if (api_key.empty())
+        api_key = obj->get_user_access_code();
 
-        nlohmann::json item;
-        if (!m_filament_tool_item_json[i].empty()) {
-            item = nlohmann::json::parse(m_filament_tool_item_json[i], nullptr, false, true);
-            if (item.is_discarded() || !item.is_object())
-                item = nlohmann::json::object();
-        }
-        if (item.empty() || !item.is_object()) {
-            item = nlohmann::json::object();
-            item["brand"] = into_u8(m_filament_loaded_tool_brands[i]);
-            item["type"] = into_u8(m_filament_loaded_tool_materials[i]);
-            const std::string hex = into_u8(hex_from_colour(m_filament_loaded_tool_colors[i]));
-            item["color"] = hex;
-            item["color_hex"] = hex;
-            item["temp_min"] = 0;
-            item["temp_max"] = 0;
-            item["pressure_advance"] = 0;
-        }
-        value["toolhead_" + std::to_string(i + 1)] = std::move(item);
-    }
-
-    nlohmann::json payload;
-    payload["namespace"] = "coprint";
-    payload["key"] = "filament_selections";
-    payload["value"] = value;
-    const std::string body = payload.dump();
+    const std::string body = std::move(m_pending_filament_posts.front());
+    m_pending_filament_posts.erase(m_pending_filament_posts.begin());
 
     m_filament_db_write_in_progress = true;
-    m_filament_db_write_queued = false;
     std::weak_ptr<int> lifetime = m_lifetime_token;
-    std::thread([this, lifetime, base, body]() {
-        Http::post(base + "/server/database/item")
-            .header("Content-Type", "application/json")
+    std::thread([this, lifetime, base, api_key, body]() {
+        auto http = Http::post(base + "/machine/coprint/filament");
+        if (!api_key.empty())
+            http.header("X-Api-Key", api_key);
+        http.header("Content-Type", "application/json")
             .set_post_body(body)
             .timeout_connect(2)
             .timeout_max(4)
-            .on_complete([](std::string, unsigned status) {
-                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament selections saved status=" << status;
+            .on_complete([](std::string response, unsigned status) {
+                log_coprint_filament_response(response, status);
             })
             .on_error([](std::string, std::string error, unsigned status) {
-                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: filament selections save failed status="
+                BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: coprint filament save failed status="
                                            << status << " error=" << error;
             })
             .perform_sync();
@@ -5557,8 +5646,8 @@ void PrinterWebView::start_filament_selections_write()
             if (lifetime.expired() || m_destroying)
                 return;
             m_filament_db_write_in_progress = false;
-            if (m_filament_db_write_queued)
-                start_filament_selections_write();
+            if (!m_pending_filament_posts.empty())
+                start_coprint_filament_write();
         });
     }).detach();
 }
@@ -5582,8 +5671,10 @@ void PrinterWebView::begin_filament_snapshot_fetch(MachineObject *obj)
     m_filament_snapshot_fetch_in_progress = true;
     const std::string machine_id = obj != nullptr ? obj->get_dev_id() : std::string();
     std::weak_ptr<int> lifetime = m_lifetime_token;
-    fetch_filament_selections(obj, [this, lifetime, machine_id](bool) {
+    fetch_filament_selections(obj, [this, lifetime, machine_id, fetch_generation = m_filament_fetch_generation](bool) {
         if (lifetime.expired() || m_destroying)
+            return;
+        if (fetch_generation != m_filament_fetch_generation)
             return;
         if (m_moonraker_status_machine_id != machine_id)
             return;
@@ -5640,6 +5731,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_device_os_version.clear();
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
+        reset_filament_cache_and_ui();
         reset_dashboard_snapshot();
         update_dashboard_connecting_overlay(nullptr);
         return;
@@ -5660,6 +5752,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_device_os_version.clear();
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
+        reset_filament_cache_and_ui();
         reset_dashboard_snapshot();
     }
 
@@ -8273,17 +8366,17 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
                     ? loading_tool
                     : -1;
         }
+    }
 
-        for (int i = 0; i < DeviceDashboard::MaxDashboardTools; ++i) {
-            if (m_filament_tool_has_color[i]) {
-                dashboard_state.filament.tools[i].color = m_filament_loaded_tool_colors[i];
-                dashboard_state.filament.tools[i].material = is_empty_filament_material(m_filament_loaded_tool_materials[i])
-                    ? wxString::FromUTF8("Empty")
-                    : m_filament_loaded_tool_materials[i];
-            } else {
-                dashboard_state.filament.tools[i].color = wxColour();
-                dashboard_state.filament.tools[i].material = wxString::FromUTF8("Empty");
-            }
+    for (int i = 0; i < DeviceDashboard::MaxDashboardTools; ++i) {
+        if (m_filament_tool_has_color[i]) {
+            dashboard_state.filament.tools[i].color = m_filament_loaded_tool_colors[i];
+            dashboard_state.filament.tools[i].material = is_empty_filament_material(m_filament_loaded_tool_materials[i])
+                ? wxString::FromUTF8("Empty")
+                : m_filament_loaded_tool_materials[i];
+        } else {
+            dashboard_state.filament.tools[i].color = wxColour();
+            dashboard_state.filament.tools[i].material = wxString::FromUTF8("Empty");
         }
     }
 
@@ -8660,14 +8753,7 @@ void PrinterWebView::refresh_layer_info_from_selected_machine()
         m_moonraker_available_tool_count = 0;
         m_moonraker_status_fetch_in_progress = false;
         m_moonraker_status_machine_id = machine_id;
-        m_filament_tool_has_color = {};
-        m_filament_loaded_tool_colors = {};
-        m_filament_loaded_tool_materials = {};
-        m_filament_loaded_tool_brands = {};
-        m_filament_tool_item_json = {};
-        m_filament_db_write_queued = false;
-        m_filament_preview_fetch_in_progress = false;
-        m_filament_preview_fetch_key.clear();
+        reset_filament_cache_and_ui();
         m_camera_machine_id.clear();
         m_camera_stream_url.clear();
         m_dashboard_connect_started_ms = obj != nullptr ? wxGetUTCTimeMillis() : 0;
