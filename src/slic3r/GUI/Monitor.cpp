@@ -341,6 +341,12 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
     if (mode == DeviceUiMode::CoPrint || mode == DeviceUiMode::CoPrintLegacy)
         ensure_coprint_backend();
 
+    if (mode == m_device_ui_mode) {
+        if (mode == DeviceUiMode::CoPrint || mode == DeviceUiMode::CoPrintLegacy)
+            refresh_coprint_printer_names();
+        return;
+    }
+
     m_device_ui_mode = mode;
     const bool quadro = mode == DeviceUiMode::CoPrint;
     const bool legacy = mode == DeviceUiMode::CoPrintLegacy;
@@ -415,7 +421,12 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
         refresh_coprint_printer_names();
     }
 
-    Layout();
+    {
+        wxWindowUpdateLocker freeze(this);
+        Layout();
+    }
+    if (m_coprint_session_overlay != nullptr)
+        m_coprint_session_overlay->layout_over_parent();
     update_all();
 }
 
@@ -571,6 +582,7 @@ void MonitorPanel::on_printer_clicked(wxMouseEvent &event)
 
 void MonitorPanel::on_size(wxSizeEvent &event)
 {
+    event.Skip();
     if (m_in_on_size)
         return;
     m_in_on_size = true;

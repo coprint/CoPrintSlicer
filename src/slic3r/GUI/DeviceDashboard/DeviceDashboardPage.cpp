@@ -625,8 +625,14 @@ bool PrinterOfflineOverlay::is_overlay_visible() const
 void PrinterOfflineOverlay::on_parent_size(wxSizeEvent &event)
 {
     event.Skip();
-    if (m_kind != Kind::Hidden)
-        layout_over_parent();
+    if (m_kind == Kind::Hidden || m_pending_host_layout)
+        return;
+    m_pending_host_layout = true;
+    CallAfter([this] {
+        m_pending_host_layout = false;
+        if (m_kind != Kind::Hidden)
+            layout_over_parent();
+    });
 }
 
 #ifdef __WXMSW__

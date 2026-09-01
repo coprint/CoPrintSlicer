@@ -2342,12 +2342,6 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     main_sizer->AddSpacer(FromDIP(20));
     main_sizer->Add(content_host, 1, wxEXPAND);
     SetSizer(main_sizer);
-    Bind(wxEVT_SIZE, [this](wxSizeEvent &event) {
-        event.Skip();
-        Layout();
-        if (wxWindow *parent = GetParent())
-            parent->Layout();
-    });
     select_tab(PrinterWebViewTab::Status);
 
     m_browser = nullptr;
