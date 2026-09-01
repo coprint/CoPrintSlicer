@@ -10,6 +10,10 @@
 class Button;
 class wxStaticText;
 class wxSizeEvent;
+#ifdef __WXMSW__
+class wxFrame;
+class wxMoveEvent;
+#endif
 
 namespace Slic3r {
 namespace GUI {
@@ -52,12 +56,20 @@ public:
     void set_ok_handler(std::function<void()> handler);
     void layout_over_parent();
     Kind kind() const { return m_kind; }
+    bool is_overlay_visible() const;
 
 private:
     void on_parent_size(wxSizeEvent &event);
     void apply_kind();
     void wrap_failed_labels(const wxString &title, const wxString &hint);
     wxPanel *active_card() const;
+#ifdef __WXMSW__
+    void on_owner_move(wxMoveEvent &event);
+    void ensure_msw_chrome();
+    void destroy_msw_chrome();
+    void layout_msw_chrome();
+    void apply_msw_scrim_alpha();
+#endif
 
     Kind m_kind{Kind::Hidden};
     bool m_in_layout{false};
@@ -68,6 +80,12 @@ private:
     wxStaticText *m_title{nullptr};
     wxStaticText *m_hint{nullptr};
     Button *m_ok{nullptr};
+#ifdef __WXMSW__
+    wxFrame *m_scrim_frame{nullptr};
+    wxFrame *m_card_host{nullptr};
+    wxWindow *m_owner_tlw{nullptr};
+    int m_scrim_alpha_applied{-1};
+#endif
     std::function<void()> m_retry_handler;
     std::function<void()> m_ok_handler;
 };
