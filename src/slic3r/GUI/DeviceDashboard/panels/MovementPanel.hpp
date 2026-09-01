@@ -26,9 +26,11 @@ public:
 
     void apply_state(const MovementState& state);
     void set_command_handler(CommandHandler handler);
+    void msw_rescale();
     wxWindow* status_slot() const { return m_status_slot; }
 
 private:
+    void relayout_joystick();
     Button* make_tool_button(wxWindow* parent, const wxString& label);
     Button* make_option_button(wxWindow* parent, const wxString& label);
     void dispatch_axis(Axis axis, double direction) const;
@@ -53,6 +55,8 @@ private:
     int m_selected_tool{0};
     int m_available_tool_count{MaxDashboardTools};
     bool m_controls_enabled{true};
+    bool m_relayout_busy{false};
+    int m_last_square{-1};
     CommandHandler m_command_handler;
 };
 

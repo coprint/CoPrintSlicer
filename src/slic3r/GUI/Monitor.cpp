@@ -476,6 +476,8 @@ void MonitorPanel::msw_rescale()
     m_media_file_panel->Rescale();
     m_upgrade_panel->msw_rescale();
     m_hms_panel->msw_rescale();
+    if (m_coprint_backend != nullptr)
+        m_coprint_backend->msw_rescale();
 
     Layout();
     Refresh();

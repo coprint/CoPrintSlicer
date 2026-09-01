@@ -2444,6 +2444,13 @@ void PrinterWebView::set_embedded_in_monitor(bool embedded)
     set_sidebar_visible(!embedded);
 }
 
+void PrinterWebView::msw_rescale()
+{
+    if (m_dashboard_page != nullptr)
+        m_dashboard_page->msw_rescale();
+    Layout();
+}
+
 void PrinterWebView::set_sidebar_visible(bool visible)
 {
     if (m_preview_menu_panel != nullptr)

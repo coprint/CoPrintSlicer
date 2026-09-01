@@ -126,6 +126,7 @@ public:
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
     bool get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const;
     void apply_notify_filament_changed(const std::string &dev_id, const std::string &payload);
+    void msw_rescale();
 
     void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
     void toggle_camera_timelapse();

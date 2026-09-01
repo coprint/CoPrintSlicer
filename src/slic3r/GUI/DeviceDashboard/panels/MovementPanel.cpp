@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <wx/dcbuffer.h>
+#include <wx/event.h>
 #include <wx/graphics.h>
 #include <wx/sizer.h>
 #include <wx/statbmp.h>
@@ -267,18 +268,46 @@ public:
     void set_action_handler(ActionHandler handler) { m_action_handler = std::move(handler); }
     void set_geometry(int square, int center_size, int center_gap, int button_gap)
     {
-        m_square = square;
-        m_center_size = center_size;
-        m_center_pos = (square - center_size) / 2;
+        m_square = std::max(1, square);
+        m_center_size = std::max(1, center_size);
+        m_center_pos = (m_square - m_center_size) / 2;
         m_center_gap = center_gap;
         m_button_gap = button_gap;
-        SetMinSize(wxSize(square, square));
-        SetMaxSize(wxSize(square, square));
-        SetSize(wxSize(square, square));
+        SetMinSize(wxSize(m_square, m_square));
+        SetMaxSize(wxSize(m_square, m_square));
+        SetSize(wxSize(m_square, m_square));
         Refresh();
     }
 
+    void layout_overlay(wxWindow* home)
+    {
+        const int sq = live_square();
+        const double scale = static_cast<double>(sq) / 300.0;
+        const int center = std::max(1, static_cast<int>(std::lround(85.0 * scale)));
+        const int pos = (sq - center) / 2;
+        m_center_size = center;
+        m_center_pos = pos;
+        if (home != nullptr) {
+            home->SetSize(wxRect(wxPoint(pos, pos), wxSize(center, center)));
+            home->SetMinSize(wxSize(center, center));
+            home->SetMaxSize(wxSize(center, center));
+        }
+    }
+
 private:
+    int live_square() const
+    {
+        // Never paint larger than the laid-out DIP size. Per-monitor DPI on Windows
+        // can stretch the HWND before wx relayouts; using raw client size made the
+        // pad grow and clip when the window moved to another display.
+        const wxSize cs = GetClientSize();
+        const int side = std::min(cs.GetWidth(), cs.GetHeight());
+        int sq = std::max(1, m_square);
+        if (side > 1)
+            sq = std::min(sq, side);
+        return sq;
+    }
+
     struct Piece {
         std::vector<wxPoint2DDouble> points;
         wxString label;
@@ -287,18 +316,21 @@ private:
 
     wxPoint2DDouble p(double x, double y) const
     {
-        const double scale = static_cast<double>(m_square) / 300.0;
+        const double scale = static_cast<double>(live_square()) / 300.0;
         return {x * scale, y * scale};
     }
 
     std::vector<Piece> pieces() const
     {
-        const double center_left = static_cast<double>(m_center_pos);
-        const double center_top = static_cast<double>(m_center_pos);
-        const double center_right = static_cast<double>(m_center_pos + m_center_size);
-        const double center_bottom = static_cast<double>(m_center_pos + m_center_size);
-        const double cgap = static_cast<double>(m_center_gap);
-        const double diagonal_gap = static_cast<double>(m_button_gap) / std::sqrt(2.0);
+        const double scale = static_cast<double>(live_square()) / 300.0;
+        const double center_size = 85.0 * scale;
+        const double center_pos = (static_cast<double>(live_square()) - center_size) / 2.0;
+        const double center_left = center_pos;
+        const double center_top = center_pos;
+        const double center_right = center_pos + center_size;
+        const double center_bottom = center_pos + center_size;
+        const double cgap = 4.0 * scale;
+        const double diagonal_gap = (3.0 * scale) / std::sqrt(2.0);
         const double left_inner = center_left - cgap;
         const double top_inner = center_top - cgap;
         const double right_inner = center_right + cgap;
@@ -499,7 +531,7 @@ private:
                 fill = darken(kJoystickButtonBg, kHoverDarken);
             gc->SetBrush(wxBrush(fill));
             gc->SetPen(*wxTRANSPARENT_PEN);
-            gc->DrawPath(rounded_path(gc.get(), piece.points, 15.0 * m_square / 300.0));
+            gc->DrawPath(rounded_path(gc.get(), piece.points, 15.0 * live_square() / 300.0));
             gc->SetFont(label_font, DeviceUiStyle::text_primary());
             double text_w = 0.0;
             double text_h = 0.0;
@@ -704,6 +736,23 @@ MovementPanel::MovementPanel(wxWindow* parent)
 
     body->Add(controls, 0, wxALIGN_LEFT);
     SetSizer(body);
+
+    Bind(wxEVT_SIZE, [this](wxSizeEvent& event) {
+        event.Skip();
+        if (m_relayout_busy)
+            return;
+        CallAfter([this] {
+            if (!m_relayout_busy)
+                relayout_joystick();
+        });
+    });
+#if defined(__WXMSW__) && wxCHECK_VERSION(3, 1, 0)
+    Bind(wxEVT_DPI_CHANGED, [this](wxDPIChangedEvent& event) {
+        event.Skip();
+        CallAfter([this] { msw_rescale(); });
+    });
+#endif
+    CallAfter([this] { msw_rescale(); });
 }
 
 void MovementPanel::apply_state(const MovementState& state)
@@ -720,6 +769,66 @@ void MovementPanel::apply_state(const MovementState& state)
 void MovementPanel::set_command_handler(CommandHandler handler)
 {
     m_command_handler = std::move(handler);
+}
+
+void MovementPanel::msw_rescale()
+{
+    m_last_square = -1;
+    relayout_joystick();
+}
+
+void MovementPanel::relayout_joystick()
+{
+    if (m_relayout_busy)
+        return;
+    m_relayout_busy = true;
+
+    // Logical pad size is always 300 DIP (then DeviceUiStyle 80%). Do not grow with
+    // the parent or with a stale pixel MinSize from another monitor's DPI.
+    const int square = d(this, 300);
+    const int current = m_xy_area != nullptr ? m_xy_area->GetMinSize().GetWidth() : 0;
+    if (m_last_square == square && current == square) {
+        if (auto* joy = dynamic_cast<AxisJoystickPanel*>(m_xy_area))
+            joy->layout_overlay(m_center_button);
+        m_relayout_busy = false;
+        return;
+    }
+    m_last_square = square;
+
+    if (auto* joy = dynamic_cast<AxisJoystickPanel*>(m_xy_area)) {
+        joy->set_geometry(square, d(this, 85), d(this, 4), d(this, 3));
+        joy->layout_overlay(m_center_button);
+    }
+    if (m_center_button != nullptr) {
+        m_center_button->SetCornerRadius(FromDIP(7));
+        m_center_button->Rescale();
+    }
+    if (auto* z = dynamic_cast<ZAxisShapeButton*>(m_z_plus_host))
+        z->set_visual_size(d(this, 90), d(this, 75), s(75));
+    if (auto* z = dynamic_cast<ZAxisShapeButton*>(m_z_minus_host))
+        z->set_visual_size(d(this, 90), d(this, 75), s(75));
+
+    const wxSize tool(d(this, 92), d(this, 58));
+    for (Button* button : m_tool_buttons) {
+        if (button == nullptr)
+            continue;
+        button->SetMinSize(tool);
+        button->SetMaxSize(tool);
+        button->SetSize(tool);
+        button->SetCornerRadius(d(this, 10));
+        button->Rescale();
+    }
+    const wxSize distance(d(this, 73), d(this, 45));
+    for (Button* button : m_distance_buttons) {
+        if (button == nullptr)
+            continue;
+        button->SetMinSize(distance);
+        button->SetCornerRadius(d(this, 8));
+        button->Rescale();
+    }
+
+    Layout();
+    m_relayout_busy = false;
 }
 
 Button* MovementPanel::make_tool_button(wxWindow* parent, const wxString& label)

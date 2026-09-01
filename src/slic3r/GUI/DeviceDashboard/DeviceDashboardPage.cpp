@@ -25,6 +25,9 @@
 #include <wx/scrolwin.h>
 #include <wx/stattext.h>
 #include <wx/timer.h>
+#ifdef __WXMSW__
+#include <wx/msw/wrapwin.h>
+#endif
 
 namespace Slic3r {
 namespace GUI {
@@ -174,6 +177,14 @@ void DeviceDashboardPage::apply_state(const DeviceDashboardState& state)
     refresh_scroll();
 }
 
+void DeviceDashboardPage::msw_rescale()
+{
+    if (m_movement_panel != nullptr)
+        m_movement_panel->msw_rescale();
+    Layout();
+    refresh_scroll();
+}
+
 void DeviceDashboardPage::layout_offline_overlay()
 {
     if (m_offline_overlay != nullptr)
@@ -297,23 +308,45 @@ bool overlay_uses_dark_scrim(PrinterOfflineOverlay::Kind kind)
         || kind == PrinterOfflineOverlay::Kind::Failed;
 }
 
-wxColour overlay_scrim_colour(bool dark)
-{
-#ifdef __WXMSW__
-    // The overlay HWND is layered (SetTransparent). Paint the tint colour;
-    // window alpha composites over the Device sidebar and content.
-    return dark ? wxColour(0, 0, 0) : wxColour(0xD9, 0xD9, 0xD9);
-#else
-    return dark ? wxColour(0, 0, 0, 140) : wxColour(0xD9, 0xD9, 0xD9, 153);
-#endif
-}
-
-#ifdef __WXMSW__
 int overlay_scrim_alpha(bool dark)
 {
     return dark ? 140 : 153;
 }
+
+#ifdef __WXMSW__
+// Child HWNDs: wx SetTransparent often no-ops, and WS_EX_COMPOSITED (double-buffer)
+// cannot be combined with WS_EX_LAYERED — the scrim then paints solid black.
+bool apply_overlay_layer_alpha(wxWindow *win, int alpha)
+{
+    HWND hwnd = win != nullptr ? reinterpret_cast<HWND>(win->GetHandle()) : nullptr;
+    if (hwnd == nullptr)
+        return false;
+    LONG_PTR ex = ::GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+    ex &= ~static_cast<LONG_PTR>(WS_EX_COMPOSITED);
+    if (alpha >= 255) {
+        ex &= ~static_cast<LONG_PTR>(WS_EX_LAYERED);
+        ::SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex);
+        ::RedrawWindow(hwnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME);
+        return false;
+    }
+    ex |= WS_EX_LAYERED;
+    ::SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex);
+    const BYTE byte_alpha = static_cast<BYTE>(std::clamp(alpha, 0, 255));
+    return ::SetLayeredWindowAttributes(hwnd, 0, byte_alpha, LWA_ALPHA) != 0;
+}
 #endif
+
+wxColour overlay_scrim_colour(bool dark)
+{
+#ifdef __WXMSW__
+    // Never fill with (0,0,0): SetTransparent on a child HWND is unreliable, so a
+    // black brush becomes a solid blackout. This gray matches ~55% black over #EEE.
+    return dark ? wxColour(0x8F, 0x8F, 0x8F) : wxColour(0xD9, 0xD9, 0xD9);
+#else
+    return dark ? wxColour(0, 0, 0, overlay_scrim_alpha(true))
+                : wxColour(0xD9, 0xD9, 0xD9, overlay_scrim_alpha(false));
+#endif
+}
 
 void bind_overlay_card(wxPanel *card, PrinterOfflineOverlay *overlay)
 {
@@ -428,15 +461,16 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     : wxPanel(parent, wxID_ANY)
 {
     SetBackgroundStyle(wxBG_STYLE_PAINT);
-#ifdef __WXMSW__
-    SetDoubleBuffered(true);
-#endif
     Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
 #ifdef __WXMSW__
-        wxAutoBufferedPaintDC dc(this);
+        wxPaintDC dc(this);
         const wxSize sz = GetClientSize();
+        if (sz.GetWidth() <= 0 || sz.GetHeight() <= 0)
+            return;
+        const bool dark = overlay_uses_dark_scrim(m_kind);
+        const wxColour fill = overlay_scrim_colour(dark);
         dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(overlay_scrim_colour(overlay_uses_dark_scrim(m_kind))));
+        dc.SetBrush(wxBrush(fill));
         dc.DrawRectangle(0, 0, sz.GetWidth(), sz.GetHeight());
 #else
         wxPaintDC dc(this);
@@ -627,8 +661,7 @@ void PrinterOfflineOverlay::layout_over_parent()
     if (host->IsEnabled())
         Raise();
 #ifdef __WXMSW__
-    if (CanSetTransparent())
-        SetTransparent(overlay_scrim_alpha(overlay_uses_dark_scrim(m_kind)));
+    apply_overlay_layer_alpha(this, overlay_scrim_alpha(overlay_uses_dark_scrim(m_kind)));
     if (m_cards_float_on_parent) {
         if (wxPanel *card = active_card()) {
             wxSize card_size = card->GetMinSize();
@@ -673,18 +706,26 @@ void PrinterOfflineOverlay::apply_kind()
     }
     const bool show = m_kind != Kind::Hidden;
 #ifdef __WXMSW__
-    SetBackgroundColour(overlay_scrim_colour(overlay_uses_dark_scrim(m_kind)));
-    if (show && CanSetTransparent())
-        SetTransparent(overlay_scrim_alpha(overlay_uses_dark_scrim(m_kind)));
-    else if (!show && CanSetTransparent())
-        SetTransparent(255);
-#endif
+    const bool dark = overlay_uses_dark_scrim(m_kind);
+    if (IsShown() != show)
+        Show(show);
+    if (show)
+        apply_overlay_layer_alpha(this, overlay_scrim_alpha(dark));
+    else
+        apply_overlay_layer_alpha(this, 255);
+    SetBackgroundColour(overlay_scrim_colour(dark));
+    if (show)
+        layout_over_parent();
+    else if (wxWindow *host = GetParent())
+        host->Refresh();
+#else
     if (IsShown() != show)
         Show(show);
     if (show)
         layout_over_parent();
     else if (wxWindow *host = GetParent())
         host->Refresh();
+#endif
     Layout();
     Refresh();
 }

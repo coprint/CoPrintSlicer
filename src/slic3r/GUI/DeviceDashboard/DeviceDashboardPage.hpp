@@ -31,6 +31,7 @@ public:
     explicit DeviceDashboardPage(wxWindow* parent);
 
     void apply_state(const DeviceDashboardState& state);
+    void msw_rescale();
     void set_connecting_visible(bool visible, const wxString &message = wxEmptyString);
     void set_offline_overlay_visible(bool visible, const wxString &printer_name = wxEmptyString);
     void set_offline_retry_handler(std::function<void()> handler);
