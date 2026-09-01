@@ -13,6 +13,7 @@ class wxSizeEvent;
 #ifdef __WXMSW__
 class wxFrame;
 class wxMoveEvent;
+class wxShowEvent;
 #endif
 
 namespace Slic3r {
@@ -65,10 +66,13 @@ private:
     wxPanel *active_card() const;
 #ifdef __WXMSW__
     void on_owner_move(wxMoveEvent &event);
+    void on_host_show(wxShowEvent &event);
     void ensure_msw_chrome();
     void destroy_msw_chrome();
-    void layout_msw_chrome();
+    void hide_msw_chrome();
+    bool layout_msw_chrome();
     void apply_msw_scrim_alpha();
+    bool host_ready_for_overlay() const;
 #endif
 
     Kind m_kind{Kind::Hidden};

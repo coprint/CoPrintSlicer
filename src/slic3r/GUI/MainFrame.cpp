@@ -1188,6 +1188,8 @@ void MainFrame::init_tabpanel() {
         //wxString page_text = m_tabpanel->GetPageText(sel);
         m_last_selected_tab = m_tabpanel->GetSelection();
         update_device_refresh_button();
+        if (m_monitor != nullptr)
+            m_monitor->sync_session_overlay();
         if (panel == m_plater) {
             if (sel == tp3DEditor) {
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLVIEWTOOLBAR_3D));
@@ -1203,9 +1205,6 @@ void MainFrame::init_tabpanel() {
         }
         //else if (panel == m_param_panel)
         //    m_param_panel->OnActivate();
-        else if (panel == m_monitor) {
-            //monitor
-        }
 #ifndef __APPLE__
         if (sel == tp3DEditor) {
             m_topbar->EnableUndoRedoItems();

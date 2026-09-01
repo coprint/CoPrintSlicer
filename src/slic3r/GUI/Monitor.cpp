@@ -483,6 +483,12 @@ void MonitorPanel::msw_rescale()
     Refresh();
 }
 
+void MonitorPanel::sync_session_overlay()
+{
+    if (m_coprint_session_overlay != nullptr)
+        m_coprint_session_overlay->layout_over_parent();
+}
+
 void MonitorPanel::select_machine(std::string machine_sn)
 {
     wxCommandEvent *event = new wxCommandEvent(wxEVT_COMMAND_CHOICE_SELECTED);

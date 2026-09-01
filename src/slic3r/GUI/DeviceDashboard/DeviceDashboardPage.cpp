@@ -12,6 +12,8 @@
 #include "slic3r/GUI/Widgets/Label.hpp"
 #include "slic3r/GUI/Widgets/StateColor.hpp"
 #include "../I18N.hpp"
+#include "../GUI_App.hpp"
+#include "../MainFrame.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -579,16 +581,24 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
 #endif
     Hide();
 
-    if (wxWindow *host = GetParent())
+    if (wxWindow *host = GetParent()) {
         host->Bind(wxEVT_SIZE, &PrinterOfflineOverlay::on_parent_size, this);
+#ifdef __WXMSW__
+        host->Bind(wxEVT_SHOW, &PrinterOfflineOverlay::on_host_show, this);
+#endif
+    }
 }
 
 PrinterOfflineOverlay::~PrinterOfflineOverlay()
 {
     if (m_spinner != nullptr)
         m_spinner->Stop();
-    if (wxWindow *host = GetParent())
+    if (wxWindow *host = GetParent()) {
         host->Unbind(wxEVT_SIZE, &PrinterOfflineOverlay::on_parent_size, this);
+#ifdef __WXMSW__
+        host->Unbind(wxEVT_SHOW, &PrinterOfflineOverlay::on_host_show, this);
+#endif
+    }
 #ifdef __WXMSW__
     destroy_msw_chrome();
 #endif
@@ -638,7 +648,7 @@ void PrinterOfflineOverlay::ensure_msw_chrome()
     wxWindow *owner = m_owner_tlw != nullptr ? m_owner_tlw : host;
     const long flags = wxFRAME_NO_TASKBAR | wxFRAME_FLOAT_ON_PARENT | wxBORDER_NONE;
 
-    m_scrim_frame = new wxFrame(owner, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, flags);
+    m_scrim_frame = new wxFrame(owner, wxID_ANY, wxEmptyString, wxPoint(-32000, -32000), wxSize(1, 1), flags);
     m_scrim_frame->SetBackgroundColour(*wxBLACK);
     m_scrim_frame->SetCanFocus(false);
     silence_frame_activation(m_scrim_frame);
@@ -650,7 +660,7 @@ void PrinterOfflineOverlay::ensure_msw_chrome()
     m_scrim_frame->Bind(wxEVT_MOTION, swallow);
     m_scrim_frame->Bind(wxEVT_MOUSEWHEEL, swallow);
 
-    m_card_host = new wxFrame(owner, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, flags);
+    m_card_host = new wxFrame(owner, wxID_ANY, wxEmptyString, wxPoint(-32000, -32000), wxSize(1, 1), flags);
     m_card_host->SetBackgroundColour(*wxWHITE);
     m_card_host->SetCanFocus(false);
 
@@ -660,13 +670,44 @@ void PrinterOfflineOverlay::ensure_msw_chrome()
         m_failed_card->Reparent(m_card_host);
     auto *card_sizer = new wxBoxSizer(wxVERTICAL);
     if (m_connecting_card != nullptr)
-        card_sizer->Add(m_connecting_card, 1, wxEXPAND);
+        card_sizer->Add(m_connecting_card, 0);
     if (m_failed_card != nullptr)
-        card_sizer->Add(m_failed_card, 1, wxEXPAND);
+        card_sizer->Add(m_failed_card, 0);
     m_card_host->SetSizer(card_sizer);
 
     if (m_owner_tlw != nullptr)
         m_owner_tlw->Bind(wxEVT_MOVE, &PrinterOfflineOverlay::on_owner_move, this);
+}
+
+void PrinterOfflineOverlay::on_host_show(wxShowEvent &event)
+{
+    event.Skip();
+    if (!event.IsShown()) {
+        hide_msw_chrome();
+        return;
+    }
+    if (m_kind != Kind::Hidden)
+        apply_kind();
+}
+
+void PrinterOfflineOverlay::hide_msw_chrome()
+{
+    if (m_scrim_frame != nullptr)
+        m_scrim_frame->Hide();
+    if (m_card_host != nullptr)
+        m_card_host->Hide();
+}
+
+bool PrinterOfflineOverlay::host_ready_for_overlay() const
+{
+    wxWindow *host = GetParent();
+    if (host == nullptr || !host->IsShownOnScreen())
+        return false;
+    auto *frame = wxGetApp().mainframe;
+    if (frame == nullptr || !frame->is_printer_view())
+        return false;
+    const wxSize sz = host->GetClientSize();
+    return sz.GetWidth() > 32 && sz.GetHeight() > 32;
 }
 
 void PrinterOfflineOverlay::destroy_msw_chrome()
@@ -708,16 +749,12 @@ void PrinterOfflineOverlay::apply_msw_scrim_alpha()
     m_scrim_alpha_applied = alpha;
 }
 
-void PrinterOfflineOverlay::layout_msw_chrome()
+bool PrinterOfflineOverlay::layout_msw_chrome()
 {
-    if (m_in_layout || m_scrim_frame == nullptr)
-        return;
+    if (m_in_layout || m_scrim_frame == nullptr || !host_ready_for_overlay())
+        return false;
     wxWindow *host = GetParent();
-    if (host == nullptr)
-        return;
     const wxSize host_sz = host->GetClientSize();
-    if (host_sz.GetWidth() <= 0 || host_sz.GetHeight() <= 0)
-        return;
     const wxPoint origin = host->ClientToScreen(wxPoint(0, 0));
     const wxRect scrim(origin, host_sz);
     m_in_layout = true;
@@ -729,24 +766,25 @@ void PrinterOfflineOverlay::layout_msw_chrome()
         if (m_card_host != nullptr && m_card_host->IsShown())
             m_card_host->Hide();
         m_in_layout = false;
-        return;
+        return true;
     }
-    wxSize card_size = card->GetMinSize();
+    wxSize card_size = card == m_connecting_card
+        ? wxSize(FromDIP(200), FromDIP(176))
+        : wxSize(FromDIP(360), FromDIP(220));
     if (card == m_failed_card) {
-        const wxSize best = card->GetBestSize();
-        card_size.SetWidth(std::max(card_size.GetWidth(), best.GetWidth()));
-        card_size.SetHeight(std::max(card_size.GetHeight(), best.GetHeight()));
+        const wxSize min_size = card->GetMinSize();
+        if (min_size.GetHeight() > card_size.GetHeight())
+            card_size.SetHeight(std::min(min_size.GetHeight(), FromDIP(320)));
     }
-    if (card_size.GetWidth() <= 0 || card_size.GetHeight() <= 0)
-        card_size = card->GetBestSize();
     const wxPoint card_pos(
         origin.x + std::max(0, (host_sz.GetWidth() - card_size.GetWidth()) / 2),
         origin.y + std::max(0, (host_sz.GetHeight() - card_size.GetHeight()) / 2));
     const wxRect card_rect(card_pos, card_size);
-    if (m_card_host->GetRect() != card_rect)
-        m_card_host->SetSize(card_rect);
+    m_card_host->SetSize(card_rect);
+    card->SetSize(wxRect(wxPoint(0, 0), card_size));
     apply_rounded_frame_region(m_card_host, card_size, FromDIP(kCardRadiusDip));
     m_in_layout = false;
+    return true;
 }
 #endif
 
@@ -755,7 +793,14 @@ void PrinterOfflineOverlay::layout_over_parent()
 #ifdef __WXMSW__
     if (m_kind == Kind::Hidden)
         return;
-    layout_msw_chrome();
+    if (!host_ready_for_overlay()) {
+        hide_msw_chrome();
+        return;
+    }
+    if (m_scrim_frame == nullptr || !m_scrim_frame->IsShown())
+        apply_kind();
+    else
+        layout_msw_chrome();
 #else
     if (m_in_layout)
         return;
@@ -812,9 +857,16 @@ void PrinterOfflineOverlay::apply_kind()
 #ifdef __WXMSW__
     Show(false);
     if (show) {
+        if (!host_ready_for_overlay()) {
+            hide_msw_chrome();
+            return;
+        }
         ensure_msw_chrome();
         apply_msw_scrim_alpha();
-        layout_msw_chrome();
+        if (!layout_msw_chrome()) {
+            hide_msw_chrome();
+            return;
+        }
         if (m_scrim_frame != nullptr) {
             m_scrim_frame->ShowWithoutActivating();
             m_scrim_alpha_applied = -1;
@@ -829,10 +881,7 @@ void PrinterOfflineOverlay::apply_kind()
             }
         }
     } else {
-        if (m_scrim_frame != nullptr)
-            m_scrim_frame->Hide();
-        if (m_card_host != nullptr)
-            m_card_host->Hide();
+        hide_msw_chrome();
     }
 #else
     SetBackgroundColour(overlay_scrim_colour(overlay_uses_dark_scrim(m_kind)));
@@ -870,7 +919,9 @@ void PrinterOfflineOverlay::wrap_failed_labels(const wxString &title, const wxSt
             sizer->Layout();
             sizer->SetSizeHints(m_failed_card);
         }
+#ifndef __WXMSW__
         m_failed_card->Fit();
+#endif
     }
 }
 
