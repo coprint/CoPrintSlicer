@@ -61,7 +61,6 @@ private:
 
     Kind m_kind{Kind::Hidden};
     bool m_in_layout{false};
-    bool m_cards_float_on_parent{false};
     wxPanel *m_connecting_card{nullptr};
     DeviceBusySpinner *m_spinner{nullptr};
     wxStaticText *m_connecting_label{nullptr};

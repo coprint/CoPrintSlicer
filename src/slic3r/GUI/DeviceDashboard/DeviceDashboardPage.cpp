@@ -25,9 +25,6 @@
 #include <wx/scrolwin.h>
 #include <wx/stattext.h>
 #include <wx/timer.h>
-#ifdef __WXMSW__
-#include <wx/msw/wrapwin.h>
-#endif
 
 namespace Slic3r {
 namespace GUI {
@@ -313,34 +310,11 @@ int overlay_scrim_alpha(bool dark)
     return dark ? 140 : 153;
 }
 
-#ifdef __WXMSW__
-// Child HWNDs: wx SetTransparent often no-ops, and WS_EX_COMPOSITED (double-buffer)
-// cannot be combined with WS_EX_LAYERED — the scrim then paints solid black.
-bool apply_overlay_layer_alpha(wxWindow *win, int alpha)
-{
-    HWND hwnd = win != nullptr ? reinterpret_cast<HWND>(win->GetHandle()) : nullptr;
-    if (hwnd == nullptr)
-        return false;
-    LONG_PTR ex = ::GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    ex &= ~static_cast<LONG_PTR>(WS_EX_COMPOSITED);
-    if (alpha >= 255) {
-        ex &= ~static_cast<LONG_PTR>(WS_EX_LAYERED);
-        ::SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex);
-        ::RedrawWindow(hwnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME);
-        return false;
-    }
-    ex |= WS_EX_LAYERED;
-    ::SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex);
-    const BYTE byte_alpha = static_cast<BYTE>(std::clamp(alpha, 0, 255));
-    return ::SetLayeredWindowAttributes(hwnd, 0, byte_alpha, LWA_ALPHA) != 0;
-}
-#endif
-
 wxColour overlay_scrim_colour(bool dark)
 {
 #ifdef __WXMSW__
-    // Never fill with (0,0,0): SetTransparent on a child HWND is unreliable, so a
-    // black brush becomes a solid blackout. This gray matches ~55% black over #EEE.
+    // Opaque gray: child-window alpha on MSW either blacked out or tore the
+    // content underneath. Match ~55% black over the Device page (#EEE).
     return dark ? wxColour(0x8F, 0x8F, 0x8F) : wxColour(0xD9, 0xD9, 0xD9);
 #else
     return dark ? wxColour(0, 0, 0, overlay_scrim_alpha(true))
@@ -350,19 +324,25 @@ wxColour overlay_scrim_colour(bool dark)
 
 void bind_overlay_card(wxPanel *card, PrinterOfflineOverlay *overlay)
 {
-    card->SetBackgroundColour(*wxWHITE);
-#ifdef __WXMSW__
-    // Cards sit above the layered scrim as siblings so they stay opaque.
     (void) overlay;
+    card->SetBackgroundColour(*wxWHITE);
     card->SetBackgroundStyle(wxBG_STYLE_PAINT);
+#ifdef __WXMSW__
     card->SetDoubleBuffered(true);
+#endif
     card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
     card->Bind(wxEVT_PAINT, [card](wxPaintEvent &) {
+#ifdef __WXMSW__
         wxAutoBufferedPaintDC dc(card);
         const wxSize sz = card->GetClientSize();
         if (sz.GetWidth() <= 0 || sz.GetHeight() <= 0)
             return;
-        dc.SetBackground(wxBrush(*wxWHITE));
+        // Fill the square HWND corners with the parent scrim so the white
+        // rounded rect reads as a card sitting on the overlay, not under it.
+        wxColour corner = *wxWHITE;
+        if (wxWindow *parent = card->GetParent())
+            corner = parent->GetBackgroundColour();
+        dc.SetBackground(wxBrush(corner.IsOk() ? corner : *wxWHITE));
         dc.Clear();
         std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
         if (gc == nullptr)
@@ -371,13 +351,10 @@ void bind_overlay_card(wxPanel *card, PrinterOfflineOverlay *overlay)
         gc->SetBrush(wxBrush(*wxWHITE));
         gc->DrawRoundedRectangle(0, 0, sz.GetWidth(), sz.GetHeight(),
             card->FromDIP(kCardRadiusDip));
-    });
 #else
-    card->SetBackgroundStyle(wxBG_STYLE_PAINT);
-    card->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
-    card->Bind(wxEVT_PAINT, [](wxPaintEvent &) {});
-    (void) overlay;
+        (void) card;
 #endif
+    });
 }
 }
 
@@ -390,6 +367,9 @@ DeviceBusySpinner::DeviceBusySpinner(wxWindow *parent, const wxSize &size, const
     SetMaxSize(size);
     SetBackgroundStyle(wxBG_STYLE_PAINT);
     SetBackgroundColour(bg);
+#ifdef __WXMSW__
+    SetDoubleBuffered(true);
+#endif
     Bind(wxEVT_PAINT, &DeviceBusySpinner::on_paint, this);
     Bind(wxEVT_TIMER, &DeviceBusySpinner::on_timer, this);
     Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
@@ -403,7 +383,7 @@ DeviceBusySpinner::~DeviceBusySpinner()
 void DeviceBusySpinner::Play()
 {
     if (!m_timer.IsRunning())
-        m_timer.Start(16);
+        m_timer.Start(33);
 }
 
 void DeviceBusySpinner::Stop()
@@ -463,15 +443,14 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     SetBackgroundStyle(wxBG_STYLE_PAINT);
     Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
 #ifdef __WXMSW__
-        wxPaintDC dc(this);
+        wxAutoBufferedPaintDC dc(this);
         const wxSize sz = GetClientSize();
         if (sz.GetWidth() <= 0 || sz.GetHeight() <= 0)
             return;
-        const bool dark = overlay_uses_dark_scrim(m_kind);
-        const wxColour fill = overlay_scrim_colour(dark);
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(fill));
-        dc.DrawRectangle(0, 0, sz.GetWidth(), sz.GetHeight());
+        dc.SetBackground(wxBrush(GetBackgroundColour().IsOk()
+            ? GetBackgroundColour()
+            : overlay_scrim_colour(overlay_uses_dark_scrim(m_kind))));
+        dc.Clear();
 #else
         wxPaintDC dc(this);
         std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
@@ -586,14 +565,6 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     wrap_failed_labels(m_title->GetLabel(), m_hint->GetLabel());
     m_failed_card->Hide();
 
-#ifdef __WXMSW__
-    if (wxWindow *host = GetParent()) {
-        m_connecting_card->Reparent(host);
-        m_failed_card->Reparent(host);
-        m_cards_float_on_parent = true;
-    }
-    SetSizer(nullptr);
-#else
     auto *root = new wxBoxSizer(wxVERTICAL);
     auto *row = new wxBoxSizer(wxHORIZONTAL);
     row->AddStretchSpacer(1);
@@ -604,7 +575,6 @@ PrinterOfflineOverlay::PrinterOfflineOverlay(wxWindow *parent)
     root->Add(row, 0, wxEXPAND);
     root->AddStretchSpacer(1);
     SetSizer(root);
-#endif
     Hide();
 
     if (wxWindow *host = GetParent())
@@ -617,12 +587,6 @@ PrinterOfflineOverlay::~PrinterOfflineOverlay()
         m_spinner->Stop();
     if (wxWindow *host = GetParent())
         host->Unbind(wxEVT_SIZE, &PrinterOfflineOverlay::on_parent_size, this);
-    // Floating cards are children of the host window; it destroys them.
-    if (m_cards_float_on_parent) {
-        m_connecting_card = nullptr;
-        m_failed_card = nullptr;
-        m_spinner = nullptr;
-    }
 }
 
 wxPanel *PrinterOfflineOverlay::active_card() const
@@ -655,32 +619,11 @@ void PrinterOfflineOverlay::layout_over_parent()
     if (auto *scrolled = dynamic_cast<wxScrolledWindow *>(host))
         origin = scrolled->CalcUnscrolledPosition(wxPoint(0, 0));
     const wxRect want(origin.x, origin.y, sz.GetWidth(), sz.GetHeight());
+    if (GetRect() == want)
+        return;
     m_in_layout = true;
-    if (GetRect() != want)
-        SetSize(want);
-    if (host->IsEnabled())
-        Raise();
-#ifdef __WXMSW__
-    apply_overlay_layer_alpha(this, overlay_scrim_alpha(overlay_uses_dark_scrim(m_kind)));
-    if (m_cards_float_on_parent) {
-        if (wxPanel *card = active_card()) {
-            wxSize card_size = card->GetMinSize();
-            if (card_size.GetWidth() <= 0 || card_size.GetHeight() <= 0)
-                card_size = card->GetBestSize();
-            if (card == m_failed_card) {
-                const wxSize best = card->GetBestSize();
-                card_size.SetWidth(std::max(card_size.GetWidth(), best.GetWidth()));
-                card_size.SetHeight(std::max(card_size.GetHeight(), best.GetHeight()));
-            }
-            const int x = origin.x + std::max(0, (sz.GetWidth() - card_size.GetWidth()) / 2);
-            const int y = origin.y + std::max(0, (sz.GetHeight() - card_size.GetHeight()) / 2);
-            card->SetSize(x, y, card_size.GetWidth(), card_size.GetHeight());
-            card->Raise();
-        }
-    }
-#endif
+    SetSize(want);
     Layout();
-    Refresh();
     m_in_layout = false;
 }
 
@@ -705,29 +648,16 @@ void PrinterOfflineOverlay::apply_kind()
             m_spinner->Stop();
     }
     const bool show = m_kind != Kind::Hidden;
-#ifdef __WXMSW__
-    const bool dark = overlay_uses_dark_scrim(m_kind);
+    SetBackgroundColour(overlay_scrim_colour(overlay_uses_dark_scrim(m_kind)));
     if (IsShown() != show)
         Show(show);
-    if (show)
-        apply_overlay_layer_alpha(this, overlay_scrim_alpha(dark));
-    else
-        apply_overlay_layer_alpha(this, 255);
-    SetBackgroundColour(overlay_scrim_colour(dark));
-    if (show)
+    if (show) {
+        Raise();
         layout_over_parent();
-    else if (wxWindow *host = GetParent())
+        Layout();
+    } else if (wxWindow *host = GetParent()) {
         host->Refresh();
-#else
-    if (IsShown() != show)
-        Show(show);
-    if (show)
-        layout_over_parent();
-    else if (wxWindow *host = GetParent())
-        host->Refresh();
-#endif
-    Layout();
-    Refresh();
+    }
 }
 
 void PrinterOfflineOverlay::wrap_failed_labels(const wxString &title, const wxString &hint)
