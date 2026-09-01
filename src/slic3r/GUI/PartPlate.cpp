@@ -4273,6 +4273,20 @@ void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool ini
     }
     const float margin = WIPE_TOWER_MARGIN + brim_width;
 
+    {
+        const auto *printer_model = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionString>("printer_model");
+        const bool is_quadro = printer_model != nullptr && boost::algorithm::icontains(printer_model->value, "Quadro");
+        if (is_quadro) {
+            // Measured from Snapmaker 270 mm screenshot (10 mm grid):
+            // left edge ≈ 10 mm from X=0; back of tower ≈ 52 mm down from the far Y edge.
+            constexpr float kLeftFromOriginMm = 10.f;
+            constexpr float kDownFromBackMm   = 52.f;
+            x = static_cast<float>(plate_bbox_x_min_local_coord) + kLeftFromOriginMm;
+            y = static_cast<float>(plate_bbox_y_max_local_coord) - kDownFromBackMm
+                - static_cast<float>(wipe_tower_size(1));
+        }
+    }
+
     // clamp wipe tower position within plate boundaries
     {
         if (x + margin + wipe_tower_size(0) > plate_bbox_x_max_local_coord) {
