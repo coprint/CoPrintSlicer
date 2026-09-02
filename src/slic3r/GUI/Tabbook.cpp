@@ -21,10 +21,6 @@ static const wxFont& TAB_BUTTON_FONT     = Label::Body_14;
 static const wxFont& TAB_BUTTON_FONT_SEL = Label::Head_14;
 
 
-static const int BUTTON_DEF_HEIGHT = 46;
-static const int BUTTON_DEF_WIDTH  = 254;
-
-
 TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools) :
     wxControl(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE | wxTAB_TRAVERSAL)
 {
@@ -62,10 +58,44 @@ TabButtonsListCtrl::TabButtonsListCtrl(wxWindow *parent, wxBoxSizer *side_tools)
     }
 
     m_buttons_sizer = new wxFlexGridSizer(1, m_btn_margin, m_btn_margin);
-    m_sizer->Add(m_buttons_sizer, 0, wxLEFT | wxTOP, m_btn_margin);
+    m_buttons_sizer->AddGrowableCol(0, 1);
+    m_sizer->Add(m_buttons_sizer, 0, wxEXPAND | wxLEFT | wxTOP, m_btn_margin);
     m_sizer->AddStretchSpacer(1);
     if (wxWindow *host = GetParent())
         host->SetBackgroundColour(TAB_BUTTON_BG);
+    apply_column_width();
+}
+
+wxSize TabButtonsListCtrl::button_size() const
+{
+    return wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), FromDIP(DEVICE_SIDEBAR_DIP_HEIGHT));
+}
+
+void TabButtonsListCtrl::apply_column_width()
+{
+    const wxSize btn_sz = button_size();
+    const int    col_w  = btn_sz.GetWidth();
+    for (TabButton *btn : m_pageButtons) {
+        btn->SetMinSize(btn_sz);
+#ifdef __WXMSW__
+        btn->SetSize(btn_sz);
+#endif
+    }
+    SetMinSize(wxSize(col_w, -1));
+#ifdef __WXMSW__
+    const int h = GetSize().GetHeight();
+    SetSize(wxSize(col_w, h > 0 ? h : -1));
+#endif
+    InvalidateBestSize();
+}
+
+wxSize TabButtonsListCtrl::DoGetBestSize() const
+{
+    wxSize best = wxControl::DoGetBestSize();
+    if (wxSizer *sizer = GetSizer())
+        best.IncTo(sizer->CalcMin());
+    best.IncTo(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), 0));
+    return best;
 }
 
 void TabButtonsListCtrl::OnPaint(wxPaintEvent &)
@@ -101,12 +131,11 @@ void TabButtonsListCtrl::Rescale()
 {
     m_arrow_img = ScalableBitmap(this, "monitor_arrow", 14);
 
-    int em = em_unit(this);
     for (TabButton *btn : m_pageButtons) {
-        btn->SetMinSize({BUTTON_DEF_WIDTH * em / 10, BUTTON_DEF_HEIGHT * em / 10});
         btn->SetBitmap(m_arrow_img);
         btn->Rescale();
     }
+    apply_column_width();
 
     m_sizer->Layout();
 }
@@ -141,8 +170,7 @@ bool TabButtonsListCtrl::InsertPage(size_t n, const wxString &text, bool bSelect
     TabButton *btn = new TabButton(this, text, m_arrow_img, wxNO_BORDER);
     btn->SetCornerRadius(0);
 
-    int em = em_unit(this);
-    btn->SetMinSize({BUTTON_DEF_WIDTH * em / 10, BUTTON_DEF_HEIGHT * em / 10});
+    btn->SetMinSize(button_size());
 
     btn->SetBackgroundColor(TAB_BUTTON_BG);
     btn->SetTextColor(wxColour("#434343"));
@@ -157,8 +185,9 @@ bool TabButtonsListCtrl::InsertPage(size_t n, const wxString &text, bool bSelect
     });
     Slic3r::GUI::wxGetApp().UpdateDarkUI(btn);
     m_pageButtons.insert(m_pageButtons.begin() + n, btn);
-    m_buttons_sizer->Insert(n, new wxSizerItem(btn));
+    m_buttons_sizer->Insert(n, btn, 0, wxEXPAND);
     m_buttons_sizer->SetRows(m_pageButtons.size() + 1);
+    apply_column_width();
     m_sizer->Layout();
     return true;
 }

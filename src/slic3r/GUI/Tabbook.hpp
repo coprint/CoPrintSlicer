@@ -14,6 +14,10 @@ class TabButton;
 // custom message the ButtonsListCtrl sends to its parent (Notebook) to notify a selection change:
 wxDECLARE_EVENT(wxCUSTOMEVT_TABBOOK_SEL_CHANGED, wxCommandEvent);
 
+// Device / Monitor left tab column width (DIP). Used by TabButtonsListCtrl and CoPrintPrinterPicker.
+constexpr int DEVICE_SIDEBAR_DIP_WIDTH  = 254;
+constexpr int DEVICE_SIDEBAR_DIP_HEIGHT = 46;
+
 class TabButtonsListCtrl : public wxControl
 {
 public:
@@ -36,7 +40,13 @@ public:
     void showPage(size_t n, bool show);
     TabButton*                      pageButton;
 
+protected:
+    wxSize DoGetBestSize() const override;
+
 private:
+    wxSize button_size() const;
+    void   apply_column_width();
+
     wxWindow*                       m_parent;
     wxFlexGridSizer*                m_buttons_sizer;
     wxBoxSizer*                     m_sizer;
@@ -75,6 +85,7 @@ public:
             return false;
 
         m_bookctrl = new TabButtonsListCtrl(this, side_tools);
+        m_bookctrl->SetMinSize(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), -1));
 
         wxSizer* mainSizer = new wxBoxSizer(IsVertical() ? wxVERTICAL : wxHORIZONTAL);
 

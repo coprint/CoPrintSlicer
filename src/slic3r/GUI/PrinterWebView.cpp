@@ -2054,6 +2054,9 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
     preview_menu_panel->SetBackgroundColour(wxColour(255, 255, 255));
     preview_menu_panel->SetMinSize(wxSize(FromDIP(298), FromDIP(360)));
     preview_menu_panel->SetMaxSize(wxSize(FromDIP(298), -1));
+#ifdef __WXMSW__
+    preview_menu_panel->SetSize(wxSize(FromDIP(298), FromDIP(360)));
+#endif
     auto *preview_menu_sizer = new wxBoxSizer(wxVERTICAL);
 
     {
@@ -2440,6 +2443,14 @@ void PrinterWebView::set_embedded_in_monitor(bool embedded)
 
 void PrinterWebView::msw_rescale()
 {
+    if (m_preview_menu_panel != nullptr) {
+        const int sidebar_w = FromDIP(298);
+        m_preview_menu_panel->SetMinSize(wxSize(sidebar_w, FromDIP(360)));
+        m_preview_menu_panel->SetMaxSize(wxSize(sidebar_w, -1));
+#ifdef __WXMSW__
+        m_preview_menu_panel->SetSize(wxSize(sidebar_w, m_preview_menu_panel->GetSize().GetHeight()));
+#endif
+    }
     if (m_dashboard_page != nullptr)
         m_dashboard_page->msw_rescale();
     Layout();

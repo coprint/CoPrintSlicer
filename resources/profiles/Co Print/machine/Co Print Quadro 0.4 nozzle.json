@@ -105,66 +105,66 @@
     "machine_load_filament_time": "1",
     "machine_max_acceleration_e": [
         "5000",
-        "2500"
+        "5000"
     ],
     "machine_max_acceleration_extruding": [
         "10000",
-        "5000"
+        "12000"
     ],
     "machine_max_acceleration_retracting": [
         "5000",
-        "2500"
+        "5000"
     ],
     "machine_max_acceleration_travel": [
-        "40000",
-        "40000"
+        "12000",
+        "12000"
     ],
     "machine_max_acceleration_x": [
-        "10000",
-        "5000"
+        "5000",
+        "12000"
     ],
     "machine_max_acceleration_y": [
-        "10000",
-        "5000"
+        "5000",
+        "12000"
     ],
     "machine_max_acceleration_z": [
-        "300",
-        "100"
+        "100",
+        "1000"
     ],
     "machine_max_jerk_e": [
         "3",
-        "2.5"
+        "3"
     ],
     "machine_max_jerk_x": [
         "9",
-        "8"
+        "9"
     ],
     "machine_max_jerk_y": [
         "9",
-        "8"
+        "9"
     ],
     "machine_max_jerk_z": [
         "3",
-        "0.2"
+        "3"
     ],
     "machine_max_junction_deviation": [
         "0.01"
     ],
     "machine_max_speed_e": [
         "100",
-        "100"
+        "30"
     ],
     "machine_max_speed_x": [
-        "500",
-        "500"
+        "350",
+        "200"
     ],
     "machine_max_speed_y": [
-        "500",
-        "500"
+        "350",
+        "200"
     ],
     "machine_max_speed_z": [
-        "12",
-        "10"
+        "7",
+        "30"
     ],
     "machine_min_extruding_rate": [
         "0"
@@ -174,12 +174,12 @@
     ],
     "machine_pause_gcode": "",
     "machine_start_gcode": "start_print  EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] PURGE_LINE='false' BED_TEMP=[bed_temperature_initial_layer_single] EXT0={is_extruder_used[0]} EXT1={is_extruder_used[1]} EXT2={is_extruder_used[2]} EXT3={is_extruder_used[3]}",
-    "machine_tool_change_time": "0",
+    "machine_tool_change_time": "5",
     "machine_unload_filament_time": "1",
     "manual_filament_change": "0",
     "master_extruder_id": "1",
     "max_layer_height": [
-        "0.32",
+        "0.28",
         "0.28",
         "0.28",
         "0.28"
@@ -209,9 +209,9 @@
     "nozzle_hrc": "0",
     "nozzle_type": [
         "hardened_steel",
-        "undefine",
-        "undefine",
-        "undefine"
+        "hardened_steel",
+        "hardened_steel",
+        "hardened_steel"
     ],
     "nozzle_volume": [
         "156",
@@ -236,7 +236,7 @@
         "300x300",
         "0x300"
     ],
-    "printable_height": "350",
+    "printable_height": "300",
     "printer_agent": "coprint",
     "printer_extruder_id": [
         "1",
@@ -253,7 +253,7 @@
     "printer_model": "Co Print Quadro",
     "printer_notes": "",
     "printer_settings_id": "Co Print Quadro 0.4 nozzle",
-    "printer_structure": "undefine",
+    "printer_structure": "i3",
     "printer_technology": "FFF",
     "printer_variant": "0.4",
     "printhost_apikey": "",
@@ -309,10 +309,10 @@
         "0"
     ],
     "retract_when_changing_layer": [
-        "0",
-        "0",
-        "0",
-        "0"
+        "1",
+        "1",
+        "1",
+        "1"
     ],
     "retraction_distances_when_cut": [
         "18",
@@ -321,10 +321,10 @@
         "18"
     ],
     "retraction_length": [
-        "0.5",
-        "0.5",
-        "0.5",
-        "0.5"
+        "0.4",
+        "0.4",
+        "0.4",
+        "0.4"
     ],
     "retraction_minimum_travel": [
         "1",
@@ -333,15 +333,15 @@
         "1"
     ],
     "retraction_speed": [
-        "50",
-        "50",
-        "50",
-        "50"
+        "30",
+        "30",
+        "30",
+        "30"
     ],
     "scan_first_layer": "0",
     "silent_mode": "0",
     "single_extruder_multi_material": "0",
-    "support_air_filtration": "1",
+    "support_air_filtration": "0",
     "support_chamber_temp_control": "0",
     "support_multi_bed_types": "0",
     "support_object_skip_flush": "0",
@@ -362,12 +362,12 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.4",
+    "version": "2.4.0.5",
     "wipe": [
-        "0",
-        "0",
-        "0",
-        "0"
+        "1",
+        "1",
+        "1",
+        "1"
     ],
     "wipe_distance": [
         "2",
@@ -386,10 +386,10 @@
         "0.4"
     ],
     "z_hop_types": [
-        "Normal Lift",
-        "Normal Lift",
-        "Normal Lift",
-        "Normal Lift"
+        "Auto Lift",
+        "Auto Lift",
+        "Auto Lift",
+        "Auto Lift"
     ],
     "z_offset": "0",
     "instantiation": "true"

@@ -330,7 +330,7 @@ SideTools::SideTools(wxWindow *parent, wxWindowID id, const wxPoint &pos, const 
 
     // ORCA standardized HyperLink
     m_link_network_state = new HyperLink(m_side_error_panel, _L("Check the status of current system services"), wxGetApp().link_to_network_check(), wxST_ELLIPSIZE_END);
-    m_link_network_state->SetMaxSize(wxSize(FromDIP(220), -1));
+    m_link_network_state->SetMaxSize(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), -1));
     m_link_network_state->SetFont(::Label::Body_12);
 
     auto st_title_error_code = new wxStaticText(m_side_error_panel, wxID_ANY, _L("code"), wxDefaultPosition, wxDefaultSize, wxST_ELLIPSIZE_END);
@@ -407,9 +407,9 @@ void SideTools::msw_rescale()
 {
     m_side_tools->msw_rescale();
     m_connection_info->SetCornerRadius(0);
-    m_connection_info->SetSize(wxSize(FromDIP(220), FromDIP(25)));
-    m_connection_info->SetMinSize(wxSize(FromDIP(220), FromDIP(25)));
-    m_connection_info->SetMaxSize(wxSize(FromDIP(220), FromDIP(25)));
+    m_connection_info->SetSize(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), FromDIP(25)));
+    m_connection_info->SetMinSize(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), FromDIP(25)));
+    m_connection_info->SetMaxSize(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), FromDIP(25)));
 }
 
 bool SideTools::is_in_interval()

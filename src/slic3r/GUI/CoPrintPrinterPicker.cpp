@@ -12,6 +12,7 @@
 #include "Widgets/Label.hpp"
 #include "Widgets/StaticBox.hpp"
 #include "wxExtensions.hpp"
+#include "Tabbook.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include "libslic3r/Utils.hpp"
 #ifdef __APPLE__
@@ -444,6 +445,10 @@ CoPrintPrinterPicker::CoPrintPrinterPicker(wxWindow* parent, PrinterWebView* bac
     build_add_printer();
     sizer->Add(m_add_panel, 0, wxEXPAND);
     SetSizer(sizer);
+    SetMinSize(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), -1));
+#ifdef __WXMSW__
+    SetSize(wxSize(FromDIP(DEVICE_SIDEBAR_DIP_WIDTH), GetSize().GetHeight()));
+#endif
 
     rebuild_list();
     apply_header_style();
@@ -1098,7 +1103,7 @@ int CoPrintPrinterPicker::auto_list_width() const
     }
     int sidebar = GetClientSize().GetWidth();
     if (sidebar <= 0)
-        sidebar = FromDIP(254);
+        sidebar = FromDIP(DEVICE_SIDEBAR_DIP_WIDTH);
     return std::max(FromDIP(80), sidebar - FromDIP(24));
 }
 

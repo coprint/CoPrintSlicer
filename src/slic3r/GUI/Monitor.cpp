@@ -482,6 +482,13 @@ void MonitorPanel::msw_rescale()
     /* side_tool rescale */
     m_side_tools->msw_rescale();
     m_tabpanel->Rescale();
+    if (m_coprint_printer_picker != nullptr) {
+        const int sidebar_w = FromDIP(DEVICE_SIDEBAR_DIP_WIDTH);
+        m_coprint_printer_picker->SetMinSize(wxSize(sidebar_w, -1));
+#ifdef __WXMSW__
+        m_coprint_printer_picker->SetSize(wxSize(sidebar_w, m_coprint_printer_picker->GetSize().GetHeight()));
+#endif
+    }
     //m_status_add_machine_panel->msw_rescale();
     m_status_info_panel->msw_rescale();
     m_media_file_panel->Rescale();
