@@ -39,6 +39,8 @@ public:
     WebViewPanel(wxWindow *parent);
     virtual ~WebViewPanel();
 
+    // WKWebView / WebView2 must not be created before the top-level frame is shown.
+    void ensure_browser();
     void load_url(wxString& url);
 
     void UpdateState();
@@ -107,13 +109,13 @@ public:
     void update_mode();
 private:
 
-    wxWebView* m_browser;
+    wxWebView* m_browser{nullptr};
     wxBoxSizer *bSizer_toolbar;
     wxButton *  m_button_back;
     wxButton *  m_button_forward;
     wxButton *  m_button_stop;
     wxButton *  m_button_reload;
-    wxTextCtrl *m_url;
+    wxTextCtrl *m_url{nullptr};
     wxButton *  m_button_tools;
 
     wxMenu* m_tools_menu;

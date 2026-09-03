@@ -36,11 +36,6 @@ namespace GUI {
 WebViewPanel::WebViewPanel(wxWindow *parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
  {
-    wxString url = wxString::Format("file://%s/web/homepage/index.html", from_u8(resources_dir()));
-    wxString strlang = wxGetApp().current_language_code_safe();
-    if (strlang != "")
-        url = wxString::Format("file://%s/web/homepage/index.html?lang=%s", from_u8(resources_dir()), strlang);
-
     wxBoxSizer* topsizer = new wxBoxSizer(wxVERTICAL);
     
 #if !BBL_RELEASE_TO_PUBLIC
@@ -82,16 +77,8 @@ WebViewPanel::WebViewPanel(wxWindow *parent)
     // Create the info panel
     m_info = new wxInfoBar(this);
     topsizer->Add(m_info, wxSizerFlags().Expand());
-    // Create the webview
-    m_browser = WebView::CreateWebView(this, url);
-    if (m_browser == nullptr) {
-        wxLogError("Could not init m_browser");
-        return;
-    }
-    m_browser->Hide();
     SetSizer(topsizer);
-
-    topsizer->Add(m_browser, wxSizerFlags().Expand().Proportion(1));
+    // Native WebView is created in ensure_browser() after MainFrame is shown.
 
     // Log backend information
     /* m_browser->GetUserAgent() may lead crash
@@ -221,6 +208,27 @@ WebViewPanel::WebViewPanel(wxWindow *parent)
     m_LoginUpdateTimer = nullptr;
  }
 
+void WebViewPanel::ensure_browser()
+{
+    if (m_browser)
+        return;
+
+    wxString url = wxString::Format("file://%s/web/homepage/index.html", from_u8(resources_dir()));
+    wxString strlang = wxGetApp().current_language_code_safe();
+    if (strlang != "")
+        url = wxString::Format("file://%s/web/homepage/index.html?lang=%s", from_u8(resources_dir()), strlang);
+
+    m_browser = WebView::CreateWebView(this, url);
+    if (m_browser == nullptr) {
+        wxLogError("Could not init m_browser");
+        return;
+    }
+    m_browser->Hide();
+    if (wxSizer *sizer = GetSizer())
+        sizer->Add(m_browser, wxSizerFlags().Expand().Proportion(1));
+    Layout();
+}
+
 WebViewPanel::~WebViewPanel()
 {
     BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << " Start";
@@ -241,10 +249,14 @@ void WebViewPanel::load_url(wxString& url)
 {
     this->Show();
     this->Raise();
-    m_url->SetLabelText(url);
+    ensure_browser();
+    if (m_url)
+        m_url->SetLabelText(url);
 
-    if (wxGetApp().get_mode() == comDevelop)
+    if (wxGetApp().get_mode() == comDevelop && m_url)
         wxLogMessage(m_url->GetValue());
+    if (!m_browser)
+        return;
     m_browser->LoadURL(url);
     m_browser->SetFocus();
     UpdateState();
@@ -256,6 +268,8 @@ void WebViewPanel::load_url(wxString& url)
     */
 void WebViewPanel::UpdateState()
 {
+    if (!m_browser)
+        return;
 #if !BBL_RELEASE_TO_PUBLIC
     if (m_browser->CanGoBack()) {
         m_button_back->Enable(true);
@@ -286,6 +300,8 @@ void WebViewPanel::UpdateState()
 void WebViewPanel::OnIdle(wxIdleEvent& WXUNUSED(evt))
 {
 #if !BBL_RELEASE_TO_PUBLIC
+    if (!m_browser)
+        return;
     if (m_browser->IsBusy())
     {
         wxSetCursor(wxCURSOR_ARROWWAIT);
@@ -622,7 +638,8 @@ void WebViewPanel::OnNavigationRequest(wxWebViewEvent& evt)
     */
 void WebViewPanel::OnNavigationComplete(wxWebViewEvent& evt)
 {
-    m_browser->Show();
+    if (m_browser)
+        m_browser->Show();
     Layout();
     BOOST_LOG_TRIVIAL(trace) << __FUNCTION__ << ": " << evt.GetURL().ToUTF8().data();
     if (wxGetApp().get_mode() == comDevelop)

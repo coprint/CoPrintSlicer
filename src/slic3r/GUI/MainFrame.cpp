@@ -654,8 +654,6 @@ DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_
     wxGetApp().UpdateDarkUIWin(this);
 #endif // _MSW_DARK_MODE
 
-    CallAfter([this]() { ensure_printer_web_view_created(); });
-
     wxGetApp().persist_window_geometry(this, true);
     wxGetApp().persist_window_geometry(&m_settings_dialog, true);
     // bind events from DiffDlg
@@ -1343,6 +1341,18 @@ void MainFrame::show_device(bool bBBLPrinter) {
 DeviceDashboard::MoonrakerDeviceController* MainFrame::coprint_device_controller()
 {
     return m_monitor != nullptr ? m_monitor->coprint_device_controller() : nullptr;
+}
+
+void MainFrame::ensure_startup_web_views()
+{
+    BOOST_LOG_TRIVIAL(info) << "Creating deferred WebViews after main window is shown";
+    if (m_webview)
+        m_webview->ensure_browser();
+    if (m_project)
+        m_project->ensure_browser();
+    if (m_monitor && m_monitor->get_status_panel())
+        m_monitor->get_status_panel()->ensure_custom_camera_webview();
+    ensure_printer_web_view_created();
 }
 
 void MainFrame::ensure_printer_web_view_created()

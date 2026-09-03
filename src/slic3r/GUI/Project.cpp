@@ -51,27 +51,34 @@ ProjectPanel::ProjectPanel(wxWindow *parent, wxWindowID id, const wxPoint &pos, 
 
     wxBoxSizer* main_sizer = new wxBoxSizer(wxVERTICAL);
 
+    // Native WebView is created in ensure_browser() after MainFrame is shown.
+    m_auxiliary = new AuxiliaryPanel(this);
+    m_auxiliary->Hide();
+    main_sizer->Add(m_auxiliary, wxSizerFlags().Expand().Proportion(1));
+    Bind(EVT_AUXILIARY_DONE, [this](wxCommandEvent& e) { update_model_data();});
+    Bind(EVT_PROJECT_RELOAD, &ProjectPanel::on_reload, this);
+
+    SetSizer(main_sizer);
+    Layout();
+    Fit();
+}
+
+void ProjectPanel::ensure_browser()
+{
+    if (m_browser)
+        return;
+
     m_browser = WebView::CreateWebView(this, m_project_home_url);
     if (m_browser == nullptr) {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format("load web view of project page failed");
         return;
     }
-    //m_browser->Hide();
-    main_sizer->Add(m_browser, wxSizerFlags().Expand().Proportion(1));
+    if (wxSizer *sizer = GetSizer())
+        sizer->Insert(0, m_browser, wxSizerFlags().Expand().Proportion(1));
     m_browser->Bind(wxEVT_WEBVIEW_NAVIGATED, &ProjectPanel::on_navigated, this);
     m_browser->Bind(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, &ProjectPanel::OnScriptMessage, this, m_browser->GetId());
     Bind(wxEVT_WEBVIEW_NAVIGATING, &ProjectPanel::onWebNavigating, this, m_browser->GetId());
-
-    Bind(EVT_PROJECT_RELOAD, &ProjectPanel::on_reload, this);
-
-    m_auxiliary = new AuxiliaryPanel(this);
-    m_auxiliary->Hide();
-    main_sizer->Add(m_auxiliary, wxSizerFlags().Expand().Proportion(1));
-    Bind(EVT_AUXILIARY_DONE, [this](wxCommandEvent& e) { update_model_data();});
-
-    SetSizer(main_sizer);
     Layout();
-    Fit();
 }
 
 ProjectPanel::~ProjectPanel() {}
@@ -90,10 +97,10 @@ static std::string convert_newlines_to_br(const std::string& text) {
 void ProjectPanel::onWebNavigating(wxWebViewEvent& evt)
 {
     wxString tmpUrl = evt.GetURL();
-    //wxString NowUrl = m_browser->GetCurrentURL();
 
     if (boost::starts_with(tmpUrl, "http://") || boost::starts_with(tmpUrl, "https://")) {
-        m_browser->Stop();
+        if (m_browser)
+            m_browser->Stop();
         evt.Veto();
         wxLaunchDefaultApplication(tmpUrl);
     }
@@ -283,7 +290,8 @@ void ProjectPanel::OnScriptMessage(wxWebViewEvent& evt)
 
 void ProjectPanel::show_info_editor(bool show)
 {
-    m_browser->Show(!show);
+    if (m_browser)
+        m_browser->Show(!show);
     m_auxiliary->Show(show);
     Layout();
 }
@@ -451,12 +459,17 @@ wxString ProjectPanel::to_base64(std::string file_path)
 
 void ProjectPanel::RunScript(std::string content)
 {
+    if (!m_browser)
+        return;
     WebView::RunScript(m_browser, content);
 }
 
 bool ProjectPanel::Show(bool show) 
 {
-    if (show) update_model_data();
+    if (show) {
+        ensure_browser();
+        update_model_data();
+    }
     return wxPanel::Show(show); 
 }
 

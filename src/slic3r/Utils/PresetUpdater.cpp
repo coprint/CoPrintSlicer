@@ -121,6 +121,10 @@ struct Update
 	void install() const
 	{
 	    if (is_directory) {
+            if (!fs::exists(source) || !fs::is_directory(source)) {
+                BOOST_LOG_TRIVIAL(info) << format("PresetUpdater: skip missing directory %1%", source);
+                return;
+            }
             copy_directory_recursively(source, target, file_filter, true);
         }
         else {
@@ -245,8 +249,13 @@ PresetUpdater::priv::priv()
 	enabled_version_check = true;
 	set_download_prefs(GUI::wxGetApp().app_config);
 	// Install indicies from resources. Only installs those that are either missing or older than in resources.
-	check_installed_vendor_profiles();
-    perform_updates(get_printer_config_updates(), false);
+	// Do not let a missing vendor folder (Custom.json without Custom/) abort OnInit.
+	try {
+		check_installed_vendor_profiles();
+		perform_updates(get_printer_config_updates(), false);
+	} catch (const std::exception &e) {
+		BOOST_LOG_TRIVIAL(error) << format("[Orca Updater]:startup profile install failed: %1%", e.what());
+	}
 	// Load indices from the cache directory.
 	//index_db = Index::load_db();
 }
@@ -365,6 +374,8 @@ bool PresetUpdater::priv::extract_file(const fs::path &source_path, const fs::pa
 // Remove leftover paritally downloaded files, if any.
 void PresetUpdater::priv::prune_tmps() const
 {
+    if (!fs::exists(cache_path) || !fs::is_directory(cache_path))
+        return;
     for (auto &dir_entry : boost::filesystem::directory_iterator(cache_path))
 		if (is_plain_file(dir_entry) && dir_entry.path().extension() == TMP_EXTENSION) {
 			BOOST_LOG_TRIVIAL(debug) << "[Orca Updater]remove old cached files: " << dir_entry.path().string();
@@ -1042,6 +1053,12 @@ bool PresetUpdater::priv::install_bundles_rsrc(const std::vector<std::string>& b
         //BBS: add directory support
         auto print_in_rsrc = this->rsrc_path / bundle;
 		auto print_in_vendors = this->vendor_path / bundle;
+        // Custom.json is an empty stub with no Custom/ directory. Skip the
+        // folder copy instead of throwing from directory_iterator.
+        if (!fs::exists(print_in_rsrc) || !fs::is_directory(print_in_rsrc)) {
+            BOOST_LOG_TRIVIAL(info) << format("[Orca Updater]:skip missing vendor folder %1%", print_in_rsrc.string());
+            continue;
+        }
 		updates.updates.emplace_back(std::move(print_in_rsrc), std::move(print_in_vendors), Version(), bundle, "", "",[](const std::string name){
         // return false if name is end with .stl, case insensitive
         return boost::iends_with(name, ".stl") || boost::iends_with(name, ".png") || boost::iends_with(name, ".svg") ||
@@ -1062,6 +1079,10 @@ void PresetUpdater::priv::check_installed_vendor_profiles() const
     const auto enabled_vendors = app_config->vendors();
 
     std::set<std::string> bundles;
+    if (!fs::exists(rsrc_path) || !fs::is_directory(rsrc_path)) {
+        BOOST_LOG_TRIVIAL(error) << "[Orca Updater]:profiles directory missing: " << rsrc_path.string();
+        return;
+    }
     for (auto &dir_entry : boost::filesystem::directory_iterator(rsrc_path)) {
         const auto &path = dir_entry.path();
         std::string file_path = path.string();

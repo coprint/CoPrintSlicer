@@ -452,6 +452,10 @@ void PresetBundle::setup_directories()
     std::initializer_list<boost::filesystem::path> paths = {
         data_dir,
         data_dir / "ota",
+        data_dir / "log",
+        data_dir / "cache",
+        data_dir / "plugins",
+        data_dir / "webview",
 		data_dir / PRESET_SYSTEM_DIR,
         data_dir / PRESET_USER_DIR,
         // Store the print/filament/printer presets at the same location as the upstream Slic3r.

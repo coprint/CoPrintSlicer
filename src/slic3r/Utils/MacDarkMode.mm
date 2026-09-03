@@ -95,6 +95,8 @@ void WKWebView_evaluateJavaScript(void * web, wxString const & script, void (*ca
     
 void WKWebView_setTransparentBackground(void * web)
 {
+    if (!web)
+        return;
     WKWebView * webView = (WKWebView*)web;
     [webView layer].backgroundColor = [NSColor clearColor].CGColor;
     [webView registerForDraggedTypes: @[NSFilenamesPboardType]];

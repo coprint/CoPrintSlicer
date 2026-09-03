@@ -5,6 +5,7 @@
 #include "I18N.hpp"
 #include "MsgDialog.hpp"
 #include "MainFrame.hpp"
+#include "UnsavedChangesDialog.hpp"
 #include "NetworkTestDialog.hpp"
 #include "Plater.hpp"
 #include "Widgets/Label.hpp"
@@ -864,17 +865,50 @@ void CoprintSettingsDialog::on_language(wxCommandEvent &e)
     if (sel == m_language_sel || sel < 0 || sel >= static_cast<int>(m_language_codes.size()))
         return;
 
-    MessageDialog ask(this,
-                      _L("Switching the language requires application restart.\n") + "\n" + _L("Do you want to continue?"),
-                      _L("Language selection"), wxICON_QUESTION | wxOK | wxCANCEL);
-    if (ask.ShowModal() == wxID_CANCEL) {
+    // Same sequence as Orca Preferences: save dirty project, confirm restart,
+    // then close this dialog so recreate_GUI() can rebuild MainFrame.
+    if (wxGetApp().plater() != nullptr && wxGetApp().plater()->is_project_dirty()) {
+        const int result = MessageDialog(this,
+            _L("The current project has unsaved changes, save it before continue?"),
+            wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Save"),
+            wxYES_NO | wxCANCEL | wxYES_DEFAULT | wxCENTRE).ShowModal();
+        if (result == wxID_YES)
+            wxGetApp().plater()->save_project();
+        else if (result == wxID_CANCEL) {
+            m_language->SetSelection(m_language_sel);
+            return;
+        }
+    }
+
+    {
+        MessageDialog ask(nullptr,
+                          _L("Switching the language requires application restart.\n") + "\n" + _L("Do you want to continue?"),
+                          _L("Language selection"), wxICON_QUESTION | wxOK | wxCANCEL);
+        if (ask.ShowModal() == wxID_CANCEL) {
+            m_language->SetSelection(m_language_sel);
+            return;
+        }
+    }
+
+    if (!wxGetApp().check_and_keep_current_preset_changes(
+            _L("Switching application language"),
+            _L("Switching application language while some presets are modified."),
+            ActionButtons::SAVE)) {
         m_language->SetSelection(m_language_sel);
         return;
     }
 
-    wxGetApp().app_config->set("language", m_language_codes[sel]);
-    wxGetApp().app_config->save();
     m_language_sel = sel;
+    m_pending_language = m_language_codes[sel];
+    wxGetApp().app_config->set("language", m_pending_language);
+    wxGetApp().app_config->save();
+    m_recreate_GUI = true;
+
+#ifdef __APPLE__
+    Close();
+#else
+    EndModal(wxID_OK);
+#endif
     e.Skip();
 }
 

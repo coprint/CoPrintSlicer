@@ -357,6 +357,8 @@ public:
     //SoftFever
     void show_device(bool bBBLPrinter);
     DeviceDashboard::MoonrakerDeviceController* coprint_device_controller();
+    // Create home / project / camera / printer WebViews after this frame is shown.
+    void ensure_startup_web_views();
 
 private:
     void ensure_printer_web_view_created();

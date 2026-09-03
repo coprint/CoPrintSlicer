@@ -23,15 +23,18 @@
 #include <iterator>
 #include <exception>
 #include <cstdlib>
+#include <iostream>
 #include <regex>
 #include <thread>
 #include <string_view>
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/filesystem.hpp>
 #include <boost/format.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/log/trivial.hpp>
 #include <boost/nowide/convert.hpp>
+#include <boost/system/error_code.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/beast/core/detail/base64.hpp>
@@ -55,6 +58,7 @@
 #include <wx/dialog.h>
 #include <wx/textctrl.h>
 #include <wx/splash.h>
+#include <wx/weakref.h>
 #include <wx/fontutil.h>
 #include <wx/glcanvas.h>
 #include <wx/utils.h>
@@ -289,7 +293,7 @@ class SplashScreen : public wxSplashScreen
 {
 public:
     SplashScreen(const wxBitmap& bitmap, long splashStyle, int milliseconds, wxPoint pos = wxDefaultPosition)
-        : wxSplashScreen(bitmap, splashStyle, milliseconds, static_cast<wxWindow*>(wxGetApp().mainframe), wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        : wxSplashScreen(bitmap, splashStyle, milliseconds, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
 #ifdef __APPLE__
             wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP
 #else
@@ -1148,9 +1152,9 @@ GUI_App::GUI_App()
 	//app config initializes early becasuse it is used in instance checking in CoPrintSlicer.cpp
     this->init_app_config();
     this->init_download_path();
-#if wxUSE_WEBVIEW_EDGE
-    this->init_webview_runtime();
-#endif
+    // WebView2 runtime prompt used to run here. The constructor executes before
+    // wxWidgets is fully initialized, so a missing-runtime MessageBox could crash
+    // on a fresh Windows install. It now runs in on_init_inner() before MainFrame.
 
     reset_to_active();
 }
@@ -2411,6 +2415,66 @@ void GUI_App::init_webview_runtime()
 }
 #endif
 
+// True when `dir` exists and this process can create files inside it.
+// A sibling data_dir next to a DMG / read-only volume must not be used.
+static bool is_directory_writable(const boost::filesystem::path &dir)
+{
+    namespace fs = boost::filesystem;
+    boost::system::error_code ec;
+    if (!fs::is_directory(dir, ec) || ec)
+        return false;
+
+    const fs::path probe = dir / ".coprint_write_probe";
+    fs::create_directory(probe, ec);
+    if (ec) {
+        if (fs::is_directory(probe)) {
+            fs::remove(probe, ec);
+            return true;
+        }
+        return false;
+    }
+    fs::remove(probe, ec);
+    return true;
+}
+
+// Create the folders the rest of startup assumes already exist (log, instance
+// lock, presets, WebView2 user data). First launch used to chdir into log/
+// before it existed and skip children of a portable data_dir — both crash
+// on a fresh Windows zip / macOS DMG, then succeed on the second open.
+static void ensure_slicer_data_directories()
+{
+    namespace fs = boost::filesystem;
+    const fs::path root(Slic3r::data_dir());
+    if (root.empty())
+        return;
+
+    const fs::path dirs[] = {
+        root,
+        root / "log",
+        root / "cache",
+        root / "ota",
+        root / PRESET_SYSTEM_DIR,
+        root / PRESET_USER_DIR,
+        root / "plugins",
+        root / "models",
+        root / "webview",
+    };
+    for (const fs::path &dir : dirs) {
+        boost::system::error_code ec;
+        fs::create_directories(dir, ec);
+        if (ec && !fs::is_directory(dir)) {
+            BOOST_LOG_TRIVIAL(error) << "Unable to create data directory " << dir.string()
+                                     << ": " << ec.message();
+        }
+    }
+
+#ifdef _WIN32
+    // Keep WebView2 off the (possibly read-only) app folder / DMG.
+    const fs::path webview_dir = root / "webview";
+    wxSetEnv("WEBVIEW2_USER_DATA_FOLDER", wxString::FromUTF8(webview_dir.string().c_str()));
+#endif
+}
+
 void GUI_App::init_app_config()
 {
 	// Profiles for the alpha are stored into the PrusaSlicer-alpha directory to not mix with the current release.
@@ -2437,15 +2501,15 @@ void GUI_App::init_app_config()
         _app_folder = _app_folder.parent_path().parent_path().parent_path();
 #endif
         boost::filesystem::path app_data_dir_path = _app_folder / "data_dir";
-        if (boost::filesystem::exists(app_data_dir_path)) {
+        // Portable data_dir next to the .app / exe is only used when it is writable.
+        // Opening from a mounted DMG (or any read-only volume) would otherwise crash
+        // on the first launch while creating log/config files.
+        if (boost::filesystem::exists(app_data_dir_path) && is_directory_writable(app_data_dir_path)) {
             set_data_dir(app_data_dir_path.string());
         }
         else{
-            boost::filesystem::path data_dir_path;
             #ifndef __linux__
                 std::string data_dir = wxStandardPaths::Get().GetUserDataDir().ToUTF8().data();
-                //BBS create folder if not exists
-                data_dir_path = boost::filesystem::path(data_dir);
                 set_data_dir(data_dir);
             #else
                 // Since version 2.3, config dir on Linux is in ${XDG_CONFIG_HOME}.
@@ -2454,24 +2518,19 @@ void GUI_App::init_app_config()
                 if (! wxGetEnv(wxS("XDG_CONFIG_HOME"), &dir) || dir.empty() )
                     dir = wxFileName::GetHomeDir() + wxS("/.config");
                 set_data_dir((dir + "/" + GetAppName()).ToUTF8().data());
-                data_dir_path = boost::filesystem::path(data_dir());
             #endif
-            if (!boost::filesystem::exists(data_dir_path)){
-                boost::filesystem::create_directory(data_dir_path);
-            }
         }
-
-        // Change current dirtory of application
-
-#ifdef _WIN32
-    [[maybe_unused]] auto unused_result = _chdir(encode_path((Slic3r::data_dir() + "/log").c_str()).c_str());
-#else
-    [[maybe_unused]] auto unused_result = chdir(encode_path((Slic3r::data_dir() + "/log").c_str()).c_str());
-#endif
 
     } else {
         m_datadir_redefined = true;
     }
+
+    ensure_slicer_data_directories();
+
+    // Do not chdir into log/. Logging uses absolute paths. On a first launch the
+    // old code failed this chdir (log/ did not exist yet) and the process kept
+    // the launch CWD; after we started creating log/ first, chdir succeeded and
+    // macOS could lose the .app bundle context before any window appeared.
 
     // start log here
     std::time_t       t        = std::time(0);
@@ -2733,6 +2792,10 @@ std::string get_system_info()
 
 bool GUI_App::on_init_inner()
 {
+    // Splash is a top-level window. If it auto-closes before MainFrame exists,
+    // macOS treats that as "last window closed" and terminates the app.
+    SetExitOnFrameDelete(false);
+
     wxLog::SetActiveTarget(new wxBoostLog());
 #if BBL_RELEASE_TO_PUBLIC
     wxLog::SetLogLevel(wxLOG_Message);
@@ -2744,6 +2807,10 @@ bool GUI_App::on_init_inner()
     wxInitAllImageHandlers();
 #ifdef NDEBUG
     wxImage::SetDefaultLoadFlags(0); // ignore waring in release build
+#endif
+#if wxUSE_WEBVIEW_EDGE
+    // Must run after wx is initialized and before MainFrame creates the home WebView.
+    init_webview_runtime();
 #endif
 
 #ifdef __APPLE__
@@ -2786,10 +2853,16 @@ bool GUI_App::on_init_inner()
             d->EndModal(wxID_ABORT);
     });
 
-    // Verify resources path
+    // Verify resources path. Do not use wxCHECK_MSG: in Release it returns
+    // false with no window, which looks like an instant quit on first launch.
     const wxString resources_dir = from_u8(Slic3r::resources_dir());
-    wxCHECK_MSG(wxDirExists(resources_dir), false,
-        wxString::Format(_L("Resources path does not exist or is not a directory: %s"), resources_dir));
+    if (!wxDirExists(resources_dir)) {
+        const wxString msg = wxString::Format(
+            _L("Resources path does not exist or is not a directory: %s"), resources_dir);
+        BOOST_LOG_TRIVIAL(error) << msg.ToUTF8().data();
+        wxMessageBox(msg, "CoPrintSlicer", wxOK | wxICON_ERROR);
+        return false;
+    }
 
 #ifdef __linux__
     if (! check_old_linux_datadir(GetAppName())) {
@@ -2921,8 +2994,8 @@ bool GUI_App::on_init_inner()
         app_config->set("version", SLIC3R_VERSION);
     }
 
-    SplashScreen * scrn = nullptr;
-    if (app_config->get("show_splash_screen") == "true") {
+    wxWeakRef<SplashScreen> scrn = nullptr;
+    if (app_config->get_bool("show_splash_screen")) {
         // make a bitmap with dark grey banner on the left side
         //BBS make BBL splash screen bitmap
         wxBitmap bmp = SplashScreen::MakeBitmap();
@@ -2936,10 +3009,13 @@ bool GUI_App::on_init_inner()
         }
 
         BOOST_LOG_TRIVIAL(info) << "begin to show the splash screen...";
-        //BBS use BBL splashScreen
-        scrn = new SplashScreen(bmp, wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, splashscreen_pos);
+        // Do not use wxSPLASH_TIMEOUT. A 1500 ms auto-close destroys the only
+        // window during first-run init (creating data dirs / WebView), and on
+        // macOS that quits the app. Close the splash after MainFrame is shown.
+        scrn = new SplashScreen(bmp, wxSPLASH_CENTRE_ON_SCREEN, 0, splashscreen_pos);
         wxYield();
-        scrn->SetText(_L("Loading configuration")+ dots);
+        if (scrn)
+            scrn->SetText(_L("Loading configuration")+ dots);
     }
 
     BOOST_LOG_TRIVIAL(info) << "loading systen presets...";
@@ -3171,6 +3247,12 @@ bool GUI_App::on_init_inner()
     mainframe->topbar()->SaveNormalRect();
 #endif
     mainframe->Show(true);
+    mainframe->ensure_startup_web_views();
+    if (scrn) {
+        scrn->Destroy();
+        scrn = nullptr;
+    }
+    SetExitOnFrameDelete(true);
 #if defined(_WIN32) || defined(__WXMSW__)
     // Ensure native caption is gone after the first show (WM_NCCALCSIZE applies then).
     {
@@ -4147,7 +4229,7 @@ void GUI_App::recreate_GUI(const wxString &msg_name)
     m_printhost_job_queue.reset(new PrintHostJobQueue(mainframe->printhost_queue_dlg()));
     load_current_presets();
     mainframe->Show(true);
-    //mainframe->refresh_plugin_tips();
+    mainframe->ensure_startup_web_views();
 
     dlg.Update(90, _L("Loading a mode view") + dots);
 
@@ -6827,17 +6909,31 @@ void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_
     }
     open_dlg = new CoprintSettingsDialog(nullptr);
     open_dlg->Bind(wxEVT_CLOSE_WINDOW, [](wxCloseEvent &event) {
+        CoprintSettingsDialog *dlg = open_dlg;
         open_dlg = nullptr;
+        const bool recreate = dlg != nullptr && dlg->recreate_GUI();
+        const std::string language = dlg != nullptr ? dlg->pending_language() : std::string();
         event.Skip();
+        if (recreate && !language.empty()) {
+            wxGetApp().CallAfter([language] {
+                wxGetApp().app_config->set("language", language);
+                wxGetApp().app_config->save();
+                if (wxGetApp().load_language(from_u8(language), false))
+                    wxGetApp().recreate_GUI(_L("Restart application") + dots);
+            });
+        }
     });
     open_dlg->Show(true);
     return;
 #else
-    bool app_layout_changed = false;
+    bool recreate = false;
+    std::string language;
     {
         CoprintSettingsDialog dlg(mainframe);
         dlg.ShowModal();
-        if (this->plater_ != nullptr) {
+        recreate = dlg.recreate_GUI();
+        language = dlg.pending_language();
+        if (!recreate && this->plater_ != nullptr) {
             if (GLCanvas3D *canvas = this->plater_->get_current_canvas3D())
                 canvas->force_set_focus();
         }
@@ -6858,6 +6954,14 @@ void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_
                 associate_files(L"gcode");
         }
 #endif // _WIN32
+    }
+
+    if (recreate && !language.empty()) {
+        app_config->set("language", language);
+        app_config->save();
+        if (load_language(from_u8(language), false))
+            recreate_GUI(_L("Restart application") + dots);
+        return;
     }
 
     // BBS

@@ -1505,6 +1505,8 @@ wxBoxSizer *StatusBasePanel::create_monitoring_page()
     m_camera_switch_button->SetBitmap(m_bitmap_switch_camera.bmp());
     m_camera_switch_button->Bind(wxEVT_LEFT_DOWN, &StatusBasePanel::on_camera_switch_toggled, this);
     m_camera_switch_button->Bind(wxEVT_RIGHT_DOWN, [this](auto& e) {
+        if (!m_custom_camera_view)
+            return;
         const std::string js_request_pip = R"(
             document.querySelector('video').requestPictureInPicture();
         )";
@@ -1545,13 +1547,29 @@ wxBoxSizer *StatusBasePanel::create_monitoring_page()
     media_ctrl_panel->SetSizer(bSizer_monitoring);
     media_ctrl_panel->Layout();
 
+    m_media_play_ctrl = new MediaPlayCtrl(this, m_media_ctrl, wxDefaultPosition, wxSize(-1, FromDIP(40)));
+
+    sizer->Add(media_ctrl_panel, 1, wxEXPAND | wxALL, 0);
+    sizer->Add(m_media_play_ctrl, 0, wxEXPAND | wxALL, 0);
+
+    return sizer;
+}
+
+void StatusBasePanel::ensure_custom_camera_webview()
+{
+    if (m_custom_camera_view)
+        return;
+
     m_custom_camera_view = WebView::CreateWebView(this, wxEmptyString);
+    if (!m_custom_camera_view)
+        return;
+
     m_custom_camera_view->EnableContextMenu(false);
     Bind(wxEVT_WEBVIEW_NAVIGATING, &StatusBasePanel::on_webview_navigating, this, m_custom_camera_view->GetId());
-
-    m_media_play_ctrl = new MediaPlayCtrl(this, m_media_ctrl, wxDefaultPosition, wxSize(-1, FromDIP(40)));
     m_custom_camera_view->Hide();
     m_custom_camera_view->Bind(wxEVT_WEBVIEW_SCRIPT_MESSAGE_RECEIVED, [this](wxWebViewEvent& evt) {
+        if (!m_custom_camera_view)
+            return;
         if (evt.GetString() == "leavepictureinpicture") {
             // When leaving PiP, video gets paused in some cases and toggling play
             // programmatically does not work.
@@ -1562,15 +1580,20 @@ wxBoxSizer *StatusBasePanel::create_monitoring_page()
         }
     });
 
-    sizer->Add(media_ctrl_panel, 1, wxEXPAND | wxALL, 0);
-    sizer->Add(m_custom_camera_view, 1, wxEXPAND | wxALL, 0);
-    sizer->Add(m_media_play_ctrl, 0, wxEXPAND | wxALL, 0);
-
-    if (wxGetApp().app_config->get("camera", "enable_custom_source") == "true") {
-        handle_camera_source_change();
+    if (wxSizer *sizer = media_ctrl_panel ? media_ctrl_panel->GetContainingSizer() : nullptr) {
+        size_t insert_at = sizer->GetItemCount();
+        for (size_t i = 0; i < sizer->GetItemCount(); ++i) {
+            if (sizer->GetItem(i)->GetWindow() == m_media_play_ctrl) {
+                insert_at = i;
+                break;
+            }
+        }
+        sizer->Insert(insert_at, m_custom_camera_view, 1, wxEXPAND | wxALL, 0);
+        sizer->Layout();
     }
 
-    return sizer;
+    if (wxGetApp().app_config->get("camera", "enable_custom_source") == "true")
+        handle_camera_source_change();
 }
 
 void StatusBasePanel::on_webview_navigating(wxWebViewEvent& evt) {
@@ -4867,6 +4890,9 @@ void StatusBasePanel::on_camera_source_change(wxCommandEvent& event)
 
 void StatusBasePanel::handle_camera_source_change()
 {
+    if (!m_custom_camera_view)
+        return;
+
     const auto new_cam_url = wxGetApp().app_config->get("camera", "custom_source");
     const auto enabled = wxGetApp().app_config->get("camera", "enable_custom_source") == "true";
 
@@ -4882,7 +4908,8 @@ void StatusBasePanel::handle_camera_source_change()
 
 void StatusBasePanel::toggle_builtin_camera()
 {
-    m_custom_camera_view->Hide();
+    if (m_custom_camera_view)
+        m_custom_camera_view->Hide();
     media_ctrl_panel->Show();
     m_media_ctrl->Show();
     m_media_play_ctrl->Show();
@@ -4892,7 +4919,7 @@ void StatusBasePanel::toggle_custom_camera()
 {
     const auto enabled = wxGetApp().app_config->get("camera", "enable_custom_source") == "true";
 
-    if (enabled) {
+    if (enabled && m_custom_camera_view) {
         m_custom_camera_view->Show();
         media_ctrl_panel->Hide();
         m_media_ctrl->Hide();
@@ -4924,6 +4951,8 @@ void StatusBasePanel::remove_controls()
             window.wx.postMessage('enterpictureinpicture');
         });
     )";
+    if (!m_custom_camera_view)
+        return;
     m_custom_camera_view->RunScript(js_cleanup_video_element);
 }
 

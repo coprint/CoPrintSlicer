@@ -1,8 +1,11 @@
 #include "WebView.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/Utils/MacDarkMode.hpp"
+#include "libslic3r/Utils.hpp"
 
+#include <boost/filesystem.hpp>
 #include <boost/log/trivial.hpp>
+#include <boost/system/error_code.hpp>
 
 #include <wx/webviewarchivehandler.h>
 #include <wx/webviewfshandler.h>
@@ -12,6 +15,9 @@
 #include <wx/osx/webview_webkit.h>
 #endif
 #include <wx/uri.h>
+#include <wx/filename.h>
+#include <wx/stdpaths.h>
+#include <wx/utils.h>
 #if defined(__WIN32__) || defined(__WXMAC__)
 #include "wx/private/jsscriptwrapper.h"
 #endif
@@ -242,7 +248,14 @@ public:
             g_webviews.erase(iter);
     }
     wxWebView *m_webView;
+    // Guards against registering the "wx" handler twice (a duplicate throws on WKWebView).
+    bool m_script_handler_added = false;
 };
+
+static WebViewRef *webview_ref(wxWebView *webView)
+{
+    return webView ? static_cast<WebViewRef *>(webView->GetRefData()) : nullptr;
+}
 
 wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
 {
@@ -255,6 +268,17 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
     if (edgeFixedDir.DirExists()) {
         wxWebViewEdge::MSWSetBrowserExecutableDir(edgeFixedDir.GetFullPath());
         wxLogMessage("Using fixed edge version");
+    }
+#endif
+#ifdef __WIN32__
+    // Point WebView2 at a writable user-data folder before the first Create().
+    // Default is next to the exe, which is read-only on a DMG / some portable layouts
+    // and is the usual first-launch crash.
+    if (!Slic3r::data_dir().empty()) {
+        const auto webview_dir = boost::filesystem::path(Slic3r::data_dir()) / "webview";
+        boost::system::error_code ec;
+        boost::filesystem::create_directories(webview_dir, ec);
+        wxSetEnv("WEBVIEW2_USER_DATA_FOLDER", wxString::FromUTF8(webview_dir.string().c_str()));
     }
 #endif
     auto url2  = url;
@@ -301,13 +325,23 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
 #endif
 #ifdef __WXMAC__
         WKWebView * wkWebView = (WKWebView *) webView->GetNativeBackend();
-        Slic3r::GUI::WKWebView_setTransparentBackground(wkWebView);
+        if (wkWebView)
+            Slic3r::GUI::WKWebView_setTransparentBackground(wkWebView);
 #endif
+        // Attach ref data before adding the script handler so CallAfter can see the guard.
+        webView->SetRefData(new WebViewRef(webView));
         auto addScriptMessageHandler = [] (wxWebView *webView) {
+            // Skip if the handler was already registered; a duplicate add throws an
+            // uncatchable NSException on WKWebView, killing the app at startup.
+            WebViewRef *ref = webview_ref(webView);
+            if (ref && ref->m_script_handler_added)
+                return;
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": begin to add script message handler for wx.";
             Slic3r::GUI::wxGetApp().set_adding_script_handler(true);
             if (!webView->AddScriptMessageHandler("wx"))
                 wxLogError("Could not add script message handler");
+            else if (ref)
+                ref->m_script_handler_added = true;
             Slic3r::GUI::wxGetApp().set_adding_script_handler(false);
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": finished add script message handler for wx.";
         };
@@ -331,8 +365,8 @@ wxWebView* WebView::CreateWebView(wxWindow * parent, wxString const & url)
     } else {
         BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": failed. Use fake web view.";
         webView = new FakeWebView;
+        webView->SetRefData(new WebViewRef(webView));
     }
-    webView->SetRefData(new WebViewRef(webView));
     g_webviews.push_back(webView);
     return webView;
 }
@@ -355,6 +389,8 @@ bool WebView::DownloadAndInstallWebViewRuntime()
 #endif
 void WebView::LoadUrl(wxWebView * webView, wxString const &url)
 {
+    if (!webView)
+        return;
     auto url2  = url;
 #ifdef __WIN32__
     url2.Replace("\\", "/");
@@ -366,6 +402,8 @@ void WebView::LoadUrl(wxWebView * webView, wxString const &url)
 
 bool WebView::RunScript(wxWebView *webView, wxString const &javascript)
 {
+    if (!webView)
+        return false;
     if (Slic3r::GUI::wxGetApp().app_config->get("internal_developer_mode") == "true"
             && javascript.find("studio_userlogin") == wxString::npos)
         wxLogMessage("Running JavaScript:\n%s\n", javascript);
@@ -378,6 +416,8 @@ bool WebView::RunScript(wxWebView *webView, wxString const &javascript)
         return webView2->ExecuteScript(javascript, NULL) == 0;
 #elif defined __WXMAC__
         WKWebView * wkWebView = (WKWebView *) webView->GetNativeBackend();
+        if (!wkWebView)
+            return false;
         Slic3r::GUI::WKWebView_evaluateJavaScript(wkWebView, javascript, nullptr);
         return true;
 #else

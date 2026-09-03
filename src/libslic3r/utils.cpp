@@ -359,7 +359,10 @@ void set_log_path_and_level(const std::string& file, unsigned int level)
 	//BBS log file at C:\\Users\\[yourname]\\AppData\\Roaming\\CoPrintSlicer\\log\\[log_filename].log
 	auto log_folder = boost::filesystem::path(g_data_dir) / "log";
 	if (!boost::filesystem::exists(log_folder)) {
-		boost::filesystem::create_directory(log_folder);
+		boost::system::error_code ec;
+		boost::filesystem::create_directories(log_folder, ec);
+		if (ec && !boost::filesystem::is_directory(log_folder))
+			return;
 	}
 	auto full_path = (log_folder / file).make_preferred();
 
@@ -1626,6 +1629,15 @@ void copy_directory_recursively(const boost::filesystem::path& source,
 {
     BOOST_LOG_TRIVIAL(info) << Slic3r::format("copy_directory_recursively %1% -> %2%", source, target);
     std::string error_message;
+
+    // Vendor stubs such as Custom.json have no matching Custom/ folder. Boost
+    // throws on directory_iterator construct if source is missing; that used to
+    // abort OnInit on first launch with no splash.
+    boost::system::error_code exists_ec;
+    if (!boost::filesystem::exists(source, exists_ec) || !boost::filesystem::is_directory(source, exists_ec)) {
+        BOOST_LOG_TRIVIAL(info) << Slic3r::format("copy_directory_recursively: skip missing source %1%", source);
+        return;
+    }
 
     if (!merge_mode && boost::filesystem::exists(target))
         boost::filesystem::remove_all(target);

@@ -224,31 +224,21 @@ function build_slicer() {
         (
             cd "$PROJECT_DIR"
             ./scripts/run_gettext.sh
-        )
+        ) || echo "WARNING: gettext failed; packaging the app anyway so Finder can launch it."
 
         echo "Fix macOS app package..."
         (
-            cd "$PROJECT_BUILD_DIR"
-            mkdir -p CoPrintSlicer
-            cd CoPrintSlicer
-            # remove previously built app
-            rm -rf ./CoPrintSlicer.app
-            # fully copy newly built app
-            cp -pR "../src$BUILD_DIR_CONFIG_SUBDIR/CoPrintSlicer.app" ./CoPrintSlicer.app
-            # fix resources
-            resources_path=$(readlink ./CoPrintSlicer.app/Contents/Resources)
-            rm ./CoPrintSlicer.app/Contents/Resources
-            cp -R "$resources_path" ./CoPrintSlicer.app/Contents/Resources
-            # delete .DS_Store file
-            find ./CoPrintSlicer.app/ -name '.DS_Store' -delete
-            
-            # Copy CoPrintSlicer_profile_validator.app if it exists
-            if [ -f "../src$BUILD_DIR_CONFIG_SUBDIR/CoPrintSlicer_profile_validator.app/Contents/MacOS/CoPrintSlicer_profile_validator" ]; then
+            mkdir -p "$PROJECT_BUILD_DIR/CoPrintSlicer"
+            SRC_APP="$PROJECT_BUILD_DIR/src$BUILD_DIR_CONFIG_SUBDIR/CoPrintSlicer.app"
+            DST_APP="$PROJECT_BUILD_DIR/CoPrintSlicer/CoPrintSlicer.app"
+            "$PROJECT_DIR/scripts/macos_package_app.sh" "$SRC_APP" "$DST_APP"
+
+            VALIDATOR_APP="$PROJECT_BUILD_DIR/src$BUILD_DIR_CONFIG_SUBDIR/CoPrintSlicer_profile_validator.app"
+            if [ -f "$VALIDATOR_APP/Contents/MacOS/CoPrintSlicer_profile_validator" ]; then
                 echo "Copying CoPrintSlicer_profile_validator.app..."
-                rm -rf ./CoPrintSlicer_profile_validator.app
-                cp -pR "../src$BUILD_DIR_CONFIG_SUBDIR/CoPrintSlicer_profile_validator.app" ./CoPrintSlicer_profile_validator.app
-                # delete .DS_Store file
-                find ./CoPrintSlicer_profile_validator.app/ -name '.DS_Store' -delete
+                rm -rf "$PROJECT_BUILD_DIR/CoPrintSlicer/CoPrintSlicer_profile_validator.app"
+                cp -pR "$VALIDATOR_APP" "$PROJECT_BUILD_DIR/CoPrintSlicer/CoPrintSlicer_profile_validator.app"
+                find "$PROJECT_BUILD_DIR/CoPrintSlicer/CoPrintSlicer_profile_validator.app/" -name '.DS_Store' -delete
             fi
         )
 

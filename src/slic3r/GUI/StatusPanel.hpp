@@ -591,6 +591,7 @@ public:
     MachineObject* obj{nullptr};
     void init_bitmaps();
     wxBoxSizer *create_monitoring_page();
+    void ensure_custom_camera_webview();
     wxBoxSizer *create_machine_control_page(wxWindow *parent);
 
     wxBoxSizer *create_temp_axis_group(wxWindow *parent);

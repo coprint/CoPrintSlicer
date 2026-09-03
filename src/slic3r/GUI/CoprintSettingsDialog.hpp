@@ -23,6 +23,9 @@ class CoprintSettingsDialog : public wxDialog
 public:
     explicit CoprintSettingsDialog(wxWindow *parent);
 
+    bool recreate_GUI() const { return m_recreate_GUI; }
+    const std::string &pending_language() const { return m_pending_language; }
+
 private:
     void build();
     void add_section(const wxString &title);
@@ -43,6 +46,8 @@ private:
     int m_language_sel{0};
     int m_region_sel{0};
     std::vector<std::string> m_language_codes;
+    bool m_recreate_GUI{false};
+    std::string m_pending_language;
 };
 
 } // namespace GUI

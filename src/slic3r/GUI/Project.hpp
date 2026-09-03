@@ -76,7 +76,8 @@ public:
     ProjectPanel(wxWindow *parent, wxWindowID id = wxID_ANY, const wxPoint &pos = wxDefaultPosition, const wxSize &size = wxDefaultSize, long style = wxTAB_TRAVERSAL);
     ~ProjectPanel();
 
-    
+    // WKWebView / WebView2 must not be created before the top-level frame is shown.
+    void ensure_browser();
     void onWebNavigating(wxWebViewEvent& evt);
     void on_reload(wxCommandEvent& evt);
     void on_size(wxSizeEvent &event);
