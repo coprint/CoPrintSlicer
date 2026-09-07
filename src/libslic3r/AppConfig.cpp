@@ -283,8 +283,10 @@ void AppConfig::set_defaults()
 //#endif
 
 #ifdef SUPPORT_DARK_MODE
+#if COPRINT_DARK_MODE_ENABLED
     if (get("dark_color_mode").empty())
         set("dark_color_mode", "0");
+#endif
 #endif
 
 //#ifdef SUPPORT_SYS_MENU
@@ -292,6 +294,10 @@ void AppConfig::set_defaults()
         set("sys_menu_enabled", "1");
 //#endif
 #endif // _WIN32
+
+#if !COPRINT_DARK_MODE_ENABLED
+    set("dark_color_mode", "0");
+#endif
 
     // BBS
     /*if (get("3mf_include_gcode").empty())

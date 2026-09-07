@@ -1551,7 +1551,7 @@ void PreferencesDialog::create_items()
     auto item_default_page     = create_item_combobox(_L("Default page"), _L("Set the page opened on startup."), "default_page", DefaultPage);
     g_sizer->Add(item_default_page);
 
-#ifdef _WIN32
+#if defined(_WIN32) && COPRINT_DARK_MODE_ENABLED
     auto item_darkmode         = create_item_darkmode(_L("Enable dark mode"), "", "dark_color_mode");
     g_sizer->Add(item_darkmode);
 #endif

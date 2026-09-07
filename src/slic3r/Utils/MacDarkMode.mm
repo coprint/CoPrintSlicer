@@ -30,6 +30,12 @@ bool mac_dark_mode()
 
 }
 
+void mac_force_light_appearance()
+{
+    if (@available(macOS 10.14, *))
+        NSApp.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+}
+
 double mac_max_scaling_factor()
 {
     double scaling = 1.;

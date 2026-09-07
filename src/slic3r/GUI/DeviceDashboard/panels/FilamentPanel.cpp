@@ -173,10 +173,10 @@ public:
         });
 
         m_tool_colors = {
-            wxColour(58, 139, 222),
-            wxColour(80, 84, 92),
-            wxColour(110, 162, 82),
-            wxColour(238, 151, 42)
+            wxColour(0x4E, 0x74, 0xAD),
+            wxColour(0xD2, 0x41, 0x33),
+            wxColour(0x34, 0x9C, 0x50),
+            wxColour(0xE1, 0xAA, 0x17)
         };
         m_tool_materials = {
             wxString::FromUTF8("PLA"),
@@ -372,8 +372,9 @@ private:
         const wxRect track3(track_right_x, track1_y, track_w, track_h);
         const wxRect card3(card_right_x, card1_y, card_w, card_h);
 
-        const std::array<wxRect, MaxDashboardTools> cards{{card0, card1, card2, card3}};
-        const std::array<wxRect, MaxDashboardTools> tracks{{track0, track1, track2, track3}};
+        // Right column is T4 above T3 to match the physical Quadro head.
+        const std::array<wxRect, MaxDashboardTools> cards{{card0, card1, card3, card2}};
+        const std::array<wxRect, MaxDashboardTools> tracks{{track0, track1, track3, track2}};
 
         for (int i = 0; i < MaxDashboardTools; ++i) {
             if (is_tool_empty(i))

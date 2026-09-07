@@ -7,8 +7,9 @@ namespace Slic3r {
 namespace GUI {
 
 #if __APPLE__
-extern bool mac_dark_mode();
-extern double mac_max_scaling_factor();
+    extern bool mac_dark_mode();
+    extern void mac_force_light_appearance();
+    extern double mac_max_scaling_factor();
 extern void set_miniaturizable(void * window);
 void WKWebView_evaluateJavaScript(void * web, wxString const & script, void (*callback)(wxString const &));
 void WKWebView_setTransparentBackground(void * web);

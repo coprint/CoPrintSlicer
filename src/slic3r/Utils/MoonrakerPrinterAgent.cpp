@@ -389,11 +389,8 @@ int MoonrakerPrinterAgent::set_user_selected_machine(std::string dev_id)
 
 int MoonrakerPrinterAgent::start_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn, OnWaitFn wait_fn)
 {
-    (void) params;
-    (void) update_fn;
-    (void) cancel_fn;
     (void) wait_fn;
-    return BAMBU_NETWORK_SUCCESS;
+    return start_local_print(std::move(params), update_fn, cancel_fn);
 }
 
 int MoonrakerPrinterAgent::start_local_print_with_record(PrintParams      params,
@@ -401,11 +398,8 @@ int MoonrakerPrinterAgent::start_local_print_with_record(PrintParams      params
                                                          WasCancelledFn   cancel_fn,
                                                          OnWaitFn         wait_fn)
 {
-    (void) params;
-    (void) update_fn;
-    (void) cancel_fn;
     (void) wait_fn;
-    return BAMBU_NETWORK_SUCCESS;
+    return start_local_print(std::move(params), update_fn, cancel_fn);
 }
 
 int MoonrakerPrinterAgent::start_send_gcode_to_sdcard(PrintParams      params,
@@ -483,11 +477,9 @@ int MoonrakerPrinterAgent::start_local_print(PrintParams params, OnUpdateStatusF
         return BAMBU_NETWORK_ERR_CANCELED;
     }
 
-    // Start print via gcode script (simpler than JSON-RPC)
     if (update_fn)
         update_fn(PrintingStageSending, 0, "Starting print...");
-    std::string gcode = "SDCARD_PRINT_FILE FILENAME=" + upload_filename;
-    if (!send_gcode(device_info.dev_id, gcode)) {
+    if (!start_printer_print(upload_filename)) {
         return BAMBU_NETWORK_ERR_PRINT_LP_PUBLISH_MSG_FAILED;
     }
 
@@ -498,9 +490,29 @@ int MoonrakerPrinterAgent::start_local_print(PrintParams params, OnUpdateStatusF
 
 int MoonrakerPrinterAgent::start_sdcard_print(PrintParams params, OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn)
 {
-    (void) params;
-    (void) update_fn;
-    (void) cancel_fn;
+    if (update_fn)
+        update_fn(PrintingStageCreate, 0, "Preparing...");
+
+    if (cancel_fn && cancel_fn()) {
+        return BAMBU_NETWORK_ERR_CANCELED;
+    }
+
+    std::string remote = params.dst_file.empty() ? params.filename : params.dst_file;
+    if (remote.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: start_sdcard_print missing filename";
+        return BAMBU_NETWORK_ERR_FILE_NOT_EXIST;
+    }
+    if (remote.front() == '/')
+        remote.erase(remote.begin());
+
+    if (update_fn)
+        update_fn(PrintingStageSending, 0, "Starting print...");
+    if (!start_printer_print(remote)) {
+        return BAMBU_NETWORK_ERR_PRINT_LP_PUBLISH_MSG_FAILED;
+    }
+
+    if (update_fn)
+        update_fn(PrintingStageFinished, 100, "Print started");
     return BAMBU_NETWORK_SUCCESS;
 }
 
@@ -2865,6 +2877,54 @@ int MoonrakerPrinterAgent::resume_print(const std::string& dev_id)
 int MoonrakerPrinterAgent::cancel_print(const std::string& dev_id)
 {
     return send_gcode(dev_id, "CANCEL_PRINT") ? BAMBU_NETWORK_SUCCESS : BAMBU_NETWORK_ERR_SEND_MSG_FAILED;
+}
+
+bool MoonrakerPrinterAgent::start_printer_print(const std::string& filename) const
+{
+    if (filename.empty() || device_info.base_url.empty()) {
+        BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: printer/print/start missing filename or URL";
+        return false;
+    }
+
+    nlohmann::json payload;
+    payload["filename"] = filename;
+    const std::string payload_str = payload.dump();
+    const std::string url         = join_url(device_info.base_url, "/printer/print/start");
+
+    bool        success = false;
+    std::string http_error;
+
+    auto http = Http::post(url);
+    if (!device_info.api_key.empty()) {
+        http.header("X-Api-Key", device_info.api_key);
+    }
+    http.header("Content-Type", "application/json")
+        .set_post_body(payload_str)
+        .timeout_connect(5)
+        .timeout_max(15)
+        .on_complete([&](std::string body, unsigned status) {
+            (void) body;
+            if (status == 200) {
+                success = true;
+            } else {
+                http_error = "HTTP error: " + std::to_string(status);
+            }
+        })
+        .on_error([&](std::string body, std::string err, unsigned status) {
+            (void) body;
+            http_error = err;
+            if (status > 0)
+                http_error += " (HTTP " + std::to_string(status) + ")";
+        })
+        .perform_sync();
+
+    if (!success) {
+        BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: printer/print/start failed: " << http_error;
+        return false;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: printer.print.start filename=" << filename;
+    return true;
 }
 
 bool MoonrakerPrinterAgent::send_jsonrpc_command(const std::string&    base_url,

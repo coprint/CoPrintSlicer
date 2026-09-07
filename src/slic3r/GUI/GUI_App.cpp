@@ -2936,12 +2936,19 @@ bool GUI_App::on_init_inner()
 
     // If load_language() fails, the application closes.
     load_language(wxString(), true);
+#if defined(__APPLE__) && !COPRINT_DARK_MODE_ENABLED
+    mac_force_light_appearance();
+#endif
 #ifdef _MSW_DARK_MODE
 
 #ifndef __WINDOWS__
+#if COPRINT_DARK_MODE_ENABLED
     wxSystemAppearance app = wxSystemSettings::GetAppearance();
     GUI::wxGetApp().app_config->set("dark_color_mode", app.IsDark() ? "1" : "0");
     GUI::wxGetApp().app_config->save();
+#else
+    GUI::wxGetApp().app_config->set("dark_color_mode", "0");
+#endif
 #endif // __APPLE__
 
 
@@ -3734,7 +3741,9 @@ void GUI_App::select_machine(const std::string& agent_id)
 
 bool GUI_App::dark_mode()
 {
-#ifdef SUPPORT_DARK_MODE
+#if !COPRINT_DARK_MODE_ENABLED
+    return false;
+#elif defined(SUPPORT_DARK_MODE)
 #if __APPLE__
     // The check for dark mode returns false positive on 10.12 and 10.13,
     // which allowed setting dark menu bar and dock area, which is
@@ -6907,21 +6916,34 @@ void GUI_App::open_preferences(size_t open_on_tab, const std::string& highlight_
         open_dlg->Raise();
         return;
     }
-    open_dlg = new CoprintSettingsDialog(nullptr);
+    // Parent the dialog to the main frame so it is not an extra top-level
+    // app window. After close it must be Destroy()'d — a leftover hidden
+    // wxDialog eats the first Cmd+Q on macOS.
+    open_dlg = new CoprintSettingsDialog(mainframe);
     open_dlg->Bind(wxEVT_CLOSE_WINDOW, [](wxCloseEvent &event) {
         CoprintSettingsDialog *dlg = open_dlg;
         open_dlg = nullptr;
         const bool recreate = dlg != nullptr && dlg->recreate_GUI();
         const std::string language = dlg != nullptr ? dlg->pending_language() : std::string();
+        if (dlg != nullptr)
+            dlg->Hide();
         event.Skip();
-        if (recreate && !language.empty()) {
-            wxGetApp().CallAfter([language] {
+        wxGetApp().CallAfter([dlg, recreate, language] {
+            if (dlg != nullptr)
+                dlg->Destroy();
+            if (wxGetApp().mainframe != nullptr)
+                wxGetApp().mainframe->Raise();
+            if (!recreate && wxGetApp().plater_ != nullptr) {
+                if (GLCanvas3D *canvas = wxGetApp().plater_->get_current_canvas3D())
+                    canvas->force_set_focus();
+            }
+            if (recreate && !language.empty()) {
                 wxGetApp().app_config->set("language", language);
                 wxGetApp().app_config->save();
                 if (wxGetApp().load_language(from_u8(language), false))
                     wxGetApp().recreate_GUI(_L("Restart application") + dots);
-            });
-        }
+            }
+        });
     });
     open_dlg->Show(true);
     return;

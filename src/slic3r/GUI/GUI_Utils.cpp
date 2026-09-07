@@ -7,9 +7,10 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/format.hpp>
 
+#include "libslic3r/AppConfig.hpp"
+
 #ifdef _WIN32
     #include <Windows.h>
-    #include "libslic3r/AppConfig.hpp"
     #include <wx/msw/registry.h>
 #endif // _WIN32
 
@@ -313,8 +314,12 @@ void update_dark_ui(wxWindow* window)
 
 void update_dark_config()
 {
+#if COPRINT_DARK_MODE_ENABLED
     wxSystemAppearance app = wxSystemSettings::GetAppearance();
     GUI::wxGetApp().app_config->set("dark_color_mode", app.IsDark() ? "1" : "0");
+#else
+    GUI::wxGetApp().app_config->set("dark_color_mode", "0");
+#endif
     wxGetApp().Update_dark_mode_flag();
 }
 

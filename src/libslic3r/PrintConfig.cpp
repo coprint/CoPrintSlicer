@@ -11394,7 +11394,7 @@ static std::map<t_custom_gcode_key, t_config_option_keys> s_CustomGcodeSpecificP
                                "new_retract_length_toolchange", "old_filament_e_feedrate", "old_filament_temp", "old_retract_length",
                                "old_retract_length_toolchange", "relative_e_axis", "second_flush_volume", "toolchange_count", "toolchange_z",
                                "travel_point_1_x", "travel_point_1_y", "travel_point_2_x", "travel_point_2_y", "travel_point_3_x",
-                               "travel_point_3_y", "x_after_toolchange", "y_after_toolchange", "z_after_toolchange"}},
+                               "travel_point_3_y", "wipe_tower_x", "x_after_toolchange", "y_after_toolchange", "z_after_toolchange"}},
     {"change_extrusion_role_gcode", {"layer_num", "layer_z", "extrusion_role", "last_extrusion_role"}},
     {"filament_change_extrusion_role_gcode", {"layer_num", "layer_z", "extrusion_role", "last_extrusion_role"}},
     {"process_change_extrusion_role_gcode", {"layer_num", "layer_z", "extrusion_role", "last_extrusion_role"}},
@@ -11444,6 +11444,7 @@ CustomGcodeSpecificConfigDef::CustomGcodeSpecificConfigDef()
     new_def("new_retract_length_toolchange", coFloat, "New retract length toolchange", "The toolchange retraction length of the new filament.");
     new_def("old_filament_temp", coInt, "Old filament temp", "The old filament temp.");
     new_def("new_filament_temp", coInt, "New filament temp", "The new filament temp.");
+    new_def("wipe_tower_x", coFloat, "Wipe tower X", "The wipe tower X position for the current plate.");
     new_def("x_after_toolchange", coFloat, "X after toolchange", "The X pos after toolchange.");
     new_def("y_after_toolchange", coFloat, "Y after toolchange", "The Y pos after toolchange.");
     new_def("z_after_toolchange", coFloat, "Z after toolchange", "The Z pos after toolchange.");

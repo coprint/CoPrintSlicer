@@ -1688,6 +1688,8 @@ void StartPrintDialog::start_print_job()
     set_sending_ui(true);
     set_send_status(_L("Sending print job..."));
 
+    // Upload → SET_TOOL_MAP (this job only) → PRINT_STATE → POST /printer/print/start.
+    // Sliced G-code is not rewritten. Firmware END_PRINT / CANCEL_PRINT restores TOOL_MAP.
     std::thread([agent, params, upload_first, base, api_key, tool_map, print_state, remote_filename,
                  dev_id, weak_dlg = wxWeakRef<StartPrintDialog>(this)]() {
         std::string error;
@@ -1728,6 +1730,8 @@ void StartPrintDialog::start_print_job()
 
 std::string StartPrintDialog::tool_map_script() const
 {
+    // Current job mapping only. Unused slots stay as-is; END_PRINT / CANCEL_PRINT
+    // restore identity in firmware.
     std::string script;
     for (int i = 0; i < 4; ++i) {
         if (m_filament_slots[i] == nullptr || !m_filament_slots[i]->IsShown())

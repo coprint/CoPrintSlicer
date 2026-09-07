@@ -1296,8 +1296,8 @@ bool Sidebar::priv::switch_diameter(bool single)
     bool switched = wxGetApp().get_tab(Preset::TYPE_PRINTER)->select_preset(preset->name);
     if (switched && !prev_colors.empty()) {
         size_t n = preset_bundle->filament_presets.size();
-        prev_colors.resize(n, "#26A69A");
-        prev_multi_colors.resize(n, "#26A69A");
+        preset_bundle->fill_default_filament_colours(prev_colors, n);
+        preset_bundle->fill_default_filament_colours(prev_multi_colors, n);
         prev_color_types.resize(n, "1");
         preset_bundle->project_config.option<ConfigOptionStrings>("filament_colour")->values       = prev_colors;
         preset_bundle->project_config.option<ConfigOptionStrings>("filament_multi_colour")->values = prev_multi_colors;
@@ -5171,7 +5171,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     //BBS :partplatelist construction
     , partplate_list(this->q, &model)
 {
-    m_is_dark = wxGetApp().app_config->get("dark_color_mode") == "1";
+    m_is_dark = wxGetApp().dark_mode();
 
     m_aui_mgr.SetManagedWindow(q);
     m_aui_mgr.SetDockSizeConstraint(1, 1);
@@ -10609,7 +10609,7 @@ void Plater::priv::show_preview_only_hint(wxCommandEvent &event)
 }
 
 void Plater::priv::on_apple_change_color_mode(wxSysColourChangedEvent& evt) {
-    m_is_dark = wxSystemSettings::GetAppearance().IsDark();
+    m_is_dark = wxGetApp().dark_mode();
     if (view3D->get_canvas3d() && view3D->get_canvas3d()->is_initialized()) {
         view3D->get_canvas3d()->on_change_color_mode(m_is_dark);
         preview->get_canvas3d()->on_change_color_mode(m_is_dark);
@@ -10620,7 +10620,7 @@ void Plater::priv::on_apple_change_color_mode(wxSysColourChangedEvent& evt) {
 }
 
 void Plater::priv::on_change_color_mode(SimpleEvent& evt) {
-    m_is_dark = wxGetApp().app_config->get("dark_color_mode") == "1";
+    m_is_dark = wxGetApp().dark_mode();
     sidebar->on_change_color_mode(m_is_dark);
     view3D->get_canvas3d()->on_change_color_mode(m_is_dark);
     preview->get_canvas3d()->on_change_color_mode(m_is_dark);
@@ -16756,6 +16756,13 @@ void Plater::on_config_change(const DynamicPrintConfig &config)
             // update to force bed selection(for texturing)
             bed_shape_changed = true;
             update_scheduled = true;
+
+            // Empty project: apply Quadro back-left wipe tower once the printer is known.
+            // Skip when objects are already loaded so a 3MF keeps its saved position.
+            if (p->model.objects.empty() && wxGetApp().preset_bundle->current_printer_is_quadro()) {
+                for (int i = 0; i < p->partplate_list.get_plate_count(); ++i)
+                    p->partplate_list.set_default_wipe_tower_pos_for_plate(i, true);
+            }
         }
         // Orca: update when *_filament changed
         else if (opt_key == "support_interface_filament" || opt_key == "support_filament" || opt_key == "wall_filament" ||

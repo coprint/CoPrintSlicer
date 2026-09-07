@@ -144,7 +144,7 @@ void CoprintSettingsDialog::build()
         config->save();
     });
 
-#ifdef _WIN32
+#if defined(_WIN32) && COPRINT_DARK_MODE_ENABLED
     auto *dark = add_checkbox(_L("Enable dark mode"), config->get("dark_color_mode") == "1");
     dark->Bind(wxEVT_CHECKBOX, [config, dark](wxCommandEvent &) {
         config->set("dark_color_mode", dark->GetValue() ? "1" : "0");

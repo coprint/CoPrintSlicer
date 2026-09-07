@@ -4273,30 +4273,31 @@ void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool ini
     }
     const float margin = WIPE_TOWER_MARGIN + brim_width;
 
-    {
-        const auto *printer_model = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionString>("printer_model");
-        const bool is_quadro = printer_model != nullptr && boost::algorithm::icontains(printer_model->value, "Quadro");
-        if (is_quadro) {
-            // Measured from Snapmaker 270 mm screenshot (10 mm grid):
-            // left edge ≈ 10 mm from X=0; back of tower ≈ 52 mm down from the far Y edge.
-            constexpr float kLeftFromOriginMm = 10.f;
-            constexpr float kDownFromBackMm   = 52.f;
-            x = static_cast<float>(plate_bbox_x_min_local_coord) + kLeftFromOriginMm;
-            y = static_cast<float>(plate_bbox_y_max_local_coord) - kDownFromBackMm
-                - static_cast<float>(wipe_tower_size(1));
-        }
+    const bool is_quadro = wxGetApp().preset_bundle->current_printer_is_quadro();
+
+    // Quadro: pin the front-left corner to the back-left of the plate.
+    // Do not use the rib-wall size estimate — it is a placement box, not the
+    // preview cube, and clamping with it slides the tower to the plate center.
+    constexpr float kQuadroMarginMm = 8.f;
+    constexpr float kQuadroTowerMm  = 25.f;
+    const float     place_w = is_quadro ? kQuadroTowerMm : static_cast<float>(wipe_tower_size(0));
+    const float     place_d = is_quadro ? kQuadroTowerMm : static_cast<float>(wipe_tower_size(1));
+
+    if (is_quadro) {
+        x = static_cast<float>(plate_bbox_x_min_local_coord) + kQuadroMarginMm;
+        y = static_cast<float>(plate_bbox_y_max_local_coord) - kQuadroMarginMm - kQuadroTowerMm;
     }
 
     // clamp wipe tower position within plate boundaries
     {
-        if (x + margin + wipe_tower_size(0) > plate_bbox_x_max_local_coord) {
-            x = plate_bbox_x_max_local_coord - wipe_tower_size(0) - margin;
+        if (x + margin + place_w > plate_bbox_x_max_local_coord) {
+            x = plate_bbox_x_max_local_coord - place_w - margin;
         } else if (x < margin + plate_bbox_x_min_local_coord) {
             x = margin + plate_bbox_x_min_local_coord;
         }
 
-        if (y + margin + wipe_tower_size(1) > plate_bbox_y_max_local_coord) {
-            y = plate_bbox_y_max_local_coord - wipe_tower_size(1) - margin;
+        if (y + margin + place_d > plate_bbox_y_max_local_coord) {
+            y = plate_bbox_y_max_local_coord - place_d - margin;
         } else if (y < margin) {
             y = margin;
         }

@@ -918,6 +918,7 @@ static std::vector<Vec2d> get_path_of_change_filament(const Print& print)
                 config.set_key_value("x_after_toolchange", new ConfigOptionFloat(tool_change_start_pos(0)));
                 config.set_key_value("y_after_toolchange", new ConfigOptionFloat(tool_change_start_pos(1)));
                 config.set_key_value("z_after_toolchange", new ConfigOptionFloat(nozzle_pos(2)));
+                config.set_key_value("wipe_tower_x", new ConfigOptionFloat(m_wipe_tower_pos.x()));
                 config.set_key_value("first_flush_volume", new ConfigOptionFloat(purge_length / 2.f));
                 config.set_key_value("second_flush_volume", new ConfigOptionFloat(purge_length / 2.f));
                 config.set_key_value("old_filament_e_feedrate", new ConfigOptionInt(old_filament_e_feedrate));
@@ -7884,6 +7885,10 @@ std::string GCode::set_extruder(unsigned int new_filament_id, double print_z, bo
     dyn_config.set_key_value("x_after_toolchange", new ConfigOptionFloat(nozzle_pos(0)));
     dyn_config.set_key_value("y_after_toolchange", new ConfigOptionFloat(nozzle_pos(1)));
     dyn_config.set_key_value("z_after_toolchange", new ConfigOptionFloat(nozzle_pos(2)));
+    {
+        const int plate_idx = m_print != nullptr ? m_print->get_plate_index() : 0;
+        dyn_config.set_key_value("wipe_tower_x", new ConfigOptionFloat(m_config.wipe_tower_x.get_at(plate_idx)));
+    }
     dyn_config.set_key_value("first_flush_volume", new ConfigOptionFloat(wipe_length / 2.f));
     dyn_config.set_key_value("second_flush_volume", new ConfigOptionFloat(wipe_length / 2.f));
     dyn_config.set_key_value("old_filament_e_feedrate", new ConfigOptionInt(old_filament_e_feedrate));

@@ -161,6 +161,7 @@ private:
     int pause_print(const std::string& dev_id);
     int resume_print(const std::string& dev_id);
     int cancel_print(const std::string& dev_id);
+    bool start_printer_print(const std::string& filename) const;
 
     // File upload
     bool upload_gcode(const std::string& local_path, const std::string& filename,

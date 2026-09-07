@@ -660,6 +660,20 @@ bool is_coprint_printer_preset(const Preset &preset)
     return boost::algorithm::istarts_with(model, "Co Print");
 }
 
+bool is_quadro_printer_preset(const Preset &preset)
+{
+    if (boost::algorithm::icontains(preset.name, "Quadro"))
+        return true;
+    return boost::algorithm::icontains(preset.config.opt_string("printer_model"), "Quadro");
+}
+
+// T1 blue, T2 red, T3 green, T4 yellow.
+const char *quadro_default_filament_colour(size_t index)
+{
+    static const char *kColors[] = { "#4E74AD", "#D24133", "#349C50", "#E1AA17" };
+    return kColors[index % 4];
+}
+
 bool is_coprint_filament_preset(const Preset *preset)
 {
     if (preset == nullptr)
@@ -3114,7 +3128,7 @@ void PresetBundle::update_selections(AppConfig &config)
     if (!f_colors.empty()) {
         boost::algorithm::split(filament_colors, f_colors, boost::algorithm::is_any_of(","));
     }
-    filament_colors.resize(filament_presets.size(), "#26A69A");
+    fill_default_filament_colours(filament_colors, filament_presets.size());
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
     std::vector<std::string> multi_filament_colors;
@@ -3262,7 +3276,7 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     if (!f_colors.empty()) {
         boost::algorithm::split(filament_colors, f_colors, boost::algorithm::is_any_of(","));
     }
-    filament_colors.resize(filament_presets.size(), "#26A69A");
+    fill_default_filament_colours(filament_colors, filament_presets.size());
     project_config.option<ConfigOptionStrings>("filament_colour")->values = filament_colors;
 
     std::vector<std::string> multi_filament_colors;
@@ -3475,17 +3489,40 @@ void PresetBundle::set_num_filaments(unsigned int n, std::vector<std::string> ne
 
     // BBS set new filament color to new_color
     if (old_filament_count < n) {
-        if (!new_colors.empty()) {
-            for (int i = old_filament_count; i < n; i++) {
-                filament_color->values[i] = new_colors[i - old_filament_count];
-                filament_multi_color->values[i] = new_colors[i - old_filament_count];
-                filament_color_type->values[i]  = "1";  // default color type
-            }
+        for (int i = old_filament_count; i < n; i++) {
+            const std::string color = (i - old_filament_count < (int) new_colors.size())
+                ? new_colors[i - old_filament_count]
+                : default_filament_colour_for_slot(i);
+            filament_color->values[i] = color;
+            filament_multi_color->values[i] = color;
+            filament_color_type->values[i]  = "1";
         }
     }
 
     update_multi_material_filament_presets();
 }
+
+bool PresetBundle::current_printer_is_quadro() const
+{
+    if (printers.size() == 0)
+        return false;
+    return is_quadro_printer_preset(printers.get_selected_preset());
+}
+
+std::string PresetBundle::default_filament_colour_for_slot(size_t index) const
+{
+    return current_printer_is_quadro() ? quadro_default_filament_colour(index) : "#26A69A";
+}
+
+void PresetBundle::fill_default_filament_colours(std::vector<std::string> &colors, size_t count) const
+{
+    colors.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+        if (colors[i].empty())
+            colors[i] = default_filament_colour_for_slot(i);
+    }
+}
+
 void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 {
     unsigned old_filament_count = this->filament_presets.size();
@@ -3512,12 +3549,11 @@ void PresetBundle::set_num_filaments(unsigned int n, std::string new_color)
 
     //BBS set new filament color to new_color
     if (old_filament_count < n) {
-        if (!new_color.empty()) {
-            for (unsigned i = old_filament_count; i < n; i++) {
-                filament_color->values[i] = new_color;
-                filament_multi_color->values[i] = new_color;
-                filament_color_type->values[i]  = "1";  // default color type
-            }
+        for (unsigned i = old_filament_count; i < n; i++) {
+            const std::string color = new_color.empty() ? default_filament_colour_for_slot(i) : new_color;
+            filament_color->values[i] = color;
+            filament_multi_color->values[i] = color;
+            filament_color_type->values[i]  = "1";
         }
     }
 

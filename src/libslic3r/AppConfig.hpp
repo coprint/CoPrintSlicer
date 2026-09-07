@@ -50,6 +50,11 @@ using namespace nlohmann;
 #define SUPPORT_DARK_MODE
 //#define _MSW_DARK_MODE
 
+// Dark-mode implementation stays in the tree. Set to 1 to turn the feature back on.
+#ifndef COPRINT_DARK_MODE_ENABLED
+#define COPRINT_DARK_MODE_ENABLED 0
+#endif
+
 
 namespace Slic3r {
 
