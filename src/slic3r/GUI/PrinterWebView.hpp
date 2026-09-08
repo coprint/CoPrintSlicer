@@ -185,6 +185,8 @@ private:
     void start_camera_stream();
     void stop_camera_stream();
     void handle_camera_webview_title(const wxString &title);
+    void handle_camera_webview_error(const wxWebViewEvent &event);
+    void load_camera_snapshot_fallback();
     void apply_printer_status_tool_selection(int tool_index);
     void begin_dashboard_homing();
     void clear_dashboard_homing();
@@ -250,6 +252,7 @@ private:
     wxPanel *m_camera_webview_host{ nullptr };
     bool m_camera_webview_initialized{ false };
     bool m_camera_stream_requested{ false };
+    bool m_camera_using_direct_url{ false };
     wxStaticText *m_printer_name_value{ nullptr };
     wxStaticText *m_printer_model_value{ nullptr };
     wxStaticText *m_printer_serial_value{ nullptr };

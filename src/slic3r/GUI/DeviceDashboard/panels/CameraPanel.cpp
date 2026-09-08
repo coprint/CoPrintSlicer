@@ -489,7 +489,8 @@ void CameraPanel::fit_preview(int max_width, int max_height)
 
 void CameraPanel::update_from_load_state()
 {
-    const bool show_stream = m_load_state == CameraLoadState::Live;
+    const bool show_stream = m_load_state == CameraLoadState::Live
+        || m_load_state == CameraLoadState::Initializing;
     if (m_stream_host != nullptr)
         m_stream_host->Show(show_stream);
     if (m_idle_placeholder != nullptr) {

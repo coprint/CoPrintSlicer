@@ -94,7 +94,7 @@
     "input_shaping_freq_x": "0",
     "input_shaping_freq_y": "0",
     "input_shaping_type": "Default",
-    "layer_change_gcode": "",
+    "layer_change_gcode": "TIMELAPSE_TAKE_FRAME\n",
     "long_retractions_when_cut": [
         "0",
         "0",
@@ -362,7 +362,7 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.6",
+    "version": "2.4.0.7",
     "wipe": [
         "0",
         "0",

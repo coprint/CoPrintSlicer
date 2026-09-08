@@ -986,25 +986,55 @@ wxBitmap create_quadro_printer_thumbnail(wxWindow *win, int dip)
     return create_dark_printer_thumbnail(win, "printer_thumbnail", dip);
 }
 
+std::string camera_lan_host(MachineObject *obj)
+{
+    if (obj == nullptr)
+        return {};
+    // MachineObject stores Moonraker as host:7125. Webcam is nginx on :80.
+    return friendly_host_from_address(obj->get_dev_ip());
+}
+
+wxString rewrite_moonraker_port_to_webcam(wxString url)
+{
+    const int pos = url.Find(":7125/");
+    if (pos != wxNOT_FOUND)
+        url.replace(static_cast<size_t>(pos), 6, "/");
+    return url;
+}
+
 std::vector<wxString> moonraker_camera_stream_urls(MachineObject *obj)
 {
-    if (obj == nullptr || !obj->is_online())
-        return {};
-
-    const std::string ip = obj->get_dev_ip();
-    if (ip.empty())
+    const std::string host = camera_lan_host(obj);
+    if (host.empty())
         return {};
 
     // Common Mainsail/Crowsnest webcam endpoints. Mainsail often proxies the
     // stream under /webcam, while some installs expose mjpg-streamer directly.
     return {
-        wxString::Format("http://%s/webcam/?action=stream", ip),
-        wxString::Format("http://%s/webcam?action=stream", ip),
-        wxString::Format("http://%s/webcam/stream", ip),
-        wxString::Format("http://%s/webcam/video", ip),
-        wxString::Format("http://%s:8080/?action=stream", ip),
-        wxString::Format("http://%s:8080/webcam/?action=stream", ip)
+        wxString::Format("http://%s/webcam/?action=stream", host),
+        wxString::Format("http://%s/webcam?action=stream", host),
+        wxString::Format("http://%s/webcam/stream", host),
+        wxString::Format("http://%s/webcam/video", host),
+        wxString::Format("http://%s:8080/?action=stream", host),
+        wxString::Format("http://%s:8080/webcam/?action=stream", host)
     };
+}
+
+wxString snapshot_url_from_stream_url(wxString stream_url)
+{
+    if (stream_url.Contains("action=stream")) {
+        stream_url.Replace("action=stream", "action=snapshot");
+        return stream_url;
+    }
+    return wxString();
+}
+
+void append_unique_camera_url(std::vector<wxString> &urls, const wxString &url)
+{
+    if (url.IsEmpty())
+        return;
+    if (std::find(urls.begin(), urls.end(), url) == urls.end())
+        urls.push_back(url);
 }
 
 wxString html_escape(wxString text)
@@ -1051,12 +1081,12 @@ wxString normalize_camera_stream_url(wxString source, MachineObject *obj)
         return wxString();
 
     if (source.StartsWith("/")) {
-        const std::string ip = obj != nullptr ? obj->get_dev_ip() : std::string();
-        return ip.empty() ? wxString() : wxString::Format("http://%s%s", ip, source);
+        const std::string host = camera_lan_host(obj);
+        return host.empty() ? wxString() : wxString::Format("http://%s%s", host, source);
     }
 
     if (source.Find("://") != wxNOT_FOUND)
-        return source;
+        return rewrite_moonraker_port_to_webcam(source);
 
     if (source.Find("/") == wxNOT_FOUND)
         return "http://" + source + "/webcam/?action=stream";
@@ -1106,43 +1136,63 @@ wxSize preview_thumbnail_target_size(const wxStaticBitmap *bitmap, int fallback_
     return size;
 }
 
-std::vector<wxString> configured_camera_stream_urls(MachineObject *obj)
-{
-    std::vector<wxString> urls;
-    if (obj != nullptr) {
-        for (const std::string &stream_url : obj->camera_stream_urls) {
-            const wxString url = normalize_camera_stream_url(from_u8(stream_url), obj);
-            if (!url.IsEmpty() && std::find(urls.begin(), urls.end(), url) == urls.end())
-                urls.push_back(url);
-        }
-    }
-
-    if (wxGetApp().app_config != nullptr && wxGetApp().app_config->get("camera", "enable_custom_source") == "true") {
-        const wxString custom_source = from_u8(wxGetApp().app_config->get("camera", "custom_source"));
-        const wxString custom_url = normalize_camera_stream_url(custom_source, obj);
-        if (!custom_url.IsEmpty() && std::find(urls.begin(), urls.end(), custom_url) == urls.end())
-            urls.push_back(custom_url);
-    }
-
-    if (urls.empty()) {
-        for (const wxString &url : moonraker_camera_stream_urls(obj)) {
-            if (std::find(urls.begin(), urls.end(), url) == urls.end())
-                urls.push_back(url);
-        }
-    }
-    return urls;
-}
-
-wxString camera_stream_page(const std::vector<wxString> &stream_urls)
+wxString camera_urls_to_js(const std::vector<wxString> &urls)
 {
     wxString urls_js;
-    for (const wxString &url : stream_urls) {
+    for (const wxString &url : urls) {
         if (url.IsEmpty())
             continue;
         if (!urls_js.IsEmpty())
             urls_js += ",";
         urls_js += "'" + js_escape(url) + "'";
     }
+    return urls_js;
+}
+
+std::vector<wxString> configured_camera_stream_urls(MachineObject *obj)
+{
+    std::vector<wxString> urls;
+    if (obj != nullptr) {
+        const std::string host = camera_lan_host(obj);
+        if (!host.empty())
+            append_unique_camera_url(urls, wxString::Format("http://%s/webcam/?action=stream", host));
+        for (const std::string &stream_url : obj->camera_stream_urls)
+            append_unique_camera_url(urls, normalize_camera_stream_url(from_u8(stream_url), obj));
+    }
+
+    if (wxGetApp().app_config != nullptr && wxGetApp().app_config->get("camera", "enable_custom_source") == "true") {
+        const wxString custom_source = from_u8(wxGetApp().app_config->get("camera", "custom_source"));
+        append_unique_camera_url(urls, normalize_camera_stream_url(custom_source, obj));
+    }
+
+    for (const wxString &url : moonraker_camera_stream_urls(obj))
+        append_unique_camera_url(urls, url);
+    return urls;
+}
+
+std::vector<wxString> configured_camera_snapshot_urls(MachineObject *obj)
+{
+    std::vector<wxString> urls;
+    if (obj != nullptr) {
+        for (const std::string &snapshot_url : obj->camera_snapshot_urls)
+            append_unique_camera_url(urls, normalize_camera_stream_url(from_u8(snapshot_url), obj));
+        for (const std::string &stream_url : obj->camera_stream_urls)
+            append_unique_camera_url(urls, snapshot_url_from_stream_url(
+                normalize_camera_stream_url(from_u8(stream_url), obj)));
+        const std::string host = camera_lan_host(obj);
+        if (!host.empty())
+            append_unique_camera_url(urls, wxString::Format("http://%s/webcam/?action=snapshot", host));
+    }
+    return urls;
+}
+
+wxString camera_stream_page(const std::vector<wxString> &stream_urls, const std::vector<wxString> &snapshot_urls)
+{
+    // WKWebView does not reliably decode MJPEG (multipart/x-mixed-replace) in
+    // <img>. Snapshot JPEGs do load, so the live view is a short poll of
+    // /webcam/?action=snapshot rather than the never-ending stream URL.
+    const wxString snapshots_js = camera_urls_to_js(snapshot_urls);
+    const wxString streams_js = camera_urls_to_js(stream_urls);
 
     return "<!doctype html><html><head><meta charset='utf-8'>"
            "<style>"
@@ -1155,23 +1205,80 @@ wxString camera_stream_page(const std::vector<wxString> &stream_urls)
            "<img id='camera-stream' alt='Camera stream'>"
            "<div class='message'>Camera stream unavailable</div>"
            "<script>"
-           "const urls=[" + urls_js + "];"
-           "let index=0;"
+           "const snapshots=[" + snapshots_js + "];"
+           "const streams=[" + streams_js + "];"
+           "let index=0,ok=false,timer=null,poll=null,errors=0;"
            "const img=document.getElementById('camera-stream');"
            "const msg=document.querySelector('.message');"
-           "function withCacheBuster(url){return url+(url.indexOf('?')>=0?'&':'?')+'_='+(Date.now());}"
-           "function fail(){document.title='coprint-camera-fail';document.body.className='failed';msg.textContent='Camera stream unavailable';}"
-           "function next(){"
-           "if(index>=urls.length){fail();return;}"
-           "document.body.className='loading';"
+           "function bust(u){return u+(u.indexOf('?')>=0?'&':'?')+'_t='+Date.now();}"
+           "function markOk(){"
+           "if(ok)return;"
+           "ok=true;"
+           "if(timer){clearTimeout(timer);timer=null;}"
+           "document.title='coprint-camera-ok';"
+           "document.body.className='';"
+           "}"
+           "function fail(){"
+           "if(ok)return;"
+           "if(poll){clearTimeout(poll);poll=null;}"
+           "if(timer){clearTimeout(timer);timer=null;}"
+           "document.title='coprint-camera-fail';"
+           "document.body.className='failed';"
+           "msg.textContent='Camera stream unavailable';"
+           "}"
+           "function hasFrame(){return img.naturalWidth>0&&img.naturalHeight>0;}"
+           "function loadSnap(){"
+           "if(index>=snapshots.length){fail();return;}"
+           "img.src=bust(snapshots[index]);"
+           "}"
+           "function nextSnap(){"
+           "if(ok)return;"
+           "index++;"
+           "errors=0;"
+           "if(timer){clearTimeout(timer);timer=null;}"
+           "if(index>=snapshots.length){fail();return;}"
+           "timer=setTimeout(function(){if(!ok)nextSnap();},8000);"
+           "loadSnap();"
+           "}"
+           "img.onload=function(){"
+           "if(!hasFrame())return;"
+           "errors=0;"
+           "markOk();"
+           "if(poll)clearTimeout(poll);"
+           "poll=setTimeout(loadSnap,400);"
+           "};"
+           "img.onerror=function(){"
+           "if(ok){if(poll)clearTimeout(poll);poll=setTimeout(loadSnap,800);return;}"
+           "errors++;"
+           "if(errors>=3)nextSnap();"
+           "else{if(poll)clearTimeout(poll);poll=setTimeout(loadSnap,500);}"
+           "};"
+           "if(snapshots.length){"
            "document.title='coprint-camera-loading';"
            "msg.textContent='Trying camera stream...';"
-           "img.src=withCacheBuster(urls[index++]);"
-           "}"
-           "img.onload=function(){document.title='coprint-camera-ok';document.body.className='';};"
-           "img.onerror=function(){setTimeout(next,250);};"
-           "if(urls.length){next();}else{fail();}"
+           "timer=setTimeout(function(){if(!ok)nextSnap();},8000);"
+           "loadSnap();"
+           "}else if(streams.length){"
+           "img.src=streams[0];"
+           "timer=setTimeout(function(){if(!ok)fail();},8000);"
+           "setInterval(function(){if(!ok&&hasFrame())markOk();},250);"
+           "}else{fail();}"
            "</script></body></html>";
+}
+
+wxString camera_live_page(const wxString &stream_url)
+{
+    // Do not LoadURL / iframe the raw MJPEG: WebKit shows it at native
+    // resolution (scrollbars + zoom cursor). <img> + object-fit fills the panel.
+    const wxString src = html_escape(stream_url);
+    return "<!doctype html><html><head><meta charset='utf-8'>"
+           "<style>"
+           "html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;cursor:default;}"
+           "img{display:block;width:100%;height:100%;object-fit:cover;object-position:center;"
+           "pointer-events:none;-webkit-user-select:none;user-select:none;-webkit-user-drag:none;}"
+           "</style></head><body>"
+           "<img src=\"" + src + "\" alt=\"\" draggable=\"false\">"
+           "</body></html>";
 }
 
 // Printer status mini-cards: dark header â€” rounded top corners only; bottom edge straight (separator).
@@ -6504,9 +6611,12 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
 
 void PrinterWebView::ensure_camera_webview_created()
 {
-    if (m_destroying || !IsShownOnScreen())
+    if (m_destroying || m_camera_webview_host == nullptr)
         return;
-    if (m_camera_webview_initialized || m_camera_webview_host == nullptr)
+    // CoPrint Device embeds the status page inside Monitor and hides this
+    // PrinterWebView. IsShownOnScreen() on *this* is then false even when
+    // the camera host is visible — do not use it as a create gate.
+    if (m_camera_webview_initialized)
         return;
     m_camera_webview_initialized = true;
 
@@ -6537,6 +6647,17 @@ void PrinterWebView::ensure_camera_webview_created()
         if (title_lifetime.expired() || m_destroying)
             return;
         handle_camera_webview_title(event.GetString());
+    });
+    m_camera_webview->Bind(wxEVT_WEBVIEW_LOADED, [this, title_lifetime](wxWebViewEvent &) {
+        if (title_lifetime.expired() || m_destroying || !m_camera_stream_requested)
+            return;
+        if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
+            m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Live);
+    });
+    m_camera_webview->Bind(wxEVT_WEBVIEW_ERROR, [this, title_lifetime](wxWebViewEvent &event) {
+        if (title_lifetime.expired() || m_destroying)
+            return;
+        handle_camera_webview_error(event);
     });
 
     auto *hs = new wxBoxSizer(wxHORIZONTAL);
@@ -8785,6 +8906,7 @@ void PrinterWebView::start_camera_stream()
 void PrinterWebView::stop_camera_stream()
 {
     m_camera_stream_requested = false;
+    m_camera_using_direct_url = false;
     m_camera_stream_url.clear();
     if (m_camera_webview != nullptr)
         m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
@@ -8803,9 +8925,41 @@ void PrinterWebView::handle_camera_webview_title(const wxString &title)
     if (title != "coprint-camera-fail")
         return;
     m_camera_stream_requested = false;
-    if (m_camera_webview != nullptr)
-        m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
     m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Failed);
+}
+
+void PrinterWebView::load_camera_snapshot_fallback()
+{
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    const std::vector<wxString> snapshot_urls = configured_camera_snapshot_urls(obj);
+    if (snapshot_urls.empty() || m_camera_webview == nullptr) {
+        m_camera_stream_requested = false;
+        m_camera_using_direct_url = false;
+        if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
+            m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Failed);
+        return;
+    }
+
+    m_camera_using_direct_url = false;
+    m_camera_stream_url = snapshot_urls.front();
+    m_camera_webview->SetPage(camera_stream_page({}, snapshot_urls), m_camera_stream_url.BeforeLast('/'));
+}
+
+void PrinterWebView::handle_camera_webview_error(const wxWebViewEvent &event)
+{
+    if (!m_camera_stream_requested || !m_camera_using_direct_url)
+        return;
+    // MJPEG never finishes; WebKit may report OTHER. Only real network
+    // failures should leave the stream URL the browser already opens.
+    switch (event.GetInt()) {
+    case wxWEBVIEW_NAV_ERR_CONNECTION:
+    case wxWEBVIEW_NAV_ERR_NOT_FOUND:
+        break;
+    default:
+        return;
+    }
+    load_camera_snapshot_fallback();
 }
 
 void PrinterWebView::refresh_camera_stream(MachineObject *obj)
@@ -8817,6 +8971,7 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
     const bool machine_changed = next_machine_id != m_camera_machine_id;
     if (machine_changed) {
         m_camera_stream_requested = false;
+        m_camera_using_direct_url = false;
         if (m_camera_webview != nullptr)
             m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
         m_camera_machine_id = next_machine_id;
@@ -8836,6 +8991,7 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
 
     if (next_url.IsEmpty()) {
         m_camera_stream_requested = false;
+        m_camera_using_direct_url = false;
         if (m_camera_webview != nullptr)
             m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
         if (cam != nullptr)
@@ -8856,8 +9012,12 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
         return;
     }
 
-    if (stream_changed)
-        m_camera_webview->SetPage(camera_stream_page(camera_urls), m_camera_stream_url.BeforeLast('/'));
+    if (stream_changed) {
+        m_camera_using_direct_url = false;
+        m_camera_webview->SetPage(camera_live_page(next_url), next_url.BeforeLast('/'));
+        if (cam != nullptr)
+            cam->set_load_state(DeviceDashboard::CameraLoadState::Live);
+    }
 }
 
 void PrinterWebView::toggle_camera_timelapse()
