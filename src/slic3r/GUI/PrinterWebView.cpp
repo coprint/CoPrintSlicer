@@ -1828,6 +1828,17 @@ std::string url_encode_path_preserving_slashes(std::string path)
     return out;
 }
 
+void apply_moonraker_api_key(wxWebRequest &request, const MachineObject *obj)
+{
+    if (!request.IsOk() || obj == nullptr)
+        return;
+    std::string api_key = obj->get_access_code();
+    if (api_key.empty())
+        api_key = obj->get_user_access_code();
+    if (!api_key.empty())
+        request.SetHeader("X-Api-Key", from_u8(api_key));
+}
+
 std::string moonraker_base_url(const MachineObject *obj)
 {
     if (obj == nullptr)
@@ -8346,6 +8357,11 @@ void PrinterWebView::on_thumbnail_webrequest_state(wxWebRequestEvent &evt)
             abort_preview_thumbnail();
             return;
         }
+        {
+            auto *dev_manager = wxGetApp().getDeviceManager();
+            apply_moonraker_api_key(m_thumbnail_web_request,
+                dev_manager != nullptr ? dev_manager->get_selected_machine() : nullptr);
+        }
         m_preview_thumbnail_url = next;
         m_thumbnail_request_machine_id = next_machine;
         m_thumbnail_web_request.Start();
@@ -8452,6 +8468,7 @@ void PrinterWebView::update_preview_thumbnail(const MachineObject *obj, bool has
         abort_preview_thumbnail();
         return;
     }
+    apply_moonraker_api_key(m_thumbnail_web_request, obj);
     m_thumbnail_web_request.Start();
 }
 
