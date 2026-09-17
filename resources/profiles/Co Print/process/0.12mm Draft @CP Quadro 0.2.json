@@ -6,7 +6,7 @@
 	"inherits": "0.06mm Fine @CP Quadro 0.2",
 	"from": "system",
 	"setting_id": "CoPrintQuadro02Draft012",
-	"instantiation": "true",
+	"instantiation": "false",
 	"skirt_loops": "0",
 	"layer_height": "0.12",
 	"support_bottom_z_distance": "0.12",

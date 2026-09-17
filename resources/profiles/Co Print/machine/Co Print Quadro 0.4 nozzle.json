@@ -109,7 +109,7 @@
     ],
     "machine_max_acceleration_extruding": [
         "10000",
-        "12000"
+        "10000"
     ],
     "machine_max_acceleration_retracting": [
         "5000",
@@ -120,16 +120,16 @@
         "12000"
     ],
     "machine_max_acceleration_x": [
-        "5000",
-        "12000"
+        "7000",
+        "7000"
     ],
     "machine_max_acceleration_y": [
-        "5000",
-        "12000"
+        "7000",
+        "7000"
     ],
     "machine_max_acceleration_z": [
         "100",
-        "1000"
+        "100"
     ],
     "machine_max_jerk_e": [
         "3",
@@ -152,19 +152,19 @@
     ],
     "machine_max_speed_e": [
         "100",
-        "30"
+        "100"
     ],
     "machine_max_speed_x": [
         "300",
-        "200"
+        "300"
     ],
     "machine_max_speed_y": [
         "300",
-        "200"
+        "300"
     ],
     "machine_max_speed_z": [
         "7",
-        "30"
+        "7"
     ],
     "machine_min_extruding_rate": [
         "0"
@@ -174,7 +174,7 @@
     ],
     "machine_pause_gcode": "",
     "machine_start_gcode": "start_print  EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] PURGE_LINE='false' BED_TEMP=[bed_temperature_initial_layer_single] EXT0={is_extruder_used[0]} EXT1={is_extruder_used[1]} EXT2={is_extruder_used[2]} EXT3={is_extruder_used[3]}",
-    "machine_tool_change_time": "2",
+    "machine_tool_change_time": "1.5",
     "machine_unload_filament_time": "1",
     "manual_filament_change": "0",
     "master_extruder_id": "1",
@@ -362,7 +362,7 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.7",
+    "version": "2.4.0.12",
     "wipe": [
         "1",
         "1",

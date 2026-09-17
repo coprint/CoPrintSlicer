@@ -6,7 +6,7 @@
 	"inherits": "fdm_process_coprint_common",
 	"from": "system",
 	"setting_id": "CoPrintQuadroExtraFine00804",
-	"instantiation": "true",
+	"instantiation": "false",
 	"skirt_loops": "0",
 	"bottom_shell_layers": "7",
 	"bottom_color_penetration_layers": "7",

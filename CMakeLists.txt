@@ -639,7 +639,7 @@ set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO RelWithDebInfo Release "")
 # installed under CMAKE_PREFIX_PATH/include/tbb. The compiled static libraries and
 # headers are present and valid, so define the TBB::tbb / TBB::tbbmalloc imported
 # targets directly and skip find_package(TBB) entirely when we can.
-if(NOT TARGET TBB::tbb AND EXISTS "${CMAKE_PREFIX_PATH}/include/tbb/tbb.h")
+if(WIN32 AND NOT TARGET TBB::tbb AND EXISTS "${CMAKE_PREFIX_PATH}/include/tbb/tbb.h")
   add_library(TBB::tbb STATIC IMPORTED)
   set_target_properties(TBB::tbb PROPERTIES
     IMPORTED_LOCATION "${CMAKE_PREFIX_PATH}/lib/tbb12.lib"

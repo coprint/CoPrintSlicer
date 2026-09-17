@@ -6,7 +6,7 @@
 	"inherits": "0.06mm Fine @CP Quadro 0.2",
 	"from": "system",
 	"setting_id": "CoPrintQuadro02HQ006",
-	"instantiation": "true",
+	"instantiation": "false",
 	"skirt_loops": "0",
 	"default_acceleration": [
 		"4000"

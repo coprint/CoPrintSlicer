@@ -8,6 +8,10 @@
     "setting_id":  "CoPrintQuadroStd02406",
     "instantiation":  "true",
     "skirt_loops": "0",
+    "enable_support": "1",
+    "outer_wall_acceleration": "4000",
+    "support_critical_regions_only": "0",
+    "wipe_tower_max_purge_speed": "150",
     "bridge_flow":  "1",
     "elefant_foot_compensation":  "0.075",
     "gap_infill_speed":  [

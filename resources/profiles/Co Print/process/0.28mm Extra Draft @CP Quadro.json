@@ -6,7 +6,7 @@
 	"inherits": "fdm_process_coprint_common",
 	"from": "system",
 	"setting_id": "CoPrintQuadroExtraDraft02804",
-	"instantiation": "true",
+	"instantiation": "false",
 	"skirt_loops": "0",
 	"bridge_flow": "1",
 	"elefant_foot_compensation": "0.075",
