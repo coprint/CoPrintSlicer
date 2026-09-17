@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # Turn a development CoPrintSlicer.app (Resources often a symlink into the
 # source tree) into a Finder-launchable bundle: real Resources, Info.plist
-# keys macOS 26 expects, ad-hoc signature that passes `codesign --verify --strict`.
+# keys macOS 26 expects, then code-sign it.
+#
+# Signing identity is controlled by the CODESIGN_IDENTITY env var:
+#   - unset / "-"  -> ad-hoc signature (default). Free, instant, only good for
+#                     local/dev use; Gatekeeper will warn on other Macs unless
+#                     the quarantine xattr is stripped (see xattr -cr below).
+#   - "Developer ID Application: <Name> (<TEAMID>)" -> real signing with a
+#                     Developer ID cert (requires Apple Developer Program).
+#                     Automatically enables hardened runtime + timestamp,
+#                     which is required for notarization (see notarize_dmg.sh).
 #
 # Usage: macos_package_app.sh <src.app> <dst.app>
 set -euo pipefail
+
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+ENTITLEMENTS="$(cd "$(dirname "$0")" && pwd)/disable_validation.entitlements"
 
 if [ "$#" -lt 2 ]; then
     echo "Usage: $0 <src.app> <dst.app>" >&2
@@ -63,9 +75,14 @@ PLIST="$DST/Contents/Info.plist"
 find "$DST" -name '.DS_Store' -delete
 xattr -cr "$DST"
 
-# Ad-hoc sign is enough for a local/dev DMG. Shipping to other Macs still
-# needs a Developer ID + notarization; without that Gatekeeper will warn.
-echo "Signing $DST"
-codesign --force --deep --sign - --timestamp=none "$DST"
+if [ "$CODESIGN_IDENTITY" = "-" ]; then
+    echo "Signing $DST (ad-hoc)"
+    codesign --force --deep --sign - --timestamp=none "$DST"
+else
+    echo "Signing $DST with identity: $CODESIGN_IDENTITY"
+    codesign --force --deep --options runtime --timestamp \
+        --entitlements "$ENTITLEMENTS" \
+        --sign "$CODESIGN_IDENTITY" "$DST"
+fi
 codesign --verify --verbose --deep --strict "$DST"
 echo "Packaged Finder-launchable app: $DST"

@@ -37,5 +37,10 @@ rm -f "$DMG_OUT"
 hdiutil create -volname "CoPrintSlicer" -srcfolder "$DMG_TEMP" -ov -format UDZO "$DMG_OUT"
 
 rm -rf "$DMG_TEMP"
+
+# No-op unless Apple notarization credentials are set in the environment
+# (see scripts/notarize_dmg.sh for the required variables).
+"$ROOT/scripts/notarize_dmg.sh" "$DMG_OUT"
+
 echo "DMG ready: $DMG_OUT"
 echo "Test like a user: open the DMG, drag CoPrintSlicer to Applications, then open it from Applications."
