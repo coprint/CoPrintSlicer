@@ -74,13 +74,13 @@ Download the **Windows Installer exe** for your preferred version from the [rele
 
     - Option 3 (via System Settings):
       - Step 1: Open the app — a warning window will pop up:
-        ![mac_cant_open](./resources/docs/mac_step1_cant_open.jpeg)
+        <img alt="mac_cant_open" src="./resources/docs/mac_step1_cant_open.jpeg" width="200" height="300">
       - Step 2: Go to `System Settings` → `Privacy & Security`, and click **Open Anyway**:
-        ![mac_security_setting](./resources/docs/mac_step2_open_anyway.jpeg)
+        <img alt="mac_security_setting" src="./resources/docs/mac_step2_open_anyway.jpeg" width="300" height="150">
       - Step 3: Confirm with Touch ID or your password when prompted:
-        ![mac_touch_id_confirm](./resources/docs/mac_step3_confirm.jpeg)
+        <img alt="mac_touch_id_confirm" src="./resources/docs/mac_step3_confirm.jpeg" width="300" height="300">
       - Step 4: In the dialog that appears again, click **Open**:
-        ![mac_open_again](./resources/docs/mac_step4_open.jpeg)
+        <img alt="mac_open_again" src="./resources/docs/mac_step4_open.jpeg" width="200" height="300">
     </details>
 
 ## Background
