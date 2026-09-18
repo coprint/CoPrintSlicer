@@ -1,33 +1,42 @@
-<div align="center">
 
-<picture>
-  <img alt="CoPrintSlicer logo" src="resources/images/CoPrintSlicer.png" width="15%" height="15%">
-</picture>
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/coprint/CoPrintSlicer)](https://github.com/coprint/CoPrintSlicer/stargazers) [![Build all](https://github.com/coprint/CoPrintSlicer/actions/workflows/build_all.yml/badge.svg?branch=main)](https://github.com/coprint/CoPrintSlicer/actions/workflows/build_all.yml)
+![CoPrintSlicer logo](resources/images/CoPrintSlicer.png)
+
+![GitHub Repo stars](https://img.shields.io/github/stars/coprint/CoPrintSlicer) ![Build all](https://github.com/coprint/CoPrintSlicer/actions/workflows/build_all.yml/badge.svg?branch=main)
 
 CoPrintSlicer: an open source Next-Gen Slicing Software for Precision 3D Prints.
 Forked from OrcaSlicer, and built as part of the CoPrint ecosystem to work seamlessly with **Quadro** hardware and hosts.
 Optimize your prints with ultra-fast slicing, intelligent support generation, and seamless printer compatibility—engineered for perfection.
 
-<h3>
+
+
+
 
 # Official links and community
 
+
+
 #### Official Website:
-<a href="https://coprint3d.com/" style="font-size:2em;">coprint3d.com</a>
+
+[coprint3d.com](https://coprint3d.com/)
 
 #### Quadro:
-For detailed information about Quadro, visit <a href="https://coprint3d.com/pages/quadro">coprint3d.com/pages/quadro</a>
+
+For detailed information about Quadro, visit [coprint3d.com/pages/quadro](https://coprint3d.com/pages/quadro)
 
 #### GitHub Repository:
-<a href="https://github.com/coprint/CoPrintSlicer"><img src="https://img.shields.io/badge/CoPrintSlicer-181717?style=flat&logo=github&logoColor=white" width="200" alt="GitHub Logo"/> </a>
 
-</div>
+![GitHub Logo](https://img.shields.io/badge/CoPrintSlicer-181717?style=flat&logo=github&logoColor=white)
+
+
 
 > **Note:** A dedicated wiki for CoPrintSlicer and Quadro is not published yet. Once available, it will be linked here and at [wiki.coprint3d.com](https://wiki.coprint3d.com/).
 
+
+
 # Download
+
+
 
 ## Stable Release
 
@@ -36,52 +45,53 @@ Visit our GitHub Releases page for the latest stable version of CoPrintSlicer, r
 
 # How to install
 
+
+
 ## Windows
 
 Download the **Windows Installer exe** for your preferred version from the [releases page](https://github.com/coprint/CoPrintSlicer/releases).
 
-<details>
-<summary>Troubleshooting</summary>
+Troubleshooting
 
 - *If you have trouble running the build, you might need to install the following runtimes:*
 - [MicrosoftEdgeWebView2RuntimeInstallerX64](https://github.com/coprint/CoPrintSlicer/releases/download/v1.0.10-sf2/MicrosoftEdgeWebView2RuntimeInstallerX64.exe)
-    - [Details of this runtime](https://aka.ms/webview2)
-    - [Alternative Download Link Hosted by Microsoft](https://go.microsoft.com/fwlink/p/?LinkId=2124703)
+  - [Details of this runtime](https://aka.ms/webview2)
+  - [Alternative Download Link Hosted by Microsoft](https://go.microsoft.com/fwlink/p/?LinkId=2124703)
 - [vcredist2019_x64](https://github.com/coprint/CoPrintSlicer/releases/download/v1.0.10-sf2/vcredist2019_x64.exe)
-    - [Alternative Download Link Hosted by Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe)
-    - This file may already be available on your computer if you've installed Visual Studio. Check the following location: `%VCINSTALLDIR%Redist\MSVC\v142`
-</details>
+  - [Alternative Download Link Hosted by Microsoft](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+  - This file may already be available on your computer if you've installed Visual Studio. Check the following location: `%VCINSTALLDIR%Redist\MSVC\v142`
+
+
 
 ## Mac
 
 1. Download the `arm64` DMG for Apple Silicon.
 2. Drag CoPrintSlicer.app to the Applications folder.
 3. *If you want to run a build from a PR, or the app is not yet notarized by Apple, you may need to follow the steps below:*
+  Quarantine / "can't be opened" warning
+  - Option 1 (You only need to do this once. After that the app can be opened normally.):
+    - Step 1: Hold *cmd* and right click the app, from the context menu choose **Open**.
+    - Step 2: A warning window will pop up, click **Open**.
+  - Option 2:
+  Execute this command in terminal:
+    ```shell
+    xattr -dr com.apple.quarantine /Applications/CoPrintSlicer.app
+    ```
+  - Option 3 (via System Settings):
+    - Step 1: Open the app — a warning window will pop up:
+      
+    ![mac_cant_open](./resources/docs/mac_step1_cant_open.jpeg)
+    - Step 2: Go to `System Settings` → `Privacy & Security`, and click **Open Anyway**:
+      
+    ![mac_security_setting](./resources/docs/mac_step2_open_anyway.jpeg)
+    - Step 3: Confirm with Touch ID or your password when prompted:
+      
+    ![mac_touch_id_confirm](./resources/docs/mac_step3_confirm.jpeg)
+    - Step 4: In the dialog that appears again, click **Open**:
+      
+    ![mac_open_again](./resources/docs/mac_step4_open.jpeg)
 
-    <details>
-    <summary>Quarantine / "can't be opened" warning</summary>
 
-    - Option 1 (You only need to do this once. After that the app can be opened normally.):
-      - Step 1: Hold _cmd_ and right click the app, from the context menu choose **Open**.
-      - Step 2: A warning window will pop up, click **Open**.
-
-    - Option 2:
-      Execute this command in terminal:
-
-      ```shell
-      xattr -dr com.apple.quarantine /Applications/CoPrintSlicer.app
-      ```
-
-    - Option 3 (via System Settings):
-      - Step 1: Open the app — a warning window will pop up:
-        <img alt="mac_cant_open" src="./resources/docs/mac_step1_cant_open.jpeg" width="200" height="300">
-      - Step 2: Go to `System Settings` → `Privacy & Security`, and click **Open Anyway**:
-        <img alt="mac_security_setting" src="./resources/docs/mac_step2_open_anyway.jpeg" width="300" height="150">
-      - Step 3: Confirm with Touch ID or your password when prompted:
-        <img alt="mac_touch_id_confirm" src="./resources/docs/mac_step3_confirm.jpeg" width="300" height="300">
-      - Step 4: In the dialog that appears again, click **Open**:
-        <img alt="mac_open_again" src="./resources/docs/mac_step4_open.jpeg" width="200" height="300">
-    </details>
 
 ## Background
 
@@ -99,3 +109,4 @@ CoPrintSlicer is developed and maintained as part of the **CoPrint** ecosystem, 
 - The **GNU Affero General Public License**, version 3 ensures that if you use any part of this software in any way (even behind a web server), your software must be released under the same license.
 - CoPrintSlicer includes a **pressure advance calibration pattern test** adapted from Andrew Ellis' generator, which is licensed under the GNU General Public License, version 3. Ellis' generator is itself adapted from a generator developed by Sineos for Marlin, which is licensed under the GNU General Public License, version 3.
 - The **Bambu networking plugin** is based on non-free libraries from BambuLab. It is optional to CoPrintSlicer and provides extended functionality for Bambu Lab printer users.
+
