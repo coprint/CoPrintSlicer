@@ -400,13 +400,11 @@ jobs:
           path: ${{ github.workspace }}/build/src/Release/Debug_PDB_${{ env.ver }}_for_developers_only.7z
 
       - name: Upload OrcaSlicer_profile_validator Win
-        # TODO: verify the real target/executable name (see profile_validator note below)
-        # before renaming this step's `name`/`path`.
         if: runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
         uses: actions/upload-artifact@v7
         with:
-          name: OrcaSlicer_profile_validator_Windows_${{ env.ver }}
-          path: ${{ github.workspace }}/build/src/Release/OrcaSlicer_profile_validator.exe
+          name: CoPrintSlicer_profile_validator_Windows_${{ env.ver }}
+          path: ${{ github.workspace }}/build/src/Release/CoPrintSlicer_profile_validator.exe
 
       - name: Deploy Windows release portable
         # TODO: gated on the upstream repo — see note below.
@@ -432,16 +430,15 @@ jobs:
           asset_content_type: application/x-msdownload
           max_releases: 1
 
-      - name: Deploy Windows OrcaSlicer_profile_validator release
-        # TODO: gated on the upstream repo — see note below. Also verify the
-        # real executable name before renaming asset_path/asset_name.
+      - name: Deploy Windows CoPrintSlicer_profile_validator release
+        # TODO: gated on upstream repo — unchanged, see earlier note.
         if: github.repository == 'OrcaSlicer/OrcaSlicer' && github.ref == 'refs/heads/main' && runner.os == 'Windows' && inputs.arch != 'arm64' && !vars.SELF_HOSTED
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
           upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-          asset_path: ${{ github.workspace }}/build/src/Release/OrcaSlicer_profile_validator.exe
-          asset_name: OrcaSlicer_profile_validator_Windows_nightly.exe
+          asset_path: ${{ github.workspace }}/build/src/Release/CoPrintSlicer_profile_validator.exe
+          asset_name: CoPrintSlicer_profile_validator_Windows_nightly.exe
           asset_content_type: application/x-msdownload
           max_releases: 1
 
@@ -487,11 +484,11 @@ jobs:
           tests=${{ (!vars.SELF_HOSTED && inputs.arch == 'aarch64') || (vars.SELF_HOSTED && inputs.arch != 'aarch64') }}
           if $tests; then flags=-istrlL; else flags=-isrlL; fi
           ./build_linux.sh "$flags"
-          ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/orca-slicer
+          ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/coprintslicer
           appimage=./build/CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage
           # TODO: verify build_linux.sh's actual output filename before renaming
           # the mv source below — left unchanged intentionally.
-          mv -n ./build/OrcaSlicer_Linux_V${{ env.ver_pure }}.AppImage "$appimage"
+          mv -n ./build/CoPrintSlicer_Linux_V${{ env.ver_pure }}.AppImage "$appimage"
           chmod +x "$appimage"
           if $tests; then tar -cvpf build_tests.tar build/tests; fi
 
@@ -515,15 +512,14 @@ jobs:
           test_repo_dir="${{ runner.temp }}/orca-test-repo"
           rm -rf "$test_repo_dir"
           git clone --depth 1 https://github.com/OrcaSlicer/orca-test-repo.git "$test_repo_dir"
-          python3 "$test_repo_dir/run_test.py" "${{ github.workspace }}/build/package/bin/orca-slicer"
+          python3 "$test_repo_dir/run_test.py" "${{ github.workspace }}/build/package/bin/coprintslicer"
 
-      - name: Build orca_custom_preset_tests
-        # TODO: verify the real executable name (profile_validator) before renaming.
+      - name: Build coprintslicer_custom_preset_tests
         if: github.ref == 'refs/heads/main' && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64'
         working-directory: ${{ github.workspace }}/build/src/Release
         shell: bash
         run: |
-          ./OrcaSlicer_profile_validator -p ${{ github.workspace }}/resources/profiles -g 1
+          ./CoPrintSlicer_profile_validator -p ${{ github.workspace }}/resources/profiles -g 1
           cd ${{ github.workspace }}/resources/profiles
           zip -r orca_custom_preset_tests.zip user/
 
@@ -534,13 +530,12 @@ jobs:
           name: CoPrintSlicer_Linux_ubuntu_${{ env.ubuntu-ver }}${{ env.arch_suffix }}_${{ env.ver }}
           path: "./build/CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage"
 
-      - name: Upload OrcaSlicer_profile_validator Ubuntu
-        # TODO: verify the real executable name before renaming.
+      - name: Upload CoPrintSlicer_profile_validator Ubuntu
         if: ${{ ! env.ACT && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64' }}
         uses: actions/upload-artifact@v7
         with:
-          name: OrcaSlicer_profile_validator_Linux_ubuntu_${{ env.ubuntu-ver }}_${{ env.ver }}
-          path: './build/src/Release/OrcaSlicer_profile_validator'
+          name: CoPrintSlicer_profile_validator_Linux_ubuntu_${{ env.ubuntu-ver }}_${{ env.ver }}
+          path: './build/src/Release/CoPrintSlicer_profile_validator'
 
       - name: Deploy Ubuntu release
         # TODO: gated on the upstream repo — see note below.
@@ -563,16 +558,15 @@ jobs:
           force_push_tag: true
           message: "nightly-builds"
 
-      - name: Deploy Ubuntu OrcaSlicer_profile_validator release
-        # TODO: gated on the upstream repo — see note below. Also verify the
-        # real executable name before renaming asset_path/asset_name.
+      - name: Deploy Ubuntu CoPrintSlicer_profile_validator release
+        # TODO: gated on upstream repo — unchanged, see earlier note.
         if: ${{ github.repository == 'OrcaSlicer/OrcaSlicer' && ! env.ACT && github.ref == 'refs/heads/main' && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64' }}
         uses: WebFreak001/deploy-nightly@v3.2.0
         with:
           upload_url: https://uploads.github.com/repos/OrcaSlicer/OrcaSlicer/releases/137995723/assets{?name,label}
           release_id: 137995723
-          asset_path: ./build/src/Release/OrcaSlicer_profile_validator
-          asset_name: OrcaSlicer_profile_validator_Linux${{ env.ubuntu-ver-str }}_nightly
+          asset_path: ./build/src/Release/CoPrintSlicer_profile_validator
+          asset_name: CoPrintSlicer_profile_validator_Linux${{ env.ubuntu-ver-str }}_nightly
           asset_content_type: application/octet-stream
           max_releases: 1
 
