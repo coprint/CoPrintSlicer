@@ -14,7 +14,7 @@
             ProcessorArchitecture="@MSIX_ARCH@" />
 
   <Properties>
-    <DisplayName>OrcaSlicer</DisplayName>
+    <DisplayName>CoPrintSlicer</DisplayName>
     <PublisherDisplayName>@MSIX_PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <!-- Keep config in the real %APPDATA%\OrcaSlicer so it survives uninstall and
@@ -24,7 +24,7 @@
     <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
     <virtualization:FileSystemWriteVirtualization>
       <virtualization:ExcludedDirectories>
-        <virtualization:ExcludedDirectory>$(KnownFolder:RoamingAppData)\OrcaSlicer</virtualization:ExcludedDirectory>
+        <virtualization:ExcludedDirectory>$(KnownFolder:RoamingAppData)\CoPrintSlicer</virtualization:ExcludedDirectory>
       </virtualization:ExcludedDirectories>
     </virtualization:FileSystemWriteVirtualization>
   </Properties>
@@ -38,10 +38,10 @@
   </Resources>
 
   <Applications>
-    <Application Id="OrcaSlicer" Executable="orca-slicer.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="OrcaSlicer" Executable="coprintslicer.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="OrcaSlicer"
-        Description="Open-source slicer for FDM 3D printers"
+        DisplayName="CoPrintSlicer"
+        Description="Slicer for CoPrint 3D Ecosystem"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png" />
