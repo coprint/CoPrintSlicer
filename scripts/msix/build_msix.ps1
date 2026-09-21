@@ -43,8 +43,8 @@ if ($msixVersionOverride) {
 }
 Write-Output "MSIX version: $msixVersion"
 
-if (-not (Test-Path (Join-Path $InstallDir 'orca-slicer.exe'))) {
-    throw "orca-slicer.exe not found in '$InstallDir' - build the install tree first"
+if (-not (Test-Path (Join-Path $InstallDir 'coprintslicer.exe'))) {
+    throw "coprintslicer.exe not found in '$InstallDir' - build the install tree first"
 }
 
 if ([string]::IsNullOrEmpty($StagingDir)) {

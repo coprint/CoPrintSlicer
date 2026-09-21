@@ -8,6 +8,8 @@
 #include <atomic>
 #include <functional>
 
+#include <wx/bitmap.h>
+#include <wx/sizer.h>
 #include <wx/panel.h>
 #include <wx/gdicmn.h>
 #include <wx/colour.h>

@@ -1753,6 +1753,97 @@ bool OrcaCloudServiceAgent::set_user_session(const std::string& token,
     return true;
 }
 
+bool OrcaCloudServiceAgent::set_user_session(const nlohmann::json& session_json, bool notify_login)
+{
+    auto get_str = [](const nlohmann::json& j, const std::string& key) -> std::string {
+        if (j.contains(key) && j[key].is_string())
+            return j[key].get<std::string>();
+        return std::string();
+    };
+    auto get_nested_str = [](const nlohmann::json& j, std::initializer_list<const char*> path) -> std::string {
+        const nlohmann::json* cur = &j;
+        for (const char* key : path) {
+            if (!cur->is_object() || !cur->contains(key))
+                return std::string();
+            cur = &(*cur)[key];
+        }
+        return cur->is_string() ? cur->get<std::string>() : std::string();
+    };
+
+    // Locate the session node: nested "session" object, or a node that itself
+    // carries access_token/token (Orca cloud / GoTrue shape).
+    const nlohmann::json* session_node = nullptr;
+    if (session_json.contains("data") && session_json["data"].is_object()) {
+        const auto& data = session_json["data"];
+        if (data.contains("session") && data["session"].is_object())
+            session_node = &data["session"];
+        else if (data.contains("access_token") || data.contains("token"))
+            session_node = &data;
+    }
+    if (!session_node) {
+        if (session_json.contains("session") && session_json["session"].is_object())
+            session_node = &session_json["session"];
+        else if (session_json.contains("access_token") || session_json.contains("token"))
+            session_node = &session_json;
+    }
+
+    bool success = false;
+    std::string user_id;
+
+    if (session_node) {
+        // Nested Orca cloud / GoTrue session shape.
+        std::string access_token = get_str(*session_node, "access_token");
+        if (access_token.empty())
+            access_token = get_str(*session_node, "token");
+        std::string refresh_token = get_str(*session_node, "refresh_token");
+        user_id = get_nested_str(*session_node, {"user", "id"});
+        std::string email = get_nested_str(*session_node, {"user", "email"});
+        std::string full_name = get_nested_str(*session_node, {"user", "user_metadata", "full_name"});
+        std::string preferred_username = get_nested_str(*session_node, {"user", "user_metadata", "preferred_username"});
+        std::string avatar = get_nested_str(*session_node, {"user", "user_metadata", "avatar_url"});
+        std::string username = !preferred_username.empty() ? preferred_username : email;
+        std::string name = !full_name.empty() ? full_name : (!preferred_username.empty() ? preferred_username : email);
+        std::string nickname = !preferred_username.empty() ? preferred_username : username;
+        if (nickname.empty()) nickname = name;
+        if (nickname.empty()) nickname = email;
+
+        if (access_token.empty() || user_id.empty()) {
+            BOOST_LOG_TRIVIAL(error) << "OrcaCloudServiceAgent: set_user_session(json) - Orca cloud payload missing access_token or user.id";
+            if (notify_login) invoke_user_login_callback(0, false);
+            return false;
+        }
+        success = set_user_session(access_token, user_id, username, name, nickname, avatar, refresh_token);
+    } else {
+        // Flat WebView token shape.
+        std::string token = get_str(session_json, "token");
+        user_id = get_str(session_json, "user_id");
+        std::string username = get_str(session_json, "username");
+        std::string name = get_str(session_json, "name");
+        std::string nickname = get_str(session_json, "nickname");
+        std::string avatar = get_str(session_json, "avatar");
+        std::string refresh_token = get_str(session_json, "refresh_token");
+
+        if (token.empty() || user_id.empty()) {
+            BOOST_LOG_TRIVIAL(error) << "OrcaCloudServiceAgent: set_user_session(json) - WebView payload missing token or user_id";
+            if (notify_login) invoke_user_login_callback(0, false);
+            return false;
+        }
+        success = set_user_session(token, user_id, username, name, nickname, avatar, refresh_token);
+    }
+
+    if (notify_login) {
+        if (success) {
+            invoke_user_login_callback(1, true);
+            if (on_login_complete_handler) {
+                on_login_complete_handler(true, user_id);
+            }
+        } else {
+            invoke_user_login_callback(0, false);
+        }
+    }
+    return success;
+}
+
 void OrcaCloudServiceAgent::clear_session()
 {
     {
