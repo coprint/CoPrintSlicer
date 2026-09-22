@@ -412,19 +412,38 @@ int MoonrakerPrinterAgent::start_send_gcode_to_sdcard(PrintParams      params,
     if (update_fn)
         update_fn(PrintingStageCreate, 0, "Preparing...");
 
-    std::string filename = params.filename;
-    if (filename.empty()) {
-        filename = params.task_name;
-    }
-    if (!boost::iends_with(filename, ".gcode")) {
-        filename += ".gcode";
+    namespace fs = boost::filesystem;
+    std::string local_path = params.filename;
+    if (local_path.empty() || !fs::exists(local_path))
+        local_path = params.dst_file;
+    if (local_path.empty() || !fs::exists(local_path)) {
+        BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: G-code file does not exist: " << params.filename;
+        return BAMBU_NETWORK_ERR_FILE_NOT_EXIST;
     }
 
-    // Sanitize filename to prevent path traversal attacks
-    std::string safe_filename = sanitize_filename(filename);
+    auto is_basename = [](const std::string &value) {
+        return !value.empty() && value.find('/') == std::string::npos && value.find('\\') == std::string::npos;
+    };
+    std::string remote_name = params.task_name;
+    if (is_basename(params.dst_file))
+        remote_name = params.dst_file;
+    if (remote_name.empty())
+        remote_name = fs::path(local_path).filename().string();
+    if (!boost::iends_with(remote_name, ".gcode"))
+        remote_name += ".gcode";
+    const std::string safe_filename = sanitize_filename(remote_name);
 
-    // Upload only, don't start print
-    if (!upload_gcode(params.filename, safe_filename, device_info.base_url, device_info.api_key, update_fn, cancel_fn)) {
+    std::string base_url = device_info.base_url;
+    if (base_url.empty() && !params.dev_ip.empty())
+        base_url = normalize_base_url(params.dev_ip, params.use_ssl_for_ftp ? "443" : "7125");
+    std::string api_key = device_info.api_key;
+    if (api_key.empty())
+        api_key = params.password;
+
+    BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: upload local=" << local_path
+                            << " remote=" << safe_filename << " url=" << base_url;
+
+    if (!upload_gcode(local_path, safe_filename, base_url, api_key, update_fn, cancel_fn)) {
         return BAMBU_NETWORK_ERR_PRINT_SG_UPLOAD_FTP_FAILED;
     }
 
@@ -2830,7 +2849,7 @@ bool MoonrakerPrinterAgent::upload_gcode(const std::string& local_path,
     http.form_add("root", "gcodes") // Upload to gcodes directory
         .form_add("print", "false") // Don't auto-start print
         .form_add_file("file", source_path.string(), safe_filename)
-        .timeout_connect(5)
+        .timeout_connect(15)
         .timeout_max(300) // 5 minutes for large files
         .on_complete([&](std::string body, unsigned status) {
             (void) body;

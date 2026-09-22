@@ -1667,7 +1667,6 @@ void StartPrintDialog::start_print_job()
         params.dev_name        = obj->get_dev_name();
         params.connection_type = obj->connection_type();
         params.filename        = gcode_path;
-        params.dst_file        = gcode_path;
         params.task_name       = m_task_name_label != nullptr ? m_task_name_label->GetLabel().utf8_string() : std::string();
         params.project_name    = params.task_name;
         params.plate_index     = m_print_plate_idx + 1;
@@ -1678,7 +1677,9 @@ void StartPrintDialog::start_print_job()
         // temp path used for slicing (see PartPlate::get_tmp_gcode_path()).
         remote_filename = remote_gcode_filename(
             params.task_name.empty() ? gcode_path : params.task_name);
-        agent->connect_printer(dev_id, obj->get_dev_ip(), "", obj->get_access_code(), obj->local_use_ssl);
+        params.dst_file = remote_filename;
+        // Do not reconnect here: connect_printer() tears down the live Moonraker
+        // session and can race the upload against a 5s probe timeout.
     } else {
         if (m_storage_file_path.empty()) {
             show_error(this, _L("Print file is missing."));
@@ -1701,7 +1702,10 @@ void StartPrintDialog::start_print_job()
             const int upload = agent->start_send_gcode_to_sdcard(params, nullptr, nullptr, nullptr);
             if (upload != BAMBU_NETWORK_SUCCESS) {
                 ok = false;
-                error = "G-code upload failed";
+                if (upload == BAMBU_NETWORK_ERR_FILE_NOT_EXIST)
+                    error = "G-code file is missing. Slice the plate again and retry.";
+                else
+                    error = "G-code upload failed. The printer did not accept the file in time. Check that it is online and try again.";
             }
         }
         if (ok && !post_gcode_script(base, api_key, tool_map, error))
