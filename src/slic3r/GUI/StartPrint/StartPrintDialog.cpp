@@ -1674,7 +1674,10 @@ void StartPrintDialog::start_print_job()
         params.password        = obj->get_access_code();
         params.use_ssl_for_ftp = obj->local_use_ssl_for_ftp;
         params.use_ssl_for_mqtt = obj->local_use_ssl;
-        remote_filename = remote_gcode_filename(gcode_path);
+        // Upload under the user-facing task name, not the internal ".<pid>.<plate>.gcode"
+        // temp path used for slicing (see PartPlate::get_tmp_gcode_path()).
+        remote_filename = remote_gcode_filename(
+            params.task_name.empty() ? gcode_path : params.task_name);
         agent->connect_printer(dev_id, obj->get_dev_ip(), "", obj->get_access_code(), obj->local_use_ssl);
     } else {
         if (m_storage_file_path.empty()) {
@@ -1826,9 +1829,18 @@ void StartPrintDialog::open_device_page_and_close()
 {
     m_countdown_timer.Stop();
     m_countdown_left = 0;
-    if (MainFrame *frame = wxGetApp().mainframe)
-        frame->jump_to_monitor(m_print_target_dev_id);
+    // Close the modal first: while this dialog's nested event loop is still
+    // running, changes to the parent frame's tab selection (jump_to_monitor)
+    // can be queued but not actually painted/processed until the nested loop
+    // unwinds, which can make the "jump" appear to silently do nothing.
+    // CallAfter defers the jump to the outer event loop, after EndModal has
+    // fully returned control to it.
+    const std::string dev_id = m_print_target_dev_id;
     EndModal(wxID_OK);
+    wxGetApp().CallAfter([dev_id]() {
+        if (MainFrame *frame = wxGetApp().mainframe)
+            frame->jump_to_monitor(dev_id);
+    });
 }
 
 void StartPrintDialog::refresh_from_plate()

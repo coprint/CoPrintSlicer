@@ -3836,9 +3836,16 @@ void MainFrame::jump_to_monitor(std::string dev_id)
         return;
     m_tabpanel->SetSelection(tpMonitor);
     update_device_refresh_button();
+    MonitorPanel *monitor = (MonitorPanel*)m_monitor;
     if (!dev_id.empty()) {
-        ((MonitorPanel*)m_monitor)->select_machine(dev_id);
+        monitor->select_machine(dev_id);
     }
+    // CoPrint/Quadro devices host their status view inside MonitorPanel's own
+    // inner tabbook (see MonitorPanel::on_select_printer(), which does not
+    // switch it). Without this, switching to the outer "Device" tab can leave
+    // the inner tab on whatever page (e.g. printer picker) it was showing.
+    if (monitor->is_coprint_device_ui())
+        monitor->show_coprint_status_page();
 }
 
 void MainFrame::jump_to_multipage()
