@@ -1247,7 +1247,7 @@ void StartPrintDialog::build_ui()
     m_options_section->SetSizer(options_outer_sizer);
     main_sizer->Add(m_options_section, 0, wxEXPAND);
 
-    const int status_h = FromDIP(48);
+    const int status_h = FromDIP(64);
     m_send_status_host = new wxPanel(this, wxID_ANY);
     m_send_status_host->SetBackgroundColour(kPageBackground);
     m_send_status_host->SetMinSize(wxSize(-1, status_h));
@@ -1291,8 +1291,11 @@ void StartPrintDialog::bind_events()
     m_printer_combo->Bind(wxEVT_COMBOBOX, &StartPrintDialog::on_printer_changed, this);
     m_cancel_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_cancel, this);
     m_start_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_start_print, this);
-    m_refresh_timer.Bind(wxEVT_TIMER, &StartPrintDialog::on_timer, this);
-    m_countdown_timer.Bind(wxEVT_TIMER, &StartPrintDialog::on_countdown_tick, this);
+    // Timers are owned by this dialog, so wx posts wxEVT_TIMER to the dialog,
+    // not to the wxTimer objects. Bind here with each timer id or the ticks
+    // never arrive (countdown stuck at 5, no jump to Device).
+    Bind(wxEVT_TIMER, &StartPrintDialog::on_timer, this, m_refresh_timer.GetId());
+    Bind(wxEVT_TIMER, &StartPrintDialog::on_countdown_tick, this, m_countdown_timer.GetId());
 
     m_task_name_edit_button->Bind(wxEVT_BUTTON, &StartPrintDialog::on_task_name_edit, this);
     m_task_name_input->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &) { on_task_name_enter(); });
@@ -1807,13 +1810,20 @@ void StartPrintDialog::set_send_status(const wxString &message)
     m_send_status->Refresh();
 }
 
+wxString device_countdown_message(int seconds)
+{
+    // msgid uses "%ss" (printf %s + literal 's'). Slic3r::format/boost::format
+    // treats that as a bad specifier and can throw, leaving only a bare number.
+    wxString text = _L("Successfully sent. Will automatically jump to the device page in %ss");
+    text.Replace("%s", wxString::Format("%d", seconds), false);
+    return text;
+}
+
 void StartPrintDialog::begin_device_countdown(const std::string &dev_id)
 {
     m_print_target_dev_id = dev_id;
     m_countdown_left = 5;
-    set_send_status(from_u8(format(
-        _u8L("Successfully sent. Will automatically jump to the device page in %ss"),
-        std::to_string(m_countdown_left))));
+    set_send_status(device_countdown_message(m_countdown_left));
     m_countdown_timer.Start(1000);
 }
 
@@ -1824,9 +1834,7 @@ void StartPrintDialog::on_countdown_tick(wxTimerEvent &)
         open_device_page_and_close();
         return;
     }
-    set_send_status(from_u8(format(
-        _u8L("Successfully sent. Will automatically jump to the device page in %ss"),
-        std::to_string(m_countdown_left))));
+    set_send_status(device_countdown_message(m_countdown_left));
 }
 
 void StartPrintDialog::open_device_page_and_close()
