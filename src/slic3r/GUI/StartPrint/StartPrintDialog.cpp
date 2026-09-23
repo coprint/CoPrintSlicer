@@ -203,9 +203,9 @@ void stop_live_camera_streams()
     if (frame == nullptr)
         return;
     if (frame->m_printer_view != nullptr)
-        frame->m_printer_view->stop_camera_stream();
+        frame->m_printer_view->stop_live_camera();
     if (frame->m_monitor != nullptr && frame->m_monitor->coprint_backend() != nullptr)
-        frame->m_monitor->coprint_backend()->stop_camera_stream();
+        frame->m_monitor->coprint_backend()->stop_live_camera();
 }
 
 bool printer_http_reachable(const std::string &base_url, const std::string &api_key, std::string &error_message)

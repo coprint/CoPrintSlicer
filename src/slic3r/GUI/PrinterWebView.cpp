@@ -8920,6 +8920,11 @@ void PrinterWebView::start_camera_stream()
     refresh_camera_stream(obj);
 }
 
+void PrinterWebView::stop_live_camera()
+{
+    stop_camera_stream();
+}
+
 void PrinterWebView::stop_camera_stream()
 {
     m_camera_stream_requested = false;

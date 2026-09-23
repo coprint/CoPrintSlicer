@@ -132,6 +132,7 @@ public:
 
     void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
     void toggle_camera_timelapse();
+    void stop_live_camera();
     wxPanel * coprint_status_host() const { return m_status_page; }
     wxPanel * content_host() const { return m_content_host; }
     void show_add_printer_dialog();
