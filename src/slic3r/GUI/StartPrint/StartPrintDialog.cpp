@@ -4,6 +4,7 @@
 #include "../GUI_App.hpp"
 #include "../I18N.hpp"
 #include "../MainFrame.hpp"
+#include "../Monitor.hpp"
 #include "../MsgDialog.hpp"
 #include "../PrinterWebView.hpp"
 #include "../PartPlate.hpp"
@@ -20,8 +21,6 @@
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/format.hpp"
 #include "slic3r/Utils/Http.hpp"
-#include "slic3r/Utils/NetworkAgent.hpp"
-#include "slic3r/Utils/bambu_networking.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -40,6 +39,7 @@
 #include <wx/utils.h>
 #include <wx/weakref.h>
 
+#include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/log/trivial.hpp>
 #include <nlohmann/json.hpp>
@@ -195,6 +195,98 @@ bool start_printer_storage_print(const std::string &base_url, const std::string 
     payload["filename"] = path;
     BOOST_LOG_TRIVIAL(info) << "StartPrint: printer.print.start filename=" << path;
     return post_moonraker_json(base_url + "/printer/print/start", api_key, payload, 15, error_message);
+}
+
+void stop_live_camera_streams()
+{
+    auto *frame = wxGetApp().mainframe;
+    if (frame == nullptr)
+        return;
+    if (frame->m_printer_view != nullptr)
+        frame->m_printer_view->stop_camera_stream();
+    if (frame->m_monitor != nullptr && frame->m_monitor->coprint_backend() != nullptr)
+        frame->m_monitor->coprint_backend()->stop_camera_stream();
+}
+
+bool printer_http_reachable(const std::string &base_url, const std::string &api_key, std::string &error_message)
+{
+    if (base_url.empty()) {
+        error_message = "Missing printer URL";
+        return false;
+    }
+    bool ok = false;
+    auto http = Http::get(base_url + "/server/info");
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.timeout_connect(3)
+        .timeout_max(4)
+        .on_complete([&](std::string, unsigned code) {
+            ok = code >= 200 && code < 300;
+            if (!ok)
+                error_message = "HTTP " + std::to_string(code);
+        })
+        .on_error([&](std::string, std::string error, unsigned) {
+            error_message = std::move(error);
+            ok = false;
+        })
+        .perform_sync();
+    if (!ok && error_message.empty())
+        error_message = "Connection failed";
+    return ok;
+}
+
+bool upload_gcode_to_moonraker(const std::string &base_url,
+                               const std::string &api_key,
+                               const std::string &local_path,
+                               const std::string &remote_name,
+                               std::string       &error_message)
+{
+    namespace bfs = boost::filesystem;
+    if (local_path.empty() || !bfs::exists(local_path)) {
+        error_message = "missing_gcode";
+        return false;
+    }
+
+    bool ok = false;
+    auto http = Http::post(base_url + "/server/files/upload");
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.form_add("root", "gcodes")
+        .form_add("print", "false")
+        .form_add_file("file", local_path, remote_name)
+        .timeout_connect(15)
+        .timeout_max(300)
+        .on_complete([&](std::string, unsigned code) {
+            ok = code >= 200 && code < 300;
+            if (!ok)
+                error_message = "HTTP " + std::to_string(code);
+        })
+        .on_error([&](std::string body, std::string error, unsigned code) {
+            error_message = std::move(error);
+            if (code > 0)
+                error_message += " (HTTP " + std::to_string(code) + ")";
+            if (!body.empty())
+                error_message += " " + body;
+            ok = false;
+        })
+        .perform_sync();
+    if (!ok && error_message.empty())
+        error_message = "Upload failed";
+    return ok;
+}
+
+wxString start_print_failure_message(const std::string &error)
+{
+    if (error == "missing_gcode")
+        return _L("G-code file is missing. Slice the plate again and retry.");
+    const bool timeout = boost::icontains(error, "timeout") || boost::icontains(error, "timed out")
+        || boost::icontains(error, "Timeout");
+    if (timeout)
+        return _L("Could not reach the printer. It did not respond in time. Check that it is on and on the same network.");
+    if (error.empty())
+        return _L("Failed to start print. Check the printer connection and try again.");
+    return _L("Failed to start print. Check the printer connection and try again.")
+        + "\n" + wxString::FromUTF8(error);
 }
 
 std::string remote_gcode_filename(const std::string &local_path)
@@ -1640,12 +1732,10 @@ void StartPrintDialog::start_print_job()
     const std::string dev_id = obj->get_dev_id();
     m_print_target_dev_id = dev_id;
 
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    if (dev_manager)
-        dev_manager->set_selected_machine(dev_id);
-
-    NetworkAgent *agent = nullptr;
-    PrintParams params;
+    // Do not call set_selected_machine() here. If the websocket looks stale after a
+    // cancelled print, that reconnects the agent, clears device_info, and races the
+    // upload against a 5s /server/info probe that then times out.
+    std::string local_gcode;
     std::string remote_filename;
     const bool upload_first = !m_storage_mode;
 
@@ -1655,34 +1745,14 @@ void StartPrintDialog::start_print_job()
             show_error(this, _L("Slice the plate before starting a print."));
             return;
         }
-        agent = wxGetApp().getAgent();
-        if (agent == nullptr) {
-            show_error(this, _L("Printer network agent is not available."));
-            return;
-        }
-        const std::string gcode_path = plate->get_gcode_filename();
-        if (gcode_path.empty()) {
+        local_gcode = plate->get_gcode_filename();
+        if (local_gcode.empty()) {
             show_error(this, _L("Slice the plate before starting a print."));
             return;
         }
-        params.dev_id          = dev_id;
-        params.dev_ip          = obj->get_dev_ip();
-        params.dev_name        = obj->get_dev_name();
-        params.connection_type = obj->connection_type();
-        params.filename        = gcode_path;
-        params.task_name       = m_task_name_label != nullptr ? m_task_name_label->GetLabel().utf8_string() : std::string();
-        params.project_name    = params.task_name;
-        params.plate_index     = m_print_plate_idx + 1;
-        params.password        = obj->get_access_code();
-        params.use_ssl_for_ftp = obj->local_use_ssl_for_ftp;
-        params.use_ssl_for_mqtt = obj->local_use_ssl;
-        // Upload under the user-facing task name, not the internal ".<pid>.<plate>.gcode"
-        // temp path used for slicing (see PartPlate::get_tmp_gcode_path()).
-        remote_filename = remote_gcode_filename(
-            params.task_name.empty() ? gcode_path : params.task_name);
-        params.dst_file = remote_filename;
-        // Do not reconnect here: connect_printer() tears down the live Moonraker
-        // session and can race the upload against a 5s probe timeout.
+        const std::string task_name = m_task_name_label != nullptr
+            ? m_task_name_label->GetLabel().utf8_string() : std::string();
+        remote_filename = remote_gcode_filename(task_name.empty() ? local_gcode : task_name);
     } else {
         if (m_storage_file_path.empty()) {
             show_error(this, _L("Print file is missing."));
@@ -1691,24 +1761,28 @@ void StartPrintDialog::start_print_job()
         remote_filename = m_storage_file_path;
     }
 
+    stop_live_camera_streams();
+
     m_refresh_timer.Stop();
     set_sending_ui(true);
     set_send_status(_L("Sending print job..."));
 
     // Upload → SET_TOOL_MAP (this job only) → PRINT_STATE → POST /printer/print/start.
     // Sliced G-code is not rewritten. Firmware END_PRINT / CANCEL_PRINT restores TOOL_MAP.
-    std::thread([agent, params, upload_first, base, api_key, tool_map, print_state, remote_filename,
+    std::thread([upload_first, local_gcode, base, api_key, tool_map, print_state, remote_filename,
                  dev_id, weak_dlg = wxWeakRef<StartPrintDialog>(this)]() {
         std::string error;
         bool ok = true;
         if (upload_first) {
-            const int upload = agent->start_send_gcode_to_sdcard(params, nullptr, nullptr, nullptr);
-            if (upload != BAMBU_NETWORK_SUCCESS) {
+            if (!printer_http_reachable(base, api_key, error)) {
                 ok = false;
-                if (upload == BAMBU_NETWORK_ERR_FILE_NOT_EXIST)
-                    error = "G-code file is missing. Slice the plate again and retry.";
-                else
-                    error = "G-code upload failed. If a previous print just finished, the last file may still be loaded on the printer. Wait until it is idle and try again.";
+            } else {
+                std::string reset_error;
+                nlohmann::json reset_payload;
+                reset_payload["script"] = "SDCARD_RESET_FILE";
+                post_moonraker_json(base + "/printer/gcode/script", api_key, reset_payload, 5, reset_error);
+                if (!upload_gcode_to_moonraker(base, api_key, local_gcode, remote_filename, error))
+                    ok = false;
             }
         }
         if (ok && !post_gcode_script(base, api_key, tool_map, error))
@@ -1729,8 +1803,7 @@ void StartPrintDialog::start_print_job()
                 dlg->update_start_button_state();
                 dlg->refresh_filament_printer_sides();
                 dlg->m_refresh_timer.Start(kRefreshIntervalMs);
-                show_error(dlg, error.empty() ? _L("Failed to start print. Check the printer connection and try again.")
-                                              : wxString::FromUTF8(error));
+                show_error(dlg, start_print_failure_message(error));
                 return;
             }
             dlg->begin_device_countdown(dev_id);
