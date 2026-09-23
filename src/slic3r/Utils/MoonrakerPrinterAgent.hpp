@@ -167,6 +167,9 @@ private:
     bool upload_gcode(const std::string& local_path, const std::string& filename,
                       const std::string& base_url, const std::string& api_key,
                       OnUpdateStatusFn update_fn, WasCancelledFn cancel_fn);
+    // After a finished print Moonraker keeps the last gcode reserved; overwriting
+    // that same name then fails until the file is released.
+    bool release_idle_print_file(const std::string& base_url, const std::string& api_key) const;
 
     // JSON-RPC helper
     bool send_jsonrpc_command(const std::string& base_url, const std::string& api_key,

@@ -181,7 +181,7 @@ bool post_gcode_script(const std::string &base_url, const std::string &api_key,
     nlohmann::json payload;
     payload["script"] = script;
     BOOST_LOG_TRIVIAL(info) << "StartPrint: gcode script\n" << script;
-    return post_moonraker_json(base_url + "/printer/gcode/script", api_key, payload, 8, error_message);
+    return post_moonraker_json(base_url + "/printer/gcode/script", api_key, payload, 30, error_message);
 }
 
 bool start_printer_storage_print(const std::string &base_url, const std::string &api_key,
@@ -1708,7 +1708,7 @@ void StartPrintDialog::start_print_job()
                 if (upload == BAMBU_NETWORK_ERR_FILE_NOT_EXIST)
                     error = "G-code file is missing. Slice the plate again and retry.";
                 else
-                    error = "G-code upload failed. The printer did not accept the file in time. Check that it is online and try again.";
+                    error = "G-code upload failed. If a previous print just finished, the last file may still be loaded on the printer. Wait until it is idle and try again.";
             }
         }
         if (ok && !post_gcode_script(base, api_key, tool_map, error))

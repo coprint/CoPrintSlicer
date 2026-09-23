@@ -443,6 +443,8 @@ int MoonrakerPrinterAgent::start_send_gcode_to_sdcard(PrintParams      params,
     BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: upload local=" << local_path
                             << " remote=" << safe_filename << " url=" << base_url;
 
+    release_idle_print_file(base_url, api_key);
+
     if (!upload_gcode(local_path, safe_filename, base_url, api_key, update_fn, cancel_fn)) {
         return BAMBU_NETWORK_ERR_PRINT_SG_UPLOAD_FTP_FAILED;
     }
@@ -2812,6 +2814,53 @@ void MoonrakerPrinterAgent::dispatch_message(const std::string& dev_id, const st
     }
 }
 
+bool MoonrakerPrinterAgent::release_idle_print_file(const std::string& base_url, const std::string& api_key) const
+{
+    if (base_url.empty())
+        return false;
+
+    nlohmann::json status;
+    std::string    error;
+    if (!query_printer_status(base_url, api_key, status, error)) {
+        BOOST_LOG_TRIVIAL(warning) << "MoonrakerPrinterAgent: pre-upload status query failed: " << error;
+        return false;
+    }
+
+    std::string state;
+    if (status.contains("print_stats") && status["print_stats"].is_object() &&
+        status["print_stats"].contains("state") && status["print_stats"]["state"].is_string()) {
+        state = status["print_stats"]["state"].get<std::string>();
+        boost::algorithm::to_lower(state);
+    }
+    if (state == "printing" || state == "paused")
+        return false;
+
+    nlohmann::json payload;
+    payload["script"] = "SDCARD_RESET_FILE";
+    const std::string payload_str = payload.dump();
+
+    bool ok = false;
+    auto http = Http::post(join_url(base_url, "/printer/gcode/script"));
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.header("Content-Type", "application/json")
+        .set_post_body(payload_str)
+        .timeout_connect(5)
+        .timeout_max(15)
+        .on_complete([&](std::string, unsigned status_code) {
+            ok = status_code >= 200 && status_code < 300;
+        })
+        .on_error([&](std::string body, std::string err, unsigned status_code) {
+            BOOST_LOG_TRIVIAL(warning) << "MoonrakerPrinterAgent: SDCARD_RESET_FILE failed: " << err
+                                       << " HTTP " << status_code << " body=" << body;
+        })
+        .perform_sync();
+
+    if (ok)
+        BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: released idle print file (state=" << state << ")";
+    return ok;
+}
+
 bool MoonrakerPrinterAgent::upload_gcode(const std::string& local_path,
                                          const std::string& filename,
                                          const std::string& base_url,
@@ -2838,49 +2887,68 @@ bool MoonrakerPrinterAgent::upload_gcode(const std::string& local_path,
     // Sanitize filename to prevent path traversal attacks
     std::string safe_filename = sanitize_filename(filename);
 
-    bool        result = true;
-    std::string http_error;
+    auto try_upload = [&](int attempt) {
+        bool        result = true;
+        std::string http_error;
+        unsigned    http_status = 0;
+        std::string http_body;
 
-    // Use Http::form_add and Http::form_add_file
-    auto http = Http::post(join_url(base_url, "/server/files/upload"));
-    if (!api_key.empty()) {
-        http.header("X-Api-Key", api_key);
-    }
-    http.form_add("root", "gcodes") // Upload to gcodes directory
-        .form_add("print", "false") // Don't auto-start print
-        .form_add_file("file", source_path.string(), safe_filename)
-        .timeout_connect(15)
-        .timeout_max(300) // 5 minutes for large files
-        .on_complete([&](std::string body, unsigned status) {
-            (void) body;
-            (void) status;
-        })
-        .on_error([&](std::string body, std::string err, unsigned status) {
-            BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: Upload error: " << err << " HTTP " << status;
-            http_error = err;
-            result     = false;
-        })
-        .on_progress([&](Http::Progress progress, bool& cancel) {
-            // Check for cancellation via WasCancelledFn
-            if (cancel_fn && cancel_fn()) {
-                cancel = true;
+        auto http = Http::post(join_url(base_url, "/server/files/upload"));
+        if (!api_key.empty()) {
+            http.header("X-Api-Key", api_key);
+        }
+        http.form_add("root", "gcodes")
+            .form_add("print", "false")
+            .form_add_file("file", source_path.string(), safe_filename)
+            .timeout_connect(15)
+            .timeout_max(300)
+            .on_complete([&](std::string body, unsigned status) {
+                http_status = status;
+                http_body   = std::move(body);
+                if (status < 200 || status >= 300) {
+                    result     = false;
+                    http_error = "HTTP " + std::to_string(status);
+                }
+            })
+            .on_error([&](std::string body, std::string err, unsigned status) {
+                http_status = status;
+                http_body   = std::move(body);
+                http_error  = err;
+                if (status > 0)
+                    http_error += " (HTTP " + std::to_string(status) + ")";
                 result = false;
-                return;
-            }
-            // Report progress via OnUpdateStatusFn
-            if (update_fn && progress.ultotal > 0) {
-                int percent = static_cast<int>((progress.ulnow * 100) / progress.ultotal);
-                update_fn(PrintingStageUpload, percent, "Uploading...");
-            }
-        })
-        .perform_sync();
+            })
+            .on_progress([&](Http::Progress progress, bool& cancel) {
+                if (cancel_fn && cancel_fn()) {
+                    cancel = true;
+                    result = false;
+                    return;
+                }
+                if (update_fn && progress.ultotal > 0) {
+                    int percent = static_cast<int>((progress.ulnow * 100) / progress.ultotal);
+                    update_fn(PrintingStageUpload, percent, "Uploading...");
+                }
+            })
+            .perform_sync();
 
-    if (!result) {
-        BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: Upload failed: " << http_error;
+        if (!result) {
+            BOOST_LOG_TRIVIAL(error) << "MoonrakerPrinterAgent: Upload failed attempt=" << attempt
+                                     << " error=" << http_error << " HTTP " << http_status
+                                     << " body=" << http_body;
+        }
+        return result;
+    };
+
+    if (try_upload(1))
+        return true;
+
+    // First attempt often dies on a reserved previous job or a brief Moonraker stall
+    // after a long-lived slicer session. Release again and retry once.
+    release_idle_print_file(base_url, api_key);
+    std::this_thread::sleep_for(std::chrono::milliseconds(750));
+    if (cancel_fn && cancel_fn())
         return false;
-    }
-
-    return true;
+    return try_upload(2);
 }
 
 int MoonrakerPrinterAgent::pause_print(const std::string& dev_id)
