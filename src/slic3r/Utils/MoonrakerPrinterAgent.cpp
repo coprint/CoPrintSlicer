@@ -2744,13 +2744,8 @@ nlohmann::json MoonrakerPrinterAgent::build_print_payload_locked() const
 
         if (meta.contains("estimated_time") && meta["estimated_time"].is_number()) {
             const int estimated_seconds = static_cast<int>(meta["estimated_time"].get<double>());
-            if (estimated_seconds > 0) {
+            if (estimated_seconds > 0)
                 payload["print"]["slice_info_prediction"] = estimated_seconds;
-                if (mc_percent >= 0 && mc_percent < 100) {
-                    const int remaining = std::max(0, static_cast<int>(estimated_seconds * (100 - mc_percent) / 100.0));
-                    payload["print"]["mc_remaining_time"] = remaining / 60;
-                }
-            }
         }
     }
 
@@ -2759,17 +2754,17 @@ nlohmann::json MoonrakerPrinterAgent::build_print_payload_locked() const
     if (total_layer > 0)
         payload["print"]["total_layer_num"] = total_layer;
 
-    // Fallback remaining time: estimate from elapsed print_duration and progress percentage
-    if (!payload["print"].contains("mc_remaining_time") && mc_percent > 0 && mc_percent < 100) {
-        if (status_cache.contains("print_stats") &&
-            status_cache["print_stats"].contains("print_duration") &&
-            status_cache["print_stats"]["print_duration"].is_number()) {
-            const double elapsed = status_cache["print_stats"]["print_duration"].get<double>();
-            if (elapsed > 0.0) {
-                const double estimated_total   = elapsed * 100.0 / mc_percent;
-                const int    remaining_seconds = std::max(0, static_cast<int>(estimated_total - elapsed));
-                payload["print"]["mc_remaining_time"] = remaining_seconds / 60;
-            }
+    // Remaining from live file progress (Mainsail Estimate), not slicer metadata.
+    // slicer estimated_time - print_duration goes negative when the job overruns.
+    if (mc_percent > 0 && mc_percent < 100 &&
+        status_cache.contains("print_stats") &&
+        status_cache["print_stats"].contains("print_duration") &&
+        status_cache["print_stats"]["print_duration"].is_number()) {
+        const double elapsed = status_cache["print_stats"]["print_duration"].get<double>();
+        if (elapsed > 0.0) {
+            const double estimated_total   = elapsed * 100.0 / mc_percent;
+            const int    remaining_seconds = std::max(0, static_cast<int>(estimated_total - elapsed));
+            payload["print"]["mc_remaining_time"] = remaining_seconds / 60;
         }
     }
 

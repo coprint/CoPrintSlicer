@@ -199,11 +199,12 @@ DeviceDashboardState DashboardStateAdapter::from_machine(MachineObject* machine)
         state.print_job.current_layer = machine->curr_layer;
         state.print_job.total_layers = machine->total_layers;
         state.print_job.remaining_seconds = machine->mc_left_time > 0 ? machine->mc_left_time : -1;
-        state.print_job.elapsed_seconds = predicted_seconds(machine);
-        if (state.print_job.remaining_seconds <= 0 && state.print_job.elapsed_seconds > 0 &&
-            state.print_job.progress_percent > 0 && state.print_job.progress_percent < 100) {
-            state.print_job.remaining_seconds = std::max(0, static_cast<int>(std::round(
-                state.print_job.elapsed_seconds * (100.0 - state.print_job.progress_percent) / 100.0)));
+        if (state.print_job.remaining_seconds > 0 && state.print_job.progress_percent > 0 &&
+            state.print_job.progress_percent < 100) {
+            state.print_job.elapsed_seconds = std::max(0, static_cast<int>(std::round(
+                state.print_job.remaining_seconds * 100.0 / (100.0 - state.print_job.progress_percent))));
+        } else {
+            state.print_job.elapsed_seconds = predicted_seconds(machine);
         }
     }
 
