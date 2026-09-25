@@ -2045,16 +2045,11 @@ int moonraker_compute_total_estimate_seconds(double print_duration_seconds, int 
     return -1;
 }
 
-// Slicer remaining: hold the slice time through start_print / heat. Start the
-// countdown on first extrusion, same moment Mainsail Estimate begins to move.
-int moonraker_slicer_remaining_seconds(int slicer_estimated, double print_duration, double clock_origin)
+int moonraker_slicer_remaining_seconds(int slicer_estimated, double print_duration)
 {
     if (slicer_estimated <= 0)
         return -1;
-    if (clock_origin < 0.0)
-        return slicer_estimated;
-    const int printed = std::max(0, static_cast<int>(std::round(print_duration - clock_origin)));
-    return std::max(0, slicer_estimated - printed);
+    return std::max(0, slicer_estimated - static_cast<int>(std::round(std::max(0.0, print_duration))));
 }
 
 wxString active_file_name_text(const MachineObject *obj);
@@ -6534,15 +6529,9 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                         static_cast<int>(std::round(file_progress * 100.0)), 0, 100);
                 if (slicer_estimated <= 0 && obj != nullptr && obj->slice_info != nullptr)
                     slicer_estimated = obj->slice_info->prediction;
-                if (moonraker_print_job.file_name != m_slicer_clock_filename) {
-                    m_slicer_clock_filename = moonraker_print_job.file_name;
-                    m_slicer_clock_origin_s = -1.0;
-                }
-                if (filament_used > 1.0 && m_slicer_clock_origin_s < 0.0)
-                    m_slicer_clock_origin_s = print_duration;
                 if (slicer_estimated > 0) {
                     moonraker_print_job.remaining_seconds = moonraker_slicer_remaining_seconds(
-                        slicer_estimated, print_duration, m_slicer_clock_origin_s);
+                        slicer_estimated, print_duration);
                     moonraker_print_job.elapsed_seconds = slicer_estimated;
                 } else {
                     moonraker_print_job.remaining_seconds = moonraker_compute_remaining_seconds(
@@ -6560,10 +6549,6 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             if (got_print_state) {
                 m_has_moonraker_print_status = true;
                 m_moonraker_print_job = moonraker_print_job;
-                if (!moonraker_print_job.has_active_job) {
-                    m_slicer_clock_filename.clear();
-                    m_slicer_clock_origin_s = -1.0;
-                }
             }
 
             nlohmann::json fan_status_storage;

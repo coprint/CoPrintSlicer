@@ -2754,46 +2754,21 @@ nlohmann::json MoonrakerPrinterAgent::build_print_payload_locked() const
     if (total_layer > 0)
         payload["print"]["total_layer_num"] = total_layer;
 
-    // Slicer remaining: hold estimated_time until first extrusion (start_print / heat),
-    // then count down. File-progress fallback if the slicer wrote no estimate.
+    // Remaining = slicer estimated_time - Moonraker print_duration. No local clock:
+    // restarting the app must not reset the countdown.
     int slicer_estimated = 0;
     if (payload.contains("print") && payload["print"].contains("slice_info_prediction") &&
         payload["print"]["slice_info_prediction"].is_number())
         slicer_estimated = payload["print"]["slice_info_prediction"].get<int>();
 
     double print_duration = 0.0;
-    double filament_used = 0.0;
-    std::string filename;
-    std::string print_state;
-    if (status_cache.contains("print_stats") && status_cache["print_stats"].is_object()) {
-        const auto& ps = status_cache["print_stats"];
-        if (ps.contains("print_duration") && ps["print_duration"].is_number())
-            print_duration = ps["print_duration"].get<double>();
-        if (ps.contains("filament_used") && ps["filament_used"].is_number())
-            filament_used = ps["filament_used"].get<double>();
-        if (ps.contains("filename") && ps["filename"].is_string())
-            filename = ps["filename"].get<std::string>();
-        if (ps.contains("state") && ps["state"].is_string())
-            print_state = ps["state"].get<std::string>();
-    }
-
-    const bool job_active = (print_state == "printing" || print_state == "paused" || print_state == "pausing");
-    if (!job_active) {
-        m_slicer_clock_filename.clear();
-        m_slicer_clock_origin_s = -1.0;
-    } else {
-        if (!filename.empty() && filename != m_slicer_clock_filename) {
-            m_slicer_clock_filename = filename;
-            m_slicer_clock_origin_s = -1.0;
-        }
-        if (filament_used > 1.0 && m_slicer_clock_origin_s < 0.0)
-            m_slicer_clock_origin_s = print_duration;
-    }
+    if (status_cache.contains("print_stats") && status_cache["print_stats"].is_object() &&
+        status_cache["print_stats"].contains("print_duration") &&
+        status_cache["print_stats"]["print_duration"].is_number())
+        print_duration = status_cache["print_stats"]["print_duration"].get<double>();
 
     if (slicer_estimated > 0) {
-        int remaining_seconds = slicer_estimated;
-        if (job_active && m_slicer_clock_origin_s >= 0.0)
-            remaining_seconds = std::max(0, slicer_estimated - static_cast<int>(std::round(print_duration - m_slicer_clock_origin_s)));
+        const int remaining_seconds = std::max(0, slicer_estimated - static_cast<int>(std::round(std::max(0.0, print_duration))));
         payload["print"]["mc_remaining_time"] = remaining_seconds / 60;
     } else if (mc_percent > 0 && mc_percent < 100 && print_duration > 0.0) {
         const double estimated_total   = print_duration * 100.0 / mc_percent;

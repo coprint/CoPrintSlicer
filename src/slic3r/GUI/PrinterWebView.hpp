@@ -301,8 +301,6 @@ private:
     std::string m_klippy_state;
     bool m_has_moonraker_print_status{ false };
     DeviceDashboard::PrintJobState m_moonraker_print_job;
-    wxString m_slicer_clock_filename;
-    double m_slicer_clock_origin_s{-1.0};
     bool m_moonraker_status_fetch_in_progress{ false };
     std::string m_moonraker_status_machine_id;
     bool m_dashboard_snapshot_ready{ false };
