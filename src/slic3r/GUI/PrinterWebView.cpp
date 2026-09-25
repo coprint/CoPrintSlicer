@@ -2016,9 +2016,8 @@ double moonraker_file_progress_fraction(double virtual_progress,
     return std::clamp(virtual_progress, 0.0, 1.0);
 }
 
-// Mainsail Estimate: average of File and Filament remaining. Do not subtract
-// metadata.estimated_time — that "Slicer" remaining goes negative when the
-// print outruns the comment the slicer wrote into the gcode.
+// Mainsail Estimate: average of File and Filament remaining. Fallback only
+// when the slicer did not write estimated_time.
 int moonraker_compute_remaining_seconds(double print_duration_seconds,
                                         double file_progress,
                                         double filament_used,
@@ -2044,6 +2043,18 @@ int moonraker_compute_total_estimate_seconds(double print_duration_seconds, int 
     if (print_duration_seconds > 0.0)
         return static_cast<int>(std::round(print_duration_seconds));
     return -1;
+}
+
+// Slicer remaining: hold the slice time through start_print / heat. Start the
+// countdown on first extrusion, same moment Mainsail Estimate begins to move.
+int moonraker_slicer_remaining_seconds(int slicer_estimated, double print_duration, double clock_origin)
+{
+    if (slicer_estimated <= 0)
+        return -1;
+    if (clock_origin < 0.0)
+        return slicer_estimated;
+    const int printed = std::max(0, static_cast<int>(std::round(print_duration - clock_origin)));
+    return std::max(0, slicer_estimated - printed);
 }
 
 wxString active_file_name_text(const MachineObject *obj);
@@ -6425,6 +6436,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             double gcode_start_byte = 0.0;
             double gcode_end_byte = 0.0;
             double virtual_progress = 0.0;
+            int slicer_estimated = 0;
             if (status.contains("print_stats") && status["print_stats"].is_object()) {
                 const auto &print_stats = status["print_stats"];
                 wxString print_state;
@@ -6486,6 +6498,8 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
 
                             if (metadata.contains("filament_total") && metadata["filament_total"].is_number())
                                 filament_total = metadata["filament_total"].get<double>();
+                            if (metadata.contains("estimated_time") && metadata["estimated_time"].is_number())
+                                slicer_estimated = std::max(0, static_cast<int>(metadata["estimated_time"].get<double>()));
                             if (metadata.contains("gcode_start_byte") && metadata["gcode_start_byte"].is_number())
                                 gcode_start_byte = metadata["gcode_start_byte"].get<double>();
                             if (metadata.contains("gcode_end_byte") && metadata["gcode_end_byte"].is_number())
@@ -6518,10 +6532,24 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 if (file_progress > 0.0)
                     moonraker_print_job.progress_percent = std::clamp(
                         static_cast<int>(std::round(file_progress * 100.0)), 0, 100);
-                moonraker_print_job.remaining_seconds = moonraker_compute_remaining_seconds(
-                    print_duration, file_progress, filament_used, filament_total);
-                moonraker_print_job.elapsed_seconds = moonraker_compute_total_estimate_seconds(
-                    print_duration, moonraker_print_job.remaining_seconds);
+                if (slicer_estimated <= 0 && obj != nullptr && obj->slice_info != nullptr)
+                    slicer_estimated = obj->slice_info->prediction;
+                if (moonraker_print_job.file_name != m_slicer_clock_filename) {
+                    m_slicer_clock_filename = moonraker_print_job.file_name;
+                    m_slicer_clock_origin_s = -1.0;
+                }
+                if (filament_used > 1.0 && m_slicer_clock_origin_s < 0.0)
+                    m_slicer_clock_origin_s = print_duration;
+                if (slicer_estimated > 0) {
+                    moonraker_print_job.remaining_seconds = moonraker_slicer_remaining_seconds(
+                        slicer_estimated, print_duration, m_slicer_clock_origin_s);
+                    moonraker_print_job.elapsed_seconds = slicer_estimated;
+                } else {
+                    moonraker_print_job.remaining_seconds = moonraker_compute_remaining_seconds(
+                        print_duration, file_progress, filament_used, filament_total);
+                    moonraker_print_job.elapsed_seconds = moonraker_compute_total_estimate_seconds(
+                        print_duration, moonraker_print_job.remaining_seconds);
+                }
 
                 if (moonraker_print_job.total_layers > 0 && moonraker_print_job.current_layer <= 0)
                     moonraker_print_job.current_layer = std::clamp(
@@ -6532,6 +6560,10 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             if (got_print_state) {
                 m_has_moonraker_print_status = true;
                 m_moonraker_print_job = moonraker_print_job;
+                if (!moonraker_print_job.has_active_job) {
+                    m_slicer_clock_filename.clear();
+                    m_slicer_clock_origin_s = -1.0;
+                }
             }
 
             nlohmann::json fan_status_storage;
