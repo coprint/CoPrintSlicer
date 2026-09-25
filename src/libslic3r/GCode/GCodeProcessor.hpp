@@ -461,6 +461,8 @@ class Print;
             unsigned int layer_id{ 0 };
             float distance{ 0.0f }; // mm
             float acceleration{ 0.0f }; // mm/s^2
+            // Klipper ACCEL_TO_DECEL. 0 means "same as acceleration" (Marlin / disabled).
+            float deceleration{ 0.0f }; // mm/s^2
             float max_entry_speed{ 0.0f }; // mm/s
             float safe_feedrate{ 0.0f }; // mm/s
             Flags flags;
@@ -470,9 +472,11 @@ class Print;
             // Calculates this block's trapezoid
             void calculate_trapezoid();
 
+            float effective_deceleration() const { return (deceleration > 0.0f) ? deceleration : acceleration; }
+
             float time() const {
                 return trapezoid.acceleration_time(feedrate_profile.entry, acceleration) +
-                       trapezoid.cruise_time() + trapezoid.deceleration_time(distance, acceleration);
+                       trapezoid.cruise_time() + trapezoid.deceleration_time(distance, effective_deceleration());
             }
         };
 
@@ -538,6 +542,8 @@ class Print;
             float travel_acceleration; // mm/s^2
             // hard limit for the travel acceleration, to which the firmware will clamp.
             float max_travel_acceleration; // mm/s^2
+            // Klipper SET_VELOCITY_LIMIT ACCEL_TO_DECEL. 0 = decelerate at acceleration.
+            float accel_to_decel; // mm/s^2
             float extrude_factor_override_percentage;
             // We accumulate total print time in doubles to reduce the loss of precision
             // while adding big floating numbers with small float numbers.

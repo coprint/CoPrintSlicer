@@ -137,6 +137,23 @@ static float intersection_distance(float initial_rate, float final_rate, float a
     return (acceleration == 0.0f) ? 0.0f : (2.0f * acceleration * distance - sqr(initial_rate) + sqr(final_rate)) / (4.0f * acceleration);
 }
 
+static float klipper_deceleration(float acceleration, float accel_to_decel)
+{
+    if (accel_to_decel <= 0.0f)
+        return acceleration;
+    return std::min(acceleration, accel_to_decel);
+}
+
+// Peak-velocity split when accel and decel differ (Klipper ACCEL_TO_DECEL).
+// Reduces to intersection_distance() when accel == decel.
+static float intersection_distance_ad(float initial_rate, float final_rate, float accel, float decel, float distance)
+{
+    if (accel <= 0.0f || decel <= 0.0f)
+        return 0.0f;
+    const float peak2 = (2.0f * accel * decel * distance + decel * sqr(initial_rate) + accel * sqr(final_rate)) / (accel + decel);
+    return (peak2 - sqr(initial_rate)) / (2.0f * accel);
+}
+
 static float speed_from_distance(float initial_feedrate, float distance, float acceleration)
 {
     // to avoid invalid negative numbers due to numerical errors
@@ -254,15 +271,16 @@ float GCodeProcessor::Trapezoid::deceleration_time(float distance, float acceler
 
 void GCodeProcessor::TimeBlock::calculate_trapezoid()
 {
+    const float decel = effective_deceleration();
     float accelerate_distance = std::max(0.0f, estimated_acceleration_distance(feedrate_profile.entry, feedrate_profile.cruise, acceleration));
-    const float decelerate_distance = std::max(0.0f, estimated_acceleration_distance(feedrate_profile.cruise, feedrate_profile.exit, -acceleration));
+    const float decelerate_distance = std::max(0.0f, estimated_acceleration_distance(feedrate_profile.cruise, feedrate_profile.exit, -decel));
     float cruise_distance = distance - accelerate_distance - decelerate_distance;
 
     // Not enough space to reach the nominal feedrate.
-    // This means no cruising, and we'll have to use intersection_distance() to calculate when to abort acceleration
+    // This means no cruising, and we'll have to use intersection_distance_ad() to calculate when to abort acceleration
     // and start braking in order to reach the exit_feedrate exactly at the end of this block.
     if (cruise_distance < 0.0f) {
-        accelerate_distance = std::clamp(intersection_distance(feedrate_profile.entry, feedrate_profile.exit, acceleration, distance), 0.0f, distance);
+        accelerate_distance = std::clamp(intersection_distance_ad(feedrate_profile.entry, feedrate_profile.exit, acceleration, decel, distance), 0.0f, distance);
         cruise_distance = 0.0f;
         trapezoid.cruise_feedrate = speed_from_distance(feedrate_profile.entry, accelerate_distance, acceleration);
     }
@@ -300,6 +318,7 @@ void GCodeProcessor::TimeMachine::reset()
     max_retract_acceleration = 0.0f;
     travel_acceleration = 0.0f;
     max_travel_acceleration = 0.0f;
+    accel_to_decel = 0.0f;
     extrude_factor_override_percentage = 1.0f;
     time = 0.0f;
     stop_times = std::vector<StopTime>();
@@ -357,7 +376,7 @@ static void planner_reverse_pass_kernel(GCodeProcessor::TimeBlock& curr, const G
         // the reverse and forward planners, the corresponding block junction speed will always be at the
         // the maximum junction speed and may always be ignored for any speed reduction checks.
         const float new_entry_speed = curr.flags.nominal_length ? max_entry_speed :
-            std::min(max_entry_speed, max_allowable_speed(-curr.acceleration, next.feedrate_profile.entry, curr.distance));
+            std::min(max_entry_speed, max_allowable_speed(-curr.effective_deceleration(), next.feedrate_profile.entry, curr.distance));
         if (curr.feedrate_profile.entry != new_entry_speed) {
             // Just Set the new entry speed.
             curr.feedrate_profile.entry = new_entry_speed;
@@ -2120,6 +2139,11 @@ void GCodeProcessor::apply_config(const PrintConfig& config)
         m_time_processor.machines[i].max_travel_acceleration = max_travel_acceleration;
         m_time_processor.machines[i].travel_acceleration     = (max_travel_acceleration > 0.0f) ? max_travel_acceleration :
                                                                                                   DEFAULT_TRAVEL_ACCELERATION;
+        if (config.accel_to_decel_enable.value && config.accel_to_decel_factor.value > 0)
+            m_time_processor.machines[i].accel_to_decel = m_time_processor.machines[i].acceleration *
+                                                          static_cast<float>(config.accel_to_decel_factor.value) / 100.0f;
+        else
+            m_time_processor.machines[i].accel_to_decel = 0.0f;
     }
 
     m_disable_m73 = config.disable_m73;
@@ -2448,6 +2472,14 @@ void GCodeProcessor::apply_config(const DynamicPrintConfig& config)
         m_time_processor.machines[i].max_travel_acceleration = max_travel_acceleration;
         m_time_processor.machines[i].travel_acceleration     = (max_travel_acceleration > 0.0f) ? max_travel_acceleration :
                                                                                                   DEFAULT_TRAVEL_ACCELERATION;
+        const ConfigOptionBool* accel_to_decel_enable = config.option<ConfigOptionBool>("accel_to_decel_enable");
+        const ConfigOptionPercent* accel_to_decel_factor = config.option<ConfigOptionPercent>("accel_to_decel_factor");
+        if (accel_to_decel_enable != nullptr && accel_to_decel_enable->value &&
+            accel_to_decel_factor != nullptr && accel_to_decel_factor->value > 0)
+            m_time_processor.machines[i].accel_to_decel = m_time_processor.machines[i].acceleration *
+                                                          static_cast<float>(accel_to_decel_factor->value) / 100.0f;
+        else
+            m_time_processor.machines[i].accel_to_decel = 0.0f;
     }
 
     if (m_flavor == gcfMarlinLegacy || m_flavor == gcfMarlinFirmware) {
@@ -4071,6 +4103,7 @@ void GCodeProcessor::process_G1(const std::array<std::optional<double>, 4>& axes
         }
 
         block.acceleration = acceleration;
+        block.deceleration = klipper_deceleration(acceleration, machine.accel_to_decel);
 
         // calculates block exit feedrate
         curr.safe_feedrate = block.feedrate_profile.cruise;
@@ -4167,7 +4200,7 @@ void GCodeProcessor::process_G1(const std::array<std::optional<double>, 4>& axes
                 vmax_junction = curr.safe_feedrate;
         }
 
-        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
+        float v_allowable = max_allowable_speed(-block.effective_deceleration(), curr.safe_feedrate, block.distance);
         block.feedrate_profile.entry = std::min(vmax_junction, v_allowable);
 
         block.max_entry_speed = vmax_junction;
@@ -4429,6 +4462,7 @@ void GCodeProcessor::process_VG1(const GCodeReader::GCodeLine& line)
         }
 
         block.acceleration = acceleration;
+        block.deceleration = klipper_deceleration(acceleration, machine.accel_to_decel);
 
         // calculates block exit feedrate
         curr.safe_feedrate = block.feedrate_profile.cruise;
@@ -4525,7 +4559,7 @@ void GCodeProcessor::process_VG1(const GCodeReader::GCodeLine& line)
                 vmax_junction = curr.safe_feedrate;
         }
 
-        float v_allowable = max_allowable_speed(-acceleration, curr.safe_feedrate, block.distance);
+        float v_allowable = max_allowable_speed(-block.effective_deceleration(), curr.safe_feedrate, block.distance);
         block.feedrate_profile.entry = std::min(vmax_junction, v_allowable);
 
         block.max_entry_speed = vmax_junction;
@@ -5296,6 +5330,18 @@ void GCodeProcessor::process_SET_VELOCITY_LIMIT(const GCodeReader::GCodeLine& li
             set_acceleration(static_cast<PrintEstimatedStatistics::ETimeMode>(i), _accl);
             set_travel_acceleration(static_cast<PrintEstimatedStatistics::ETimeMode>(i), _accl);
         }
+    }
+
+    static const std::regex accel_to_decel_pattern("\\sACCEL_TO_DECEL\\s*=\\s*([0-9]*\\.*[0-9]*)");
+    if (std::regex_search(line.raw(), matches, accel_to_decel_pattern) && matches.size() == 2) {
+        float _decel = 0;
+        try
+        {
+            _decel = std::stof(matches[1]);
+        }
+        catch (...) {}
+        for (size_t i = 0; i < static_cast<size_t>(PrintEstimatedStatistics::ETimeMode::Count); ++i)
+            m_time_processor.machines[i].accel_to_decel = _decel;
     }
 
     static const std::regex velocity_pattern("\\sVELOCITY\\s*=\\s*([0-9]*\\.*[0-9]*)");
