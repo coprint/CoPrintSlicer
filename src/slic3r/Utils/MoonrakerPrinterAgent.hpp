@@ -209,8 +209,8 @@ private:
 
     mutable std::recursive_mutex payload_mutex;
     nlohmann::json     status_cache;
-    std::string        m_slicer_clock_filename;
-    double             m_slicer_clock_origin_s{-1.0};
+    mutable std::string m_slicer_clock_filename;
+    mutable double      m_slicer_clock_origin_s{-1.0};
 
     std::atomic<int>       next_jsonrpc_id{100};
     std::set<std::string>  available_objects;  // Track for feature detection
