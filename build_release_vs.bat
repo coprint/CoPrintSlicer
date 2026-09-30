@@ -35,6 +35,17 @@ if "%USE_NINJA%"=="1" (
     goto :generator_ready
 )
 
+if /I "%arch%"=="ARM64" (
+    REM CI pins CMake <=3.31 on windows-11-arm (see build_orca.yml/build_deps.yml
+    REM comments: newer CMake's ASM_ARMASM linker modules break Boost.Context on
+    REM ARM64). That CMake only understands the VS2022 generator, so force it
+    REM here instead of trusting whatever VS msbuild reports as "latest".
+    set VS_VERSION=2022
+    set CMAKE_GENERATOR="Visual Studio 17 2022"
+    echo Forcing CMake generator for ARM64: %CMAKE_GENERATOR%
+    goto :generator_ready
+)
+
 @REM Detect Visual Studio version using msbuild
 echo Detecting Visual Studio version using msbuild...
 
