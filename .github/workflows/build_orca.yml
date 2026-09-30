@@ -471,38 +471,17 @@ jobs:
         if: runner.os == 'Linux' && !vars.SELF_HOSTED
         uses: ./.github/actions/apt-install-deps
 
-        # Tests must built at the same time as the slicer;
-        # if you untangle them feel free to separate them here too
-      - name: Build slicer and tests
+      - name: Build slicer
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          # Build + tar the unit tests (-t) only on the leg that runs them: the
-          # aarch64 leg by default (faster GitHub arm runner), or amd64 when using
-          # self-hosted runners (no arm self-hosted server). unit_tests downloads
-          # this tarball. The profile validator is built with -s, so amd64 keeps it.
-          tests=${{ (!vars.SELF_HOSTED && inputs.arch == 'aarch64') || (vars.SELF_HOSTED && inputs.arch != 'aarch64') }}
-          if $tests; then flags=-istrlL; else flags=-isrlL; fi
-          ./build_linux.sh "$flags"
+          ./build_linux.sh -isrlL
           ./scripts/check_appimage_libs.sh ./build/package ./build/package/bin/coprintslicer
           appimage=./build/CoPrintSlicer_Linux_AppImage${{ env.ubuntu-ver-str }}${{ env.arch_suffix }}_${{ env.ver }}.AppImage
           # TODO: verify build_linux.sh's actual output filename before renaming
           # the mv source below — left unchanged intentionally.
           mv -n ./build/CoPrintSlicer_Linux_V${{ env.ver_pure }}.AppImage "$appimage"
           chmod +x "$appimage"
-          if $tests; then tar -cvpf build_tests.tar build/tests; fi
-
-        # Use tar because upload-artifacts won't always preserve directory structure
-        # and doesn't preserve file permissions
-      - name: Upload Test Artifact
-        if: runner.os == 'Linux' && ((!vars.SELF_HOSTED && inputs.arch == 'aarch64') || (vars.SELF_HOSTED && inputs.arch != 'aarch64'))
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ github.sha }}-tests
-          overwrite: true
-          path: build_tests.tar
-          retention-days: 5
-          if-no-files-found: error
 
       - name: Build coprintslicer_custom_preset_tests
         if: github.ref == 'refs/heads/main' && runner.os == 'Linux' && !vars.SELF_HOSTED && inputs.arch != 'aarch64'
