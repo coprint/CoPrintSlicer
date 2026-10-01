@@ -14,7 +14,7 @@
     "before_layer_change_gcode": "",
     "best_object_pos": "0.5,0.5",
     "change_extrusion_role_gcode": "",
-    "change_filament_gcode": "RESPOND MSG=\"TC NEXT={next_extruder} XA={wipe_tower_x} YA={wipe_tower_y}\"\nT{next_extruder} X={wipe_tower_x} Y={wipe_tower_y}",
+    "change_filament_gcode": "{if has_wipe_tower}\nRESPOND MSG=\"TC NEXT={next_extruder} XA={wipe_tower_x} YA={wipe_tower_y}\"\nT{next_extruder} X={wipe_tower_x} Y={wipe_tower_y}\n{else}\nRESPOND MSG=\"TC NEXT={next_extruder}\"\nT{next_extruder}\n{endif}",
     "cooling_tube_length": "0",
     "cooling_tube_retraction": "0",
     "default_bed_type": "",
@@ -362,7 +362,7 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.12",
+    "version": "2.4.0.13",
     "wipe": [
         "1",
         "1",
