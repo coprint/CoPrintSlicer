@@ -80,8 +80,6 @@ jobs:
         include:
           - arch: x64
             os: windows-latest
-          - arch: arm64
-            os: windows-11-arm
     # Don't run scheduled builds on forks:
     if: ${{ !cancelled() && (github.event_name != 'schedule' || github.repository == 'OrcaSlicer/OrcaSlicer') }}
     uses: ./.github/workflows/build_check_cache.yml
