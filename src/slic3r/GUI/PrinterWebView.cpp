@@ -33,6 +33,7 @@
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include "libslic3r/Utils.hpp"
+#include "libslic3r/Zipper.hpp"
 #include "libslic3r_version.h"
 
 #include <wx/filename.h>
@@ -50,6 +51,7 @@
 #include <wx/filedlg.h>
 #include <wx/filefn.h>
 #include <wx/file.h>
+#include <wx/datetime.h>
 #include <wx/frame.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
@@ -1855,6 +1857,19 @@ std::string moonraker_base_url(const MachineObject *obj)
     return "http://" + host;
 }
 
+static const std::array<const char *, 4> k_quadro_export_log_files = {
+    "klippy.log",
+    "moonraker.log",
+    "QuadroScreen.log",
+    "crowsnest.log"
+};
+
+static wxString quadro_log_zip_default_name()
+{
+    const wxDateTime now = wxDateTime::Now();
+    return now.Format("QuadroLog-%H%M%S-%d-%m-%y.zip");
+}
+
 wxString moonraker_thumbnail_url_from_metadata(const nlohmann::json &metadata, const std::string &base)
 {
     if (base.empty() || !metadata.is_object() || !metadata.contains("thumbnails") || !metadata["thumbnails"].is_array())
@@ -2655,7 +2670,7 @@ void PrinterWebView::set_coprint_storage_mode(bool print_models)
     ensure_storage_page_created();
     if (m_storage_page != nullptr) {
         m_storage_page->set_media_presentation(
-            print_models ? CloudTaskManagerPage::MediaPresentation::ModelOnly
+            print_models ? CloudTaskManagerPage::MediaPresentation::Combined
                          : CloudTaskManagerPage::MediaPresentation::TimelapseOnly);
         m_storage_page->refresh_user_device();
         m_storage_page->update_page();
@@ -7938,7 +7953,7 @@ void PrinterWebView::select_tab(PrinterWebViewTab tab)
     if (m_storage_page != nullptr) {
         m_storage_page->set_media_presentation(
             tab == PrinterWebViewTab::PrintModels
-                ? CloudTaskManagerPage::MediaPresentation::ModelOnly
+                ? CloudTaskManagerPage::MediaPresentation::Combined
                 : CloudTaskManagerPage::MediaPresentation::TimelapseOnly);
     }
 
@@ -8225,7 +8240,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     export_log_button->SetBackgroundColor(StateColor(std::pair<wxColour, int>(*wxWHITE, StateColor::Normal)));
     export_log_button->SetBorderColor(StateColor(std::pair<wxColour, int>(wxColour("#C7C7C7"), StateColor::Normal)));
     export_log_button->SetTextColor(StateColor(std::pair<wxColour, int>(wxColour("#232527"), StateColor::Normal)));
-    export_log_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+    export_log_button->Bind(wxEVT_BUTTON, [this, export_log_button](wxCommandEvent&) {
         auto *dev_manager = wxGetApp().getDeviceManager();
         MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
         const std::string base = moonraker_base_url(obj);
@@ -8238,84 +8253,132 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
             this,
             "Export Log",
             wxEmptyString,
-            "klippy.log",
-            "Log files (*.log)|*.log|All files (*.*)|*.*",
+            quadro_log_zip_default_name(),
+            "ZIP files (*.zip)|*.zip|All files (*.*)|*.*",
             wxFD_SAVE | wxFD_OVERWRITE_PROMPT
         );
 
         if (save_dialog.ShowModal() != wxID_OK)
             return;
 
-        const std::string url = base + "/server/files/logs/klippy.log";
-        const wxString save_path = save_dialog.GetPath();
+        wxFileName dest(save_dialog.GetPath());
+        if (dest.GetExt().Lower() != "zip")
+            dest.SetExt("zip");
+        const wxString save_path = dest.GetFullPath();
         const std::weak_ptr<int> lifetime = m_lifetime_token;
 
-        std::thread([this, lifetime, url, save_path]() {
-            std::string body;
-            std::string error;
-            unsigned status = 0;
+        export_log_button->Disable();
+        export_log_button->SetLabel("Exporting...");
 
-            try {
-                Http::get(url)
-                    .timeout_connect(5)
-                    .timeout_max(30)
-                    .on_complete([&](std::string response, unsigned http_status) {
-                        body = std::move(response);
-                        status = http_status;
-                    })
-                    .on_error([&](std::string response, std::string err, unsigned http_status) {
-                        body = std::move(response);
-                        error = std::move(err);
-                        status = http_status;
-                    })
-                    .perform_sync();
-            } catch (const std::exception &e) {
-                error = e.what();
+        std::thread([this, lifetime, export_log_button, base, save_path]() {
+            struct LogDownload {
+                std::string name;
+                std::string body;
+                std::string error;
+                unsigned status = 0;
+                bool ok() const { return error.empty() && status > 0 && status < 400; }
+            };
+
+            std::vector<LogDownload> downloads;
+            downloads.reserve(k_quadro_export_log_files.size());
+            for (const char *name : k_quadro_export_log_files) {
+                LogDownload download;
+                download.name = name;
+                const std::string url = base + "/server/files/logs/" + download.name;
+                try {
+                    Http::get(url)
+                        .timeout_connect(5)
+                        .timeout_max(120)
+                        .on_complete([&](std::string response, unsigned http_status) {
+                            download.body = std::move(response);
+                            download.status = http_status;
+                        })
+                        .on_error([&](std::string, std::string err, unsigned http_status) {
+                            download.error = std::move(err);
+                            download.status = http_status;
+                        })
+                        .perform_sync();
+                } catch (const std::exception &e) {
+                    download.error = e.what();
+                }
+
+                if (download.ok()) {
+                    BOOST_LOG_TRIVIAL(info) << "PrinterWebView: downloaded printer log " << url
+                                            << " (" << download.body.size() << " bytes)";
+                } else {
+                    BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to download printer log from " << url
+                                             << ", status=" << download.status << ", error=" << download.error;
+                }
+                downloads.push_back(std::move(download));
             }
 
-            wxGetApp().CallAfter([this, lifetime, save_path, url, body = std::move(body), error = std::move(error), status]() {
+            std::vector<std::string> ok_names;
+            std::vector<std::string> fail_names;
+            for (const auto &download : downloads) {
+                if (download.ok())
+                    ok_names.push_back(download.name);
+                else
+                    fail_names.push_back(download.name);
+            }
+
+            std::string zip_error;
+            if (!ok_names.empty()) {
+                try {
+                    Zipper zipper(into_u8(save_path), Zipper::FAST_COMPRESSION);
+                    for (const auto &download : downloads) {
+                        if (!download.ok())
+                            continue;
+                        zipper.add_entry(download.name, download.body.data(), download.body.size());
+                    }
+                    zipper.finalize();
+                } catch (const std::exception &e) {
+                    zip_error = e.what();
+                    BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to write printer log zip "
+                                             << save_path.ToUTF8().data() << ": " << zip_error;
+                }
+            }
+
+            wxGetApp().CallAfter([this, lifetime, export_log_button, save_path,
+                                  ok_names = std::move(ok_names),
+                                  fail_names = std::move(fail_names),
+                                  zip_error = std::move(zip_error)]() {
                 if (lifetime.expired())
                     return;
 
-                if (!error.empty() || status == 0 || status >= 400) {
-                    BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to download printer log from " << url
-                                             << ", status=" << status << ", error=" << error;
-                    wxString reason;
-                    if (!error.empty())
-                        reason = wxString::FromUTF8(error);
-                    else if (status != 0)
-                        reason = wxString::Format("HTTP %u", status);
-                    else
-                        reason = "No response from printer";
+                export_log_button->Enable();
+                export_log_button->SetLabel("Export Log");
 
-                    wxMessageBox(
-                        wxString::Format("Failed to download the printer log file.\n\nURL: %s\nReason: %s",
-                                         wxString::FromUTF8(url),
-                                         reason),
-                        "Export Log",
-                        wxOK | wxICON_ERROR,
-                        this);
+                if (ok_names.empty()) {
+                    wxMessageBox("Failed to download printer log files from the printer.",
+                                 "Export Log", wxOK | wxICON_ERROR, this);
+                    return;
+                }
+                if (!zip_error.empty()) {
+                    wxMessageBox("Failed to save the printer log archive.",
+                                 "Export Log", wxOK | wxICON_ERROR, this);
                     return;
                 }
 
-                wxFile file(save_path, wxFile::write);
-                if (!file.IsOpened() || file.Write(body.data(), body.size()) != body.size()) {
-                    BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to save printer log to " << save_path.ToUTF8().data();
-                    wxMessageBox("Failed to save the printer log file.", "Export Log", wxOK | wxICON_ERROR, this);
+                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: exported printer logs to "
+                                        << save_path.ToUTF8().data();
+                if (fail_names.empty()) {
+                    wxMessageBox("Printer logs exported successfully.",
+                                 "Export Log", wxOK | wxICON_INFORMATION, this);
                     return;
                 }
 
-                BOOST_LOG_TRIVIAL(info) << "PrinterWebView: exported printer log from " << url
-                                        << " to " << save_path.ToUTF8().data();
-                wxMessageBox("Printer log exported successfully.", "Export Log", wxOK | wxICON_INFORMATION, this);
+                wxString missing;
+                for (size_t i = 0; i < fail_names.size(); ++i) {
+                    if (i)
+                        missing += ", ";
+                    missing += wxString::FromUTF8(fail_names[i]);
+                }
+                wxMessageBox(wxString::Format("Printer logs exported with missing files: %s", missing),
+                             "Export Log", wxOK | wxICON_WARNING, this);
             });
         }).detach();
     });
     actions_sizer->Add(export_log_button, 0, wxRIGHT, FromDIP(29));
-
-    m_update_release_note_link = new wxStaticText(actions, wxID_ANY, "Release notes");
-    m_update_release_note_link->SetForegroundColour(wxColour(94, 156, 255));
-    actions_sizer->Add(m_update_release_note_link, 0, wxALIGN_CENTER_VERTICAL);
     actions_sizer->AddStretchSpacer(1);
     actions->SetSizer(actions_sizer);
     body_sizer->Add(actions, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(16));

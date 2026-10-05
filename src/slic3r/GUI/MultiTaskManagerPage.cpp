@@ -7,6 +7,8 @@
 #include "StartPrint/StartPrintDialog.hpp"
 #include "Widgets/ProgressDialog.hpp"
 #include "Widgets/RadioBox.hpp"
+#include "Widgets/SwitchButton.hpp"
+#include "Widgets/WebView.hpp"
 #include "slic3r/Utils/Http.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 #include "slic3r/Utils/MoonrakerPrinterAgent.hpp"
@@ -24,6 +26,10 @@
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
 #include <wx/dcgraph.h>
+#include <wx/datetime.h>
+#include <wx/file.h>
+#include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/mstream.h>
 #include <wx/timer.h>
 #include <wx/time.h>
@@ -31,6 +37,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstring>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1208,6 +1215,256 @@ bool confirm_delete_moonraker_model(wxWindow* parent, const wxString& display_na
                                          _L("Delete"));
 }
 
+bool confirm_delete_moonraker_timelapse(wxWindow* parent, const wxString& display_name)
+{
+    return confirm_moonraker_model_action(parent,
+                                         display_name,
+                                         _L("Delete timelapse?"),
+                                         _L("This timelapse will be removed from the printer storage."),
+                                         _L("Delete"));
+}
+
+bool moonraker_path_ends_with(const std::string& path, const char* ext)
+{
+    const size_t ext_len = std::strlen(ext);
+    if (path.size() < ext_len)
+        return false;
+    for (size_t i = 0; i < ext_len; ++i) {
+        const unsigned char a = static_cast<unsigned char>(path[path.size() - ext_len + i]);
+        const unsigned char b = static_cast<unsigned char>(ext[i]);
+        if (std::tolower(a) != std::tolower(b))
+            return false;
+    }
+    return true;
+}
+
+std::string moonraker_replace_extension(const std::string& path, const std::string& ext)
+{
+    const size_t dot = path.find_last_of('.');
+    if (dot == std::string::npos || dot == 0)
+        return path + ext;
+    return path.substr(0, dot) + ext;
+}
+
+wxString moonraker_timelapse_card_name(const std::string& path)
+{
+    return wxString::Format("moonraker_timelapse_card_%zu", std::hash<std::string>{}(path));
+}
+
+struct MoonrakerTimelapseListResult
+{
+    bool ok{ false };
+    unsigned status_code{ 0 };
+    std::string error_message;
+    std::vector<MoonrakerTimelapseFileView> files;
+};
+
+struct MoonrakerTimelapseDeleteResult
+{
+    bool ok{ false };
+    unsigned status_code{ 0 };
+    std::string error_message;
+    std::string path;
+};
+
+MoonrakerTimelapseListResult fetch_moonraker_timelapse_list_sync(const std::string& base_url,
+                                                                 const std::string& api_key)
+{
+    MoonrakerTimelapseListResult result;
+    if (base_url.empty()) {
+        result.error_message = "Missing printer URL";
+        return result;
+    }
+
+    const std::string url = base_url + "/server/files/list?root=timelapse";
+    std::string body;
+    auto http = Http::get(url);
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.timeout_connect(5)
+        .timeout_max(20)
+        .on_complete([&](std::string response, unsigned status) {
+            body = std::move(response);
+            result.status_code = status;
+            result.ok = status >= 200 && status < 300;
+        })
+        .on_error([&](std::string response, std::string error, unsigned status) {
+            body = std::move(response);
+            result.error_message = std::move(error);
+            result.status_code = status;
+        })
+        .perform_sync();
+
+    if (!result.ok)
+        return result;
+
+    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
+    if (parsed.is_discarded()) {
+        result.ok = false;
+        result.error_message = "Invalid timelapse list";
+        return result;
+    }
+    if (parsed.contains("result"))
+        parsed = parsed["result"];
+    if (!parsed.is_array()) {
+        result.ok = false;
+        result.error_message = "Unexpected timelapse list";
+        return result;
+    }
+
+    for (const auto& item : parsed) {
+        if (!item.is_object() || !item.contains("path") || !item["path"].is_string())
+            continue;
+        const std::string path = item["path"].get<std::string>();
+        if (!moonraker_path_ends_with(path, ".mp4"))
+            continue;
+
+        MoonrakerTimelapseFileView file;
+        file.path = path;
+        if (item.contains("size") && item["size"].is_number())
+            file.size = static_cast<std::uint64_t>(item["size"].get<double>());
+        if (item.contains("modified") && item["modified"].is_number())
+            file.modified = item["modified"].get<double>();
+        file.video_url = base_url + "/server/files/timelapse/" + moonraker_url_encode_path(path);
+        file.thumbnail_url = base_url + "/server/files/timelapse/" +
+                             moonraker_url_encode_path(moonraker_replace_extension(path, ".jpg"));
+        result.files.push_back(std::move(file));
+    }
+
+    std::sort(result.files.begin(), result.files.end(),
+              [](const MoonrakerTimelapseFileView& a, const MoonrakerTimelapseFileView& b) {
+                  return a.modified > b.modified;
+              });
+    return result;
+}
+
+MoonrakerTimelapseDeleteResult delete_moonraker_timelapse_file_sync(const std::string& base_url,
+                                                                    const std::string& api_key,
+                                                                    const std::string& path)
+{
+    MoonrakerTimelapseDeleteResult result;
+    result.path = path;
+    if (base_url.empty() || path.empty()) {
+        result.error_message = "Missing printer URL or file path";
+        return result;
+    }
+
+    const std::string url = base_url + "/server/files/timelapse/" + moonraker_url_encode_path(path);
+    auto http = Http::del(url);
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.timeout_connect(5)
+        .timeout_max(20)
+        .on_complete([&](std::string, unsigned status) {
+            result.status_code = status;
+            result.ok = status >= 200 && status < 300;
+        })
+        .on_error([&](std::string, std::string error, unsigned status) {
+            result.error_message = std::move(error);
+            result.status_code = status;
+        })
+        .perform_sync();
+    return result;
+}
+
+bool download_moonraker_file_sync(const std::string& url,
+                                  const std::string& api_key,
+                                  const wxString& save_path,
+                                  std::string& error,
+                                  unsigned& status)
+{
+    std::string body;
+    try {
+        auto http = Http::get(url);
+        if (!api_key.empty())
+            http.header("X-Api-Key", api_key);
+        http.timeout_connect(5)
+            .timeout_max(180)
+            .on_complete([&](std::string response, unsigned http_status) {
+                body = std::move(response);
+                status = http_status;
+            })
+            .on_error([&](std::string, std::string err, unsigned http_status) {
+                error = std::move(err);
+                status = http_status;
+            })
+            .perform_sync();
+    } catch (const std::exception& e) {
+        error = e.what();
+        return false;
+    }
+
+    if (!error.empty() || status == 0 || status >= 400)
+        return false;
+
+    wxFile file(save_path, wxFile::write);
+    if (!file.IsOpened() || file.Write(body.data(), body.size()) != body.size()) {
+        error = "Failed to write file";
+        return false;
+    }
+    return true;
+}
+
+wxString html_escape_attr(const std::string& value)
+{
+    wxString out = wxString::FromUTF8(value);
+    out.Replace("&", "&amp;");
+    out.Replace("\"", "&quot;");
+    out.Replace("'", "&#39;");
+    out.Replace("<", "&lt;");
+    return out;
+}
+
+wxString timelapse_player_html(const std::string& video_url)
+{
+    return wxString::Format(
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<style>html,body{margin:0;height:100%%;background:#000;overflow:hidden}"
+        "video{width:100%%;height:100%%;object-fit:contain;outline:none}</style></head>"
+        "<body><video controls autoplay playsinline preload='metadata' src=\"%s\"></video></body></html>",
+        html_escape_attr(video_url));
+}
+
+class TimelapsePlayerDialog : public wxDialog
+{
+public:
+    TimelapsePlayerDialog(wxWindow* parent, const wxString& title, const std::string& video_url)
+        : wxDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize,
+                   wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX)
+    {
+        SetBackgroundColour(*wxBLACK);
+        SetMinSize(FromDIP(wxSize(720, 420)));
+        SetSize(FromDIP(wxSize(960, 560)));
+
+        auto* sizer = new wxBoxSizer(wxVERTICAL);
+        m_browser = WebView::CreateWebView(this, wxEmptyString);
+        if (m_browser == nullptr) {
+            auto* msg = new wxStaticText(this, wxID_ANY, _L("Video player could not start."));
+            msg->SetForegroundColour(*wxWHITE);
+            sizer->AddStretchSpacer(1);
+            sizer->Add(msg, 0, wxALIGN_CENTER);
+            sizer->AddStretchSpacer(1);
+        } else {
+            m_browser->SetBackgroundColour(*wxBLACK);
+            sizer->Add(m_browser, 1, wxEXPAND);
+            m_browser->SetPage(timelapse_player_html(video_url), "");
+        }
+        SetSizer(sizer);
+        CentreOnParent();
+    }
+
+private:
+    wxWebView* m_browser{ nullptr };
+};
+
+void show_timelapse_player(wxWindow* parent, const wxString& title, const std::string& video_url)
+{
+    if (video_url.empty() || parent == nullptr)
+        return;
+    TimelapsePlayerDialog dlg(parent, title, video_url);
+    dlg.ShowModal();
+}
+
 class MoonrakerModelFileCard : public wxPanel
 {
 public:
@@ -1766,19 +2023,25 @@ wxString history_duration_text(const std::string& start_time, const std::string&
 class TimelapsePreviewCard : public wxPanel
 {
 public:
-    TimelapsePreviewCard(wxWindow* parent, const wxString& name)
-        : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize)
-        , m_name(name)
+    TimelapsePreviewCard(wxWindow* parent,
+                         const MoonrakerTimelapseFileView& file,
+                         std::function<void(TimelapsePreviewCard*, const MoonrakerTimelapseFileView&)> on_delete_click = {},
+                         std::function<void(TimelapsePreviewCard*, const MoonrakerTimelapseFileView&)> on_download_click = {},
+                         std::function<void(TimelapsePreviewCard*, const MoonrakerTimelapseFileView&)> on_play_click = {})
+        : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
+        , m_file(file)
+        , m_on_delete_click(std::move(on_delete_click))
+        , m_on_download_click(std::move(on_download_click))
+        , m_on_play_click(std::move(on_play_click))
     {
+        SetName(moonraker_timelapse_card_name(m_file.path));
         SetBackgroundStyle(wxBG_STYLE_PAINT);
-        SetMinSize(wxSize(FromDIP(260), FromDIP(148)));
-        SetMaxSize(wxSize(FromDIP(360), FromDIP(205)));
+        const wxSize card_size(FromDIP(265), FromDIP(220));
+        SetMinSize(card_size);
+        SetInitialSize(card_size);
         Bind(wxEVT_PAINT, &TimelapsePreviewCard::on_paint, this);
-        Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& evt) {
-            m_selected = !m_selected;
-            Refresh();
-            evt.Skip();
-        });
+        Bind(wxEVT_WEBREQUEST_STATE, &TimelapsePreviewCard::on_thumbnail_request, this);
+        Bind(wxEVT_LEFT_UP, &TimelapsePreviewCard::on_left_up, this);
         Bind(wxEVT_ENTER_WINDOW, [this](wxMouseEvent& evt) {
             m_hover = true;
             SetCursor(wxCURSOR_HAND);
@@ -1793,53 +2056,263 @@ public:
         });
     }
 
-    void set_selected(bool selected)
+    void apply_thumbnail(const wxImage& image)
     {
-        m_selected = selected;
+        if (!image.IsOk())
+            return;
+        m_thumbnail_image = image.Copy();
         Refresh();
     }
 
+    void request_thumbnail()
+    {
+        if (m_retiring || m_thumbnail_image.IsOk() || m_thumbnail_request.IsOk() || m_file.thumbnail_url.empty())
+            return;
+        m_thumbnail_request = wxWebSession::GetDefault().CreateRequest(this, wxString::FromUTF8(m_file.thumbnail_url));
+        if (m_thumbnail_request.IsOk())
+            m_thumbnail_request.Start();
+    }
+
+    bool has_thumbnail() const { return m_thumbnail_image.IsOk(); }
+    bool is_retiring() const { return m_retiring; }
+    std::string file_path() const { return m_file.path; }
+    void set_selected(bool) {}
+
+    void set_on_thumbnail_loaded(std::function<void(const std::string&, const wxImage&)> cb)
+    {
+        m_on_thumbnail_loaded = std::move(cb);
+    }
+
+    void retire()
+    {
+        if (m_retiring)
+            return;
+        m_retiring = true;
+        Hide();
+        Disable();
+        if (m_thumbnail_request.IsOk() && m_thumbnail_request.GetState() == wxWebRequest::State_Active) {
+            m_thumbnail_request.Cancel();
+            return;
+        }
+        Destroy();
+    }
+
+    ~TimelapsePreviewCard() override
+    {
+        SetEvtHandlerEnabled(false);
+        if (m_thumbnail_request.IsOk())
+            m_thumbnail_request.Cancel();
+    }
+
 private:
+    wxRect action_rect() const
+    {
+        const wxSize size = GetSize();
+        const int details_h = FromDIP(58);
+        const int preview_h = std::max(FromDIP(110), size.y - details_h);
+        const int action_h = FromDIP(38);
+        return wxRect(FromDIP(2), preview_h - action_h + FromDIP(1), size.x - FromDIP(4), action_h);
+    }
+
+    wxRect delete_action_rect() const
+    {
+        wxRect rect = action_rect();
+        rect.width /= 2;
+        return rect;
+    }
+
+    wxRect download_action_rect() const
+    {
+        wxRect rect = action_rect();
+        const int left_width = rect.width / 2;
+        rect.x += left_width;
+        rect.width -= left_width;
+        return rect;
+    }
+
+    void draw_ellipsis(wxDC& dc, wxString text, int x, int y, int max_width)
+    {
+        wxCoord width = 0;
+        dc.GetTextExtent(text, &width, nullptr);
+        if (width <= max_width) {
+            dc.DrawText(text, x, y);
+            return;
+        }
+        const wxString ellipsis = "...";
+        wxCoord ellipsis_width = 0;
+        dc.GetTextExtent(ellipsis, &ellipsis_width, nullptr);
+        while (!text.empty()) {
+            text.RemoveLast();
+            dc.GetTextExtent(text, &width, nullptr);
+            if (width + ellipsis_width <= max_width)
+                break;
+        }
+        dc.DrawText(text + ellipsis, x, y);
+    }
+
     void on_paint(wxPaintEvent&)
     {
-        wxPaintDC dc(this);
+        wxAutoBufferedPaintDC dc(this);
         const wxSize size = GetSize();
         const int radius = FromDIP(8);
+        const int pad = FromDIP(12);
+        const int details_h = FromDIP(58);
+        const int preview_h = std::max(FromDIP(110), size.y - details_h);
+        const wxColour parent_bg("#EEEEEF");
+        const wxColour border_colour = m_hover ? wxColour("#00B894") : wxColour("#C7C7C7");
+        const wxColour card_bg(*wxWHITE);
 
-        dc.SetPen(wxPen(m_hover || m_selected ? wxColour("#35AD27") : wxColour("#3A3F47"), FromDIP(1)));
-        dc.SetBrush(wxBrush(wxColour("#252A31")));
-        dc.DrawRoundedRectangle(0, 0, size.x, size.y, radius);
+        dc.SetBackground(wxBrush(parent_bg));
+        dc.Clear();
+        dc.SetPen(wxPen(border_colour, FromDIP(1)));
+        dc.SetBrush(wxBrush(card_bg));
+        dc.DrawRoundedRectangle(0, 0, size.x - 1, size.y - 1, radius);
 
-        wxRect image_rect(FromDIP(2), FromDIP(2), size.x - FromDIP(4), size.y - FromDIP(4));
-        dc.SetClippingRegion(image_rect);
-        dc.GradientFillLinear(image_rect, wxColour("#303741"), wxColour("#111318"), wxSOUTH);
+        wxRect preview(FromDIP(2), FromDIP(2), size.x - FromDIP(4), preview_h - FromDIP(1));
+        dc.SetPen(*wxTRANSPARENT_PEN);
+        dc.SetBrush(wxBrush(*wxWHITE));
+        dc.DrawRoundedRectangle(preview.x, preview.y, preview.width, preview.height + radius, radius - FromDIP(1));
+        dc.DrawRectangle(preview.x, preview.y + preview.height - radius, preview.width, radius);
 
-        dc.SetPen(wxPen(wxColour("#515B68"), FromDIP(2)));
-        for (int i = 0; i < 5; ++i) {
-            const int y = image_rect.y + FromDIP(24 + i * 22);
-            dc.DrawLine(image_rect.x + FromDIP(10), y, image_rect.GetRight() - FromDIP(10), y + FromDIP(10));
+        if (m_thumbnail_image.IsOk()) {
+            wxImage thumb = m_thumbnail_image.Copy();
+            wxRect image_area = preview;
+            image_area.Deflate(FromDIP(10), FromDIP(10));
+            const double scale =
+#ifdef __APPLE__
+                std::max(1.0, mac_max_scaling_factor());
+#else
+                std::max(1.0, GetContentScaleFactor());
+#endif
+            const double fit = std::min(
+                static_cast<double>(image_area.width) / std::max(1, thumb.GetWidth()),
+                static_cast<double>(image_area.height) / std::max(1, thumb.GetHeight()));
+            const int thumb_w = std::max(1, static_cast<int>(std::lround(thumb.GetWidth() * fit)));
+            const int thumb_h = std::max(1, static_cast<int>(std::lround(thumb.GetHeight() * fit)));
+            thumb.Rescale(std::max(1, static_cast<int>(std::lround(thumb_w * scale))),
+                          std::max(1, static_cast<int>(std::lround(thumb_h * scale))),
+                          wxIMAGE_QUALITY_HIGH);
+#ifdef __APPLE__
+            dc.DrawBitmap(wxBitmap(std::move(thumb), -1, scale),
+                          image_area.x + (image_area.width - thumb_w) / 2,
+                          image_area.y + (image_area.height - thumb_h) / 2, true);
+#else
+            dc.DrawBitmap(wxBitmap(thumb),
+                          image_area.x + (image_area.width - thumb_w) / 2,
+                          image_area.y + (image_area.height - thumb_h) / 2, true);
+#endif
+        } else {
+            dc.SetFont(Label::Head_16);
+            dc.SetTextForeground(wxColour("#AEB7C2"));
+            const wxString placeholder = _L("Timelapse");
+            wxCoord glyph_w = 0;
+            wxCoord glyph_h = 0;
+            dc.GetTextExtent(placeholder, &glyph_w, &glyph_h);
+            dc.DrawText(placeholder, preview.x + (preview.width - glyph_w) / 2, preview.y + (preview.height - glyph_h) / 2);
         }
 
-        dc.SetFont(Label::Body_12);
-        dc.SetTextForeground(wxColour("#DDE3EA"));
-        dc.DrawText(m_name, image_rect.x + FromDIP(12), image_rect.y + FromDIP(12));
-        dc.DestroyClippingRegion();
+        {
+            const int cx = preview.x + preview.width / 2;
+            const int cy = preview.y + preview.height / 2;
+            const int radius = FromDIP(22);
+            dc.SetPen(*wxTRANSPARENT_PEN);
+            dc.SetBrush(wxBrush(wxColour(35, 35, 35)));
+            dc.DrawCircle(cx, cy, radius);
+            dc.SetBrush(*wxWHITE);
+            wxPoint play[3] = {
+                wxPoint(cx - FromDIP(6), cy - FromDIP(10)),
+                wxPoint(cx - FromDIP(6), cy + FromDIP(10)),
+                wxPoint(cx + FromDIP(12), cy)
+            };
+            dc.DrawPolygon(3, play);
+        }
 
-        if (m_selected) {
-            const int overlay_h = FromDIP(40);
-            wxRect overlay(FromDIP(2), size.y - overlay_h - FromDIP(2), size.x - FromDIP(4), overlay_h);
-            fill_rect_alpha(dc, overlay, wxColour(0, 0, 0, 170), FromDIP(6));
-
-            dc.SetFont(Label::Head_13);
+        if (m_hover) {
+            wxRect actions = action_rect();
+            fill_rect_alpha(dc, actions, wxColour(0, 0, 0, 135));
+            const int divider_x = actions.x + actions.width / 2;
+            dc.SetPen(wxPen(wxColour("#59616B"), FromDIP(1)));
+            dc.DrawLine(divider_x, actions.y, divider_x, actions.y + actions.height);
+            dc.SetFont(Label::Body_14);
             dc.SetTextForeground(*wxWHITE);
-            dc.DrawText(_L("Delete"), overlay.x + overlay.width / 4 - FromDIP(20), overlay.y + FromDIP(12));
-            dc.DrawText(_L("Download"), overlay.x + overlay.width * 3 / 4 - FromDIP(32), overlay.y + FromDIP(12));
+            const wxString delete_text = _L("Delete");
+            const wxString download_text = _L("Download");
+            wxCoord delete_w = 0;
+            wxCoord delete_h = 0;
+            wxCoord download_w = 0;
+            wxCoord download_h = 0;
+            dc.GetTextExtent(delete_text, &delete_w, &delete_h);
+            dc.GetTextExtent(download_text, &download_w, &download_h);
+            dc.DrawText(delete_text, actions.x + actions.width / 4 - delete_w / 2,
+                        actions.y + (actions.height - delete_h) / 2);
+            dc.DrawText(download_text, actions.x + actions.width * 3 / 4 - download_w / 2,
+                        actions.y + (actions.height - download_h) / 2);
+        }
+
+        const int details_y = preview_h + FromDIP(10);
+        dc.SetFont(Label::Head_13);
+        dc.SetTextForeground(wxColour("#232527"));
+        draw_ellipsis(dc, basename_from_moonraker_path(m_file.path), pad, details_y, size.x - pad * 2);
+
+        dc.SetFont(Label::Body_12);
+        dc.SetTextForeground(wxColour("#767C84"));
+        const wxString date_text = format_moonraker_modified_time(m_file.modified);
+        const wxString size_text = format_moonraker_file_size(m_file.size);
+        dc.DrawText(date_text.empty() ? size_text : date_text, pad, size.y - FromDIP(22));
+        if (!date_text.empty()) {
+            wxCoord size_w = 0;
+            dc.GetTextExtent(size_text, &size_w, nullptr);
+            dc.DrawText(size_text, size.x - pad - size_w, size.y - FromDIP(22));
+        }
+
+        dc.SetPen(wxPen(border_colour, FromDIP(1)));
+        dc.SetBrush(*wxTRANSPARENT_BRUSH);
+        dc.DrawRoundedRectangle(0, 0, size.x - 1, size.y - 1, radius);
+    }
+
+    void on_thumbnail_request(wxWebRequestEvent& evt)
+    {
+        if (m_retiring) {
+            if (evt.GetState() != wxWebRequest::State_Active && evt.GetState() != wxWebRequest::State_Idle)
+                CallAfter([this] { Destroy(); });
+            return;
+        }
+        if (evt.GetState() == wxWebRequest::State_Completed && evt.GetResponse().GetStream() != nullptr) {
+            wxImage image;
+            if (image.LoadFile(*evt.GetResponse().GetStream(), wxBITMAP_TYPE_ANY)) {
+                m_thumbnail_image = image;
+                if (m_on_thumbnail_loaded)
+                    m_on_thumbnail_loaded(m_file.path, m_thumbnail_image);
+                Refresh();
+            }
         }
     }
 
-    bool     m_selected{ false };
-    bool     m_hover{ false };
-    wxString m_name;
+    void on_left_up(wxMouseEvent& evt)
+    {
+        if (m_hover) {
+            if (delete_action_rect().Contains(evt.GetPosition()) && m_on_delete_click) {
+                m_on_delete_click(this, m_file);
+                return;
+            }
+            if (download_action_rect().Contains(evt.GetPosition()) && m_on_download_click) {
+                m_on_download_click(this, m_file);
+                return;
+            }
+        }
+        if (m_on_play_click)
+            m_on_play_click(this, m_file);
+    }
+
+    bool m_hover{ false };
+    bool m_retiring{ false };
+    MoonrakerTimelapseFileView m_file;
+    wxImage m_thumbnail_image;
+    wxWebRequest m_thumbnail_request;
+    std::function<void(TimelapsePreviewCard*, const MoonrakerTimelapseFileView&)> m_on_delete_click;
+    std::function<void(TimelapsePreviewCard*, const MoonrakerTimelapseFileView&)> m_on_download_click;
+    std::function<void(TimelapsePreviewCard*, const MoonrakerTimelapseFileView&)> m_on_play_click;
+    std::function<void(const std::string&, const wxImage&)> m_on_thumbnail_loaded;
 };
 } // namespace
 
@@ -3100,7 +3573,7 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     timelapse_header->SetBackgroundColour(cprint_panel_bg);
     wxBoxSizer* timelapse_header_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-    m_timelapse_date_range = new wxStaticText(timelapse_header, wxID_ANY, _L("2026-07-13 - 2026-04-29"));
+    m_timelapse_date_range = new wxStaticText(timelapse_header, wxID_ANY, wxEmptyString);
     m_timelapse_date_range->SetForegroundColour(cprint_text);
     m_timelapse_date_range->SetFont(Label::Head_14);
     timelapse_header_sizer->Add(m_timelapse_date_range, 0, wxALIGN_BOTTOM, 0);
@@ -3129,26 +3602,6 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     m_media_mode_panel->SetBackgroundColour(cprint_panel_bg);
     wxBoxSizer* media_mode_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-    m_timelapse_tab = new Button(m_media_mode_panel, _L("Timelapse"));
-    m_timelapse_tab->SetMinSize(wxSize(FromDIP(120), FromDIP(36)));
-    m_timelapse_tab->SetMaxSize(wxSize(FromDIP(120), FromDIP(36)));
-    m_timelapse_tab->SetCornerRadius(FromDIP(8));
-    m_timelapse_tab->SetFont(::Label::Body_14);
-    m_timelapse_tab->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
-        set_media_mode(true);
-        evt.Skip();
-    });
-
-    m_model_tab = new Button(m_media_mode_panel, _L("Model"));
-    m_model_tab->SetMinSize(wxSize(FromDIP(120), FromDIP(36)));
-    m_model_tab->SetMaxSize(wxSize(FromDIP(120), FromDIP(36)));
-    m_model_tab->SetCornerRadius(FromDIP(8));
-    m_model_tab->SetFont(::Label::Body_14);
-    m_model_tab->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
-        set_media_mode(false);
-        evt.Skip();
-    });
-
     m_refresh_tab = new Button(m_media_mode_panel, wxEmptyString, "refresh", wxNO_BORDER, 18);
     m_refresh_tab->SetMinSize(wxSize(FromDIP(32), FromDIP(30)));
     m_refresh_tab->SetMaxSize(wxSize(FromDIP(32), FromDIP(30)));
@@ -3158,20 +3611,26 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     m_refresh_tab->SetBackgroundColour(cprint_panel_bg);
     m_refresh_tab->SetToolTip(_L("Refresh"));
     m_refresh_tab->Bind(wxEVT_BUTTON, [this](wxCommandEvent& evt) {
-        if (m_media_timelapse_mode) {
-            if (m_timelapse_panel)
-                m_timelapse_panel->Refresh();
-            evt.Skip();
-            return;
-        }
-        refresh_moonraker_model_status();
+        if (m_media_timelapse_mode)
+            refresh_moonraker_timelapse_status();
+        else
+            refresh_moonraker_model_status();
         evt.Skip();
     });
 
-    media_mode_sizer->Add(m_timelapse_tab, 0, wxRIGHT, FromDIP(4));
-    media_mode_sizer->Add(m_model_tab, 0, wxRIGHT, FromDIP(12));
-    media_mode_sizer->Add(m_refresh_tab, 0, wxALIGN_TOP | wxTOP, FromDIP(3));
+    m_media_switch = new SwitchBoard(m_media_mode_panel, _L("Models"), _L("Timelapse"),
+                                     wxSize(FromDIP(248), FromDIP(36)));
+    m_media_switch->SetBackgroundColour(cprint_panel_bg);
+    m_media_switch->updateState("left");
+    m_media_switch->Bind(wxCUSTOMEVT_SWITCH_POS, [this](wxCommandEvent& evt) {
+        set_media_mode(evt.GetInt() == 0);
+    });
+
+    media_mode_sizer->Add(m_refresh_tab, 0, wxALIGN_CENTER_VERTICAL, 0);
     media_mode_sizer->AddStretchSpacer(1);
+    media_mode_sizer->Add(m_media_switch, 0, wxALIGN_CENTER_VERTICAL, 0);
+    media_mode_sizer->AddStretchSpacer(1);
+    media_mode_sizer->AddSpacer(FromDIP(32));
 
     m_timelapse_top_actions = new wxPanel(m_media_mode_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize);
     m_timelapse_top_actions->SetBackgroundColour(cprint_panel_bg);
@@ -3221,12 +3680,11 @@ CloudTaskManagerPage::CloudTaskManagerPage(wxWindow* parent, MediaPresentation p
     m_timelapse_top_actions->SetSizer(timelapse_actions_sizer);
     m_timelapse_top_actions->Layout();
     m_timelapse_top_actions->Hide();
-    media_mode_sizer->Add(m_timelapse_top_actions, 0, wxALIGN_CENTER_VERTICAL, 0);
 
     if (m_media_presentation != MediaPresentation::Combined) {
         m_media_timelapse_mode = m_media_presentation == MediaPresentation::TimelapseOnly;
-        m_timelapse_tab->Hide();
-        m_model_tab->Hide();
+        if (m_media_switch)
+            m_media_switch->Hide();
     }
 
     m_media_mode_panel->SetSizer(media_mode_sizer);
@@ -3393,9 +3851,15 @@ void CloudTaskManagerPage::set_media_mode(bool timelapse)
         return;
 
     m_media_timelapse_mode = timelapse;
+    if (m_media_switch)
+        m_media_switch->updateState(m_media_timelapse_mode ? "right" : "left");
     update_media_mode_tabs();
 
-    if (!m_media_timelapse_mode && m_allow_moonraker_fetch)
+    if (!m_allow_moonraker_fetch)
+        return;
+    if (m_media_timelapse_mode)
+        refresh_moonraker_timelapse_status();
+    else
         refresh_moonraker_model_status();
 }
 
@@ -3403,10 +3867,8 @@ void CloudTaskManagerPage::set_media_presentation(MediaPresentation presentation
 {
     m_media_presentation = presentation;
 
-    if (m_timelapse_tab)
-        m_timelapse_tab->Show(m_media_presentation == MediaPresentation::Combined);
-    if (m_model_tab)
-        m_model_tab->Show(m_media_presentation == MediaPresentation::Combined);
+    if (m_media_switch)
+        m_media_switch->Show(m_media_presentation == MediaPresentation::Combined);
 
     if (m_media_presentation == MediaPresentation::TimelapseOnly)
         set_media_mode(true);
@@ -3478,6 +3940,237 @@ void CloudTaskManagerPage::refresh_moonraker_model_status()
                 apply_model_file_metadata(file);
             });
         });
+}
+
+void CloudTaskManagerPage::refresh_moonraker_timelapse_status()
+{
+    if (!m_allow_moonraker_fetch)
+        return;
+
+    Slic3r::DeviceManager* dev = Slic3r::GUI::wxGetApp().getDeviceManager();
+    MachineObject* obj = dev ? dev->get_selected_machine() : nullptr;
+    const std::string machine_id = obj ? obj->get_dev_id() : std::string();
+    const std::string base_url = moonraker_base_url(obj);
+    const std::string api_key = moonraker_api_key(obj);
+    m_last_timelapse_probe_machine_id = machine_id;
+    m_timelapse_probe_in_flight = true;
+
+    if (m_model_status_text) {
+        m_model_status_text->SetLabel(_L("Loading timelapses..."));
+        m_model_status_text->Show(m_media_timelapse_mode);
+    }
+    Layout();
+
+    std::weak_ptr<int> lifetime = m_model_status_lifetime;
+    std::thread([this, lifetime, machine_id, base_url, api_key]() {
+        MoonrakerTimelapseListResult result = fetch_moonraker_timelapse_list_sync(base_url, api_key);
+        wxGetApp().CallAfter([this, lifetime, machine_id, result = std::move(result)]() {
+            if (lifetime.expired())
+                return;
+            if (m_last_timelapse_probe_machine_id == machine_id)
+                m_timelapse_probe_in_flight = false;
+
+            if (result.ok) {
+                if (result.files.empty()) {
+                    if (m_model_status_text) {
+                        m_model_status_text->SetLabel(_L("No timelapses found."));
+                        m_model_status_text->Show(m_media_timelapse_mode);
+                    }
+                    render_moonraker_timelapse_files({});
+                } else {
+                    if (m_model_status_text)
+                        m_model_status_text->Hide();
+                    render_moonraker_timelapse_files(result.files);
+                }
+            } else if (result.status_code != 0) {
+                if (m_model_status_text) {
+                    m_model_status_text->SetLabel(wxString::Format(_L("Timelapse request failed. HTTP %u"), result.status_code));
+                    m_model_status_text->Show(m_media_timelapse_mode);
+                }
+            } else if (!result.error_message.empty()) {
+                if (m_model_status_text) {
+                    m_model_status_text->SetLabel(wxString::Format(_L("Timelapses could not be loaded. (%s)"),
+                                                                   wxString::FromUTF8(result.error_message)));
+                    m_model_status_text->Show(m_media_timelapse_mode);
+                }
+            } else if (m_model_status_text) {
+                m_model_status_text->SetLabel(_L("Timelapses could not be loaded."));
+                m_model_status_text->Show(m_media_timelapse_mode);
+            }
+            Layout();
+        });
+    }).detach();
+}
+
+void CloudTaskManagerPage::render_moonraker_timelapse_files(const std::vector<MoonrakerTimelapseFileView>& files)
+{
+    if (!m_timelapse_grid)
+        return;
+
+    auto* grid_sizer = dynamic_cast<wxFlexGridSizer*>(m_timelapse_grid->GetSizer());
+    if (grid_sizer == nullptr)
+        return;
+
+    if (m_timelapse_date_range) {
+        double min_modified = 0.0;
+        double max_modified = 0.0;
+        for (const auto& file : files) {
+            if (file.modified <= 0.0)
+                continue;
+            if (min_modified <= 0.0 || file.modified < min_modified)
+                min_modified = file.modified;
+            if (file.modified > max_modified)
+                max_modified = file.modified;
+        }
+        if (min_modified > 0.0 && max_modified > 0.0) {
+            const wxString from = format_moonraker_modified_time(min_modified);
+            const wxString to = format_moonraker_modified_time(max_modified);
+            m_timelapse_date_range->SetLabel(from == to ? from : wxString::Format("%s - %s", from, to));
+        } else {
+            m_timelapse_date_range->SetLabel(wxEmptyString);
+        }
+    }
+
+    std::map<std::string, TimelapsePreviewCard*> existing;
+    for (wxWindow* child : m_timelapse_grid->GetChildren()) {
+        auto* card = dynamic_cast<TimelapsePreviewCard*>(child);
+        if (card == nullptr || card->is_retiring())
+            continue;
+        existing[card->file_path()] = card;
+    }
+    grid_sizer->Clear(false);
+
+    for (const auto& file : files) {
+        TimelapsePreviewCard* card = nullptr;
+        const auto existing_it = existing.find(file.path);
+        if (existing_it != existing.end()) {
+            card = existing_it->second;
+            existing.erase(existing_it);
+        } else {
+            card = new TimelapsePreviewCard(m_timelapse_grid, file,
+            [this](TimelapsePreviewCard*, const MoonrakerTimelapseFileView& clicked) {
+                const wxString display_name = basename_from_moonraker_path(clicked.path);
+                if (!confirm_delete_moonraker_timelapse(this, display_name))
+                    return;
+
+                Slic3r::DeviceManager* dev = wxGetApp().getDeviceManager();
+                MachineObject* obj = dev ? dev->get_selected_machine() : nullptr;
+                const std::string base_url = moonraker_base_url(obj);
+                const std::string api_key = moonraker_api_key(obj);
+                const std::string file_path = clicked.path;
+                const wxString card_name = moonraker_timelapse_card_name(file_path);
+                std::weak_ptr<int> lifetime = m_model_status_lifetime;
+
+                if (m_model_status_text) {
+                    m_model_status_text->SetLabel(wxString::Format(_L("Deleting: %s"), display_name));
+                    m_model_status_text->Show(m_media_timelapse_mode);
+                    Layout();
+                }
+
+                std::thread([this, lifetime, base_url, api_key, file_path, display_name, card_name]() {
+                    MoonrakerTimelapseDeleteResult delete_result =
+                        delete_moonraker_timelapse_file_sync(base_url, api_key, file_path);
+                    wxGetApp().CallAfter([this, lifetime, delete_result = std::move(delete_result), display_name, card_name]() {
+                        if (lifetime.expired())
+                            return;
+                        if (delete_result.ok) {
+                            if (auto* grid = m_timelapse_grid) {
+                                if (auto* deleted = wxWindow::FindWindowByName(card_name, grid)) {
+                                    if (auto* sizer = grid->GetSizer())
+                                        sizer->Detach(deleted);
+                                    if (auto* card = dynamic_cast<TimelapsePreviewCard*>(deleted))
+                                        card->retire();
+                                    else
+                                        deleted->Destroy();
+                                    grid->Layout();
+                                    grid->FitInside();
+                                }
+                            }
+                            if (m_model_status_text) {
+                                m_model_status_text->SetLabel(wxString::Format(_L("Deleted: %s"), display_name));
+                                m_model_status_text->Show(m_media_timelapse_mode);
+                            }
+                        } else if (m_model_status_text) {
+                            const wxString reason = delete_result.status_code != 0
+                                ? wxString::Format("HTTP %u", delete_result.status_code)
+                                : wxString::FromUTF8(delete_result.error_message);
+                            m_model_status_text->SetLabel(wxString::Format(_L("Delete failed: %s (%s)"), display_name, reason));
+                            m_model_status_text->Show(m_media_timelapse_mode);
+                        }
+                        Layout();
+                    });
+                }).detach();
+            },
+            [this](TimelapsePreviewCard*, const MoonrakerTimelapseFileView& clicked) {
+                wxFileDialog save_dialog(
+                    this,
+                    _L("Download timelapse"),
+                    wxEmptyString,
+                    basename_from_moonraker_path(clicked.path),
+                    "MP4 files (*.mp4)|*.mp4|All files (*.*)|*.*",
+                    wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+                if (save_dialog.ShowModal() != wxID_OK)
+                    return;
+
+                wxFileName dest(save_dialog.GetPath());
+                if (dest.GetExt().Lower() != "mp4")
+                    dest.SetExt("mp4");
+                const wxString save_path = dest.GetFullPath();
+                Slic3r::DeviceManager* dev = wxGetApp().getDeviceManager();
+                MachineObject* obj = dev ? dev->get_selected_machine() : nullptr;
+                const std::string api_key = moonraker_api_key(obj);
+                const std::string url = clicked.video_url;
+                const wxString display_name = basename_from_moonraker_path(clicked.path);
+                std::weak_ptr<int> lifetime = m_model_status_lifetime;
+
+                if (m_model_status_text) {
+                    m_model_status_text->SetLabel(wxString::Format(_L("Downloading: %s"), display_name));
+                    m_model_status_text->Show(m_media_timelapse_mode);
+                    Layout();
+                }
+
+                std::thread([this, lifetime, url, api_key, save_path, display_name]() {
+                    std::string error;
+                    unsigned status = 0;
+                    const bool ok = download_moonraker_file_sync(url, api_key, save_path, error, status);
+                    wxGetApp().CallAfter([this, lifetime, ok, error = std::move(error), status, display_name]() {
+                        if (lifetime.expired() || !m_model_status_text)
+                            return;
+                        if (ok)
+                            m_model_status_text->SetLabel(wxString::Format(_L("Downloaded: %s"), display_name));
+                        else if (status != 0)
+                            m_model_status_text->SetLabel(wxString::Format(_L("Download failed: %s (HTTP %u)"), display_name, status));
+                        else
+                            m_model_status_text->SetLabel(wxString::Format(_L("Download failed: %s (%s)"),
+                                                                           display_name, wxString::FromUTF8(error)));
+                        m_model_status_text->Show(m_media_timelapse_mode);
+                        Layout();
+                    });
+                }).detach();
+            },
+            [this](TimelapsePreviewCard*, const MoonrakerTimelapseFileView& clicked) {
+                show_timelapse_player(this, basename_from_moonraker_path(clicked.path), clicked.video_url);
+            });
+            card->set_on_thumbnail_loaded([this](const std::string& path, const wxImage& image) {
+                if (image.IsOk())
+                    m_timelapse_thumbnail_cache[path] = image.Copy();
+            });
+            const auto cached = m_timelapse_thumbnail_cache.find(file.path);
+            if (cached != m_timelapse_thumbnail_cache.end())
+                card->apply_thumbnail(cached->second);
+            else
+                card->request_thumbnail();
+        }
+        grid_sizer->Add(card, 0, wxEXPAND, 0);
+    }
+
+    for (auto& leftover : existing)
+        leftover.second->retire();
+
+    grid_sizer->Layout();
+    m_timelapse_grid->FitInside();
+    m_timelapse_grid->Show(m_media_timelapse_mode);
+    Layout();
 }
 
 int CloudTaskManagerPage::model_grid_column_count() const
@@ -3717,62 +4410,35 @@ void CloudTaskManagerPage::render_moonraker_model_files(const std::vector<Moonra
 
 void CloudTaskManagerPage::update_media_mode_tabs()
 {
-    if (!m_timelapse_tab || !m_model_tab)
+    if (m_media_switch)
+        m_media_switch->updateState(m_media_timelapse_mode ? "right" : "left");
+
+    if (!m_table_head_panel || !m_tip_text || !m_loading_text || !m_task_list || !m_flipping_panel || !m_ctrl_btn_panel)
         return;
-
-    const wxColour selected_bg("#F5F5F5");
-    const wxColour selected_hover("#FFFFFF");
-    const wxColour inactive_bg(*wxWHITE);
-    const wxColour inactive_hover("#F7F7F7");
-    const wxColour selected_text("#232527");
-    const wxColour inactive_text("#767C84");
-
-    StateColor active_bg(
-        std::pair<wxColour, int>(selected_hover, StateColor::Pressed),
-        std::pair<wxColour, int>(selected_hover, StateColor::Hovered),
-        std::pair<wxColour, int>(selected_bg, StateColor::Normal)
-    );
-    StateColor normal_bg(
-        std::pair<wxColour, int>(inactive_hover, StateColor::Pressed),
-        std::pair<wxColour, int>(inactive_hover, StateColor::Hovered),
-        std::pair<wxColour, int>(inactive_bg, StateColor::Normal)
-    );
-
-    m_timelapse_tab->SetBackgroundColor(m_media_timelapse_mode ? active_bg : normal_bg);
-    m_timelapse_tab->SetTextColor(StateColor(std::pair<wxColour, int>(m_media_timelapse_mode ? selected_text : inactive_text, StateColor::Normal)));
-    m_model_tab->SetBackgroundColor(m_media_timelapse_mode ? normal_bg : active_bg);
-    m_model_tab->SetTextColor(StateColor(std::pair<wxColour, int>(m_media_timelapse_mode ? inactive_text : selected_text, StateColor::Normal)));
-
-    if (!m_table_head_panel || !m_tip_text || !m_loading_text || !m_task_list || !m_flipping_panel || !m_ctrl_btn_panel) {
-        m_timelapse_tab->Refresh();
-        m_model_tab->Refresh();
-        return;
-    }
 
     const bool model_mode = !m_media_timelapse_mode;
     if (m_timelapse_panel)
         m_timelapse_panel->Show(m_media_timelapse_mode);
     if (m_timelapse_top_actions)
-        m_timelapse_top_actions->Show(m_media_timelapse_mode);
+        m_timelapse_top_actions->Hide();
     if (m_table_head_panel)
         m_table_head_panel->Show(false);
     if (m_tip_text)
         m_tip_text->Show(false);
     if (m_loading_text)
         m_loading_text->Show(model_mode && m_loading_text->IsShown());
-    if (m_model_status_text && !model_mode)
-        m_model_status_text->Hide();
     if (m_model_file_grid)
         m_model_file_grid->Show(model_mode);
     sync_model_grid_overlay(false);
     if (m_task_list)
         m_task_list->Show(false);
+    if (m_flipping_panel)
         m_flipping_panel->Show(false);
     if (m_ctrl_btn_panel)
         m_ctrl_btn_panel->Show(false);
 
-    m_timelapse_tab->Refresh();
-    m_model_tab->Refresh();
+    if (m_media_switch)
+        m_media_switch->Refresh();
     Layout();
     Refresh();
 }
@@ -4019,7 +4685,9 @@ bool CloudTaskManagerPage::Show(bool show)
 {
     if (show) {
         refresh_user_device();
-        if (!m_media_timelapse_mode)
+        if (m_media_timelapse_mode)
+            refresh_moonraker_timelapse_status();
+        else
             ensure_media_models_for_selected_machine();
     }
     else {
@@ -4048,8 +4716,7 @@ void CloudTaskManagerPage::invalidate_media_cache_and_reload()
         return;
 
     if (m_media_timelapse_mode) {
-        if (m_timelapse_panel != nullptr)
-            m_timelapse_panel->Refresh();
+        refresh_moonraker_timelapse_status();
         return;
     }
 
@@ -4065,8 +4732,12 @@ void CloudTaskManagerPage::set_allow_moonraker_fetch(bool allow)
         m_last_model_probe_started_ms = 0;
         return;
     }
-    if (changed && IsShownOnScreen() && !m_media_timelapse_mode)
-        ensure_media_models_for_selected_machine();
+    if (changed && IsShownOnScreen()) {
+        if (m_media_timelapse_mode)
+            refresh_moonraker_timelapse_status();
+        else
+            ensure_media_models_for_selected_machine();
+    }
 }
 
 void CloudTaskManagerPage::set_offline_overlay_visible(bool visible, const wxString &printer_name)

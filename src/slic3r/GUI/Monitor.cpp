@@ -239,7 +239,7 @@ void MonitorPanel::init_tabpanel()
     m_tabpanel->AddPage(m_coprint_storage_page, _L("Timelapse"), "", false);
     m_coprint_storage_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;
 
-    m_coprint_print_models_page = new CloudTaskManagerPage(m_tabpanel, CloudTaskManagerPage::MediaPresentation::ModelOnly);
+    m_coprint_print_models_page = new CloudTaskManagerPage(m_tabpanel, CloudTaskManagerPage::MediaPresentation::Combined);
     m_coprint_print_models_page->Hide();
     m_tabpanel->AddPage(m_coprint_print_models_page, _L("Media"), "", false);
     m_coprint_models_tab_index = static_cast<int>(m_tabpanel->GetPageCount()) - 1;

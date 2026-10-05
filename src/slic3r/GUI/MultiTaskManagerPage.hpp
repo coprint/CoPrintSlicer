@@ -13,6 +13,7 @@
 #include "Widgets/ScrolledWindow.hpp"
 #include "Widgets/PopupWindow.hpp"
 #include "Widgets/TextInput.hpp"
+#include "Widgets/SwitchButton.hpp"
 #include <wx/image.h>
 #include <wx/webrequest.h>
 #include <cstdint>
@@ -153,6 +154,15 @@ struct MoonrakerModelFileView
     double        filament_weight_grams{ 0.0 };
 };
 
+struct MoonrakerTimelapseFileView
+{
+    std::string   path;
+    std::string   video_url;
+    std::string   thumbnail_url;
+    std::uint64_t size{ 0 };
+    double        modified{ 0.0 };
+};
+
 class CloudTaskManagerPage : public wxPanel
 {
 public:
@@ -197,7 +207,9 @@ private:
     void update_timelapse_filter_tabs();
     void select_all_timelapse_cards();
     void refresh_moonraker_model_status();
+    void refresh_moonraker_timelapse_status();
     void render_moonraker_model_files(const std::vector<MoonrakerModelFileView>& files);
+    void render_moonraker_timelapse_files(const std::vector<MoonrakerTimelapseFileView>& files);
     int  model_grid_column_count() const;
     void relayout_model_file_grid();
     void sync_model_grid_overlay(bool reveal = true);
@@ -222,8 +234,7 @@ private:
     wxScrolledWindow* m_task_list{ nullptr };
     wxStaticText* m_selected_num{ nullptr };
     wxPanel* m_media_mode_panel{ nullptr };
-    Button* m_timelapse_tab{ nullptr };
-    Button* m_model_tab{ nullptr };
+    SwitchBoard* m_media_switch{ nullptr };
     Button* m_refresh_tab{ nullptr };
     wxPanel* m_timelapse_panel{ nullptr };
     wxPanel* m_timelapse_top_actions{ nullptr };
@@ -240,6 +251,9 @@ private:
     wxWindow* m_model_grid_scroll{ nullptr };
     std::shared_ptr<int> m_model_status_lifetime{ std::make_shared<int>(0) };
     std::map<std::string, wxImage> m_model_thumbnail_cache;
+    std::map<std::string, wxImage> m_timelapse_thumbnail_cache;
+    std::string m_last_timelapse_probe_machine_id;
+    bool m_timelapse_probe_in_flight{ false };
     std::string m_last_model_probe_machine_id;
     bool m_model_probe_in_flight{ false };
     bool m_last_model_probe_ok{ false };

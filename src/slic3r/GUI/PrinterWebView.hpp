@@ -333,7 +333,6 @@ private:
     wxTimer *m_update_progress_timer{ nullptr };
     bool m_update_sim_active{ false };
     int m_update_sim_percent{ 0 };
-    wxStaticText *m_update_release_note_link{ nullptr };
     wxStaticText *m_update_serial_value{ nullptr };
     wxStaticText *m_update_status_value{ nullptr };
     wxStaticText *m_update_version_value{ nullptr };
