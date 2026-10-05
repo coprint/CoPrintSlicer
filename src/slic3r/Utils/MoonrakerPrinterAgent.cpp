@@ -2360,8 +2360,12 @@ void MoonrakerPrinterAgent::handle_ws_message(const std::string& dev_id, const s
             // Set flag to trigger reconnection after dispatching the status update
             ws_reconnect_requested.store(true);
             BOOST_LOG_TRIVIAL(warning) << "MoonrakerPrinterAgent: Klippy disconnected, triggering reconnection";
-        } else if (method == "notify_filament_changed") {
-            BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: notify_filament_changed";
+        } else if (method == "notify_filament_changed" || method == "coprint:filament_changed") {
+            BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: " << method;
+            dispatch_message(dev_id, payload);
+            return;
+        } else if (method == "notify_loading_changed" || method == "coprint:loading_changed") {
+            BOOST_LOG_TRIVIAL(info) << "MoonrakerPrinterAgent: " << method;
             dispatch_message(dev_id, payload);
             return;
         }

@@ -923,9 +923,6 @@ void MovementPanel::set_active_distance_button(double distance_mm)
 
 void MovementPanel::refresh_selection_styles()
 {
-    if (!m_controls_enabled)
-        return;
-
     for (int i = 0; i < MaxDashboardTools; ++i)
         m_tool_button_active[i] = -1;
     for (int i = 0; i < 4; ++i)
@@ -936,6 +933,8 @@ void MovementPanel::refresh_selection_styles()
             continue;
         set_button_active(m_tool_buttons[i], i == m_selected_tool, m_tool_button_active[i], true);
     }
+    if (!m_controls_enabled)
+        return;
     for (int i = 0; i < 4; ++i)
         set_button_active(
             m_distance_buttons[i],
@@ -967,6 +966,7 @@ void MovementPanel::set_controls_enabled(bool enabled)
         set_button_enabled(m_tool_buttons[i], enabled && i < m_available_tool_count);
     for (int i = 0; i < 4; ++i)
         set_button_enabled(m_distance_buttons[i], enabled);
+    refresh_selection_styles();
 }
 
 } // namespace DeviceDashboard

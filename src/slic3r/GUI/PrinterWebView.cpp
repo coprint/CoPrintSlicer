@@ -1622,6 +1622,103 @@ static void log_coprint_filament_response(const std::string &response, unsigned 
     }
 }
 
+static std::string moonraker_access_code(const MachineObject *obj)
+{
+    if (obj == nullptr)
+        return {};
+    std::string api_key = obj->get_access_code();
+    if (api_key.empty())
+        api_key = obj->get_user_access_code();
+    return api_key;
+}
+
+struct MoonrakerPostResult {
+    bool ok{false};
+    unsigned status{0};
+    std::string error;
+    std::string body;
+};
+
+static MoonrakerPostResult moonraker_post_json(const std::string &url,
+    const std::string &api_key,
+    const std::string &body,
+    int timeout_max_s)
+{
+    MoonrakerPostResult result;
+    auto http = Http::post(url);
+    if (!api_key.empty())
+        http.header("X-Api-Key", api_key);
+    http.header("Content-Type", "application/json")
+        .set_post_body(body)
+        .timeout_connect(3)
+        .timeout_max(timeout_max_s)
+        .on_complete([&](std::string response, unsigned status) {
+            result.status = status;
+            result.body = std::move(response);
+            result.ok = status >= 200 && status < 300;
+        })
+        .on_error([&](std::string response, std::string error, unsigned status) {
+            result.status = status;
+            result.body = std::move(response);
+            result.error = std::move(error);
+        })
+        .perform_sync();
+    return result;
+}
+
+static nlohmann::json unwrap_coprint_api_result(nlohmann::json parsed)
+{
+    if (parsed.contains("result") && parsed["result"].is_object())
+        parsed = parsed["result"];
+    return parsed;
+}
+
+static std::string coprint_api_message(const nlohmann::json &parsed)
+{
+    if (parsed.contains("message") && parsed["message"].is_string())
+        return parsed["message"].get<std::string>();
+    if (parsed.contains("error") && parsed["error"].is_string())
+        return parsed["error"].get<std::string>();
+    return {};
+}
+
+static std::string hex_for_wizard(const std::string &hex)
+{
+    std::string normalized = normalize_filament_hex(hex);
+    if (normalized.empty())
+        return {};
+    if (normalized.front() == '#')
+        normalized.erase(normalized.begin());
+    return normalized;
+}
+
+struct FilamentWizardPostResult {
+    bool accepted{false};
+    unsigned http_status{0};
+    std::string message;
+};
+
+static FilamentWizardPostResult post_filament_wizard(const std::string &base,
+    const std::string &api_key,
+    const nlohmann::json &payload)
+{
+    FilamentWizardPostResult out;
+    const auto http = moonraker_post_json(base + "/machine/coprint/filament/wizard",
+        api_key, payload.dump(), 8);
+    out.http_status = http.status;
+    auto parsed = unwrap_coprint_api_result(parse_json_body(http.body));
+    out.message = coprint_api_message(parsed);
+    const std::string status = (parsed.contains("status") && parsed["status"].is_string())
+        ? parsed["status"].get<std::string>() : std::string();
+    out.accepted = http.status >= 200 && http.status < 300 && status != "error";
+    if (!out.accepted && out.message.empty())
+        out.message = http.error;
+    BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament/wizard http=" << http.status
+                            << " accepted=" << out.accepted
+                            << " body=" << http.body;
+    return out;
+}
+
 static LoadedFilamentResult parse_filament_db(nlohmann::json db)
 {
     LoadedFilamentResult result;
@@ -1633,6 +1730,8 @@ static LoadedFilamentResult parse_filament_db(nlohmann::json db)
         if (!tools.contains(key_name) || !tools[key_name].is_object())
             continue;
         const auto &tool = tools[key_name];
+        if (auto it = tool.find("has_filament"); it != tool.end() && it->is_boolean() && !it->get<bool>())
+            continue;
         result.item_json[ui_tool - 1] = tool.dump();
         if (auto it = tool.find("color_hex"); it != tool.end() && it->is_string()) {
             const wxColour parsed = colour_from_hex(it->get<std::string>(), wxColour());
@@ -1934,18 +2033,26 @@ wxString moonraker_thumbnail_url_from_metadata(const nlohmann::json &metadata, c
 
 int active_tool_index_from_moonraker_extruder(const std::string &extruder)
 {
-    if (extruder == "extruder")
+    const std::string name = to_lower_ascii(extruder);
+    if (name.empty())
+        return -1;
+    if (name == "extruder" || name == "extruder0")
         return 0;
+
     static const std::string prefix = "extruder";
-    if (extruder.rfind(prefix, 0) != 0 || extruder.size() <= prefix.size())
+    if (name.rfind(prefix, 0) != 0 || name.size() <= prefix.size())
         return -1;
 
-    const std::string suffix = extruder.substr(prefix.size());
-    if (suffix.size() != 1 || !std::isdigit(static_cast<unsigned char>(suffix[0])))
+    std::string suffix = name.substr(prefix.size());
+    if (!suffix.empty() && (suffix.front() == '_' || suffix.front() == '-'))
+        suffix.erase(suffix.begin());
+    if (suffix.empty())
+        return 0;
+    if (suffix.find_first_not_of("0123456789") != std::string::npos)
         return -1;
 
-    const int index = suffix[0] - '0';
-    return index >= 1 && index < DeviceDashboard::MaxDashboardTools ? index : -1;
+    const int index = std::stoi(suffix);
+    return index >= 0 && index < DeviceDashboard::MaxDashboardTools ? index : -1;
 }
 
 bool moonraker_fan_percent_from_json(const nlohmann::json &fan_obj, int &out_percent)
@@ -5117,6 +5224,7 @@ void PrinterWebView::update_dashboard_filament_state(const std::array<wxColour, 
         }
         state.filament.selected_tool = std::clamp(m_selected_filament_tool, 0, 3);
         state.filament.can_load_unload = can_load_unload;
+        apply_filament_operation_to_state(state.filament);
     });
 
     if (m_dashboard_page != nullptr)
@@ -5353,6 +5461,11 @@ void PrinterWebView::apply_filament_preview_fallback()
 void PrinterWebView::reset_filament_cache_and_ui()
 {
     ++m_filament_fetch_generation;
+    m_filament_op_in_progress = false;
+    m_filament_op_awaiting_screen = false;
+    m_filament_op_tool = -1;
+    m_filament_op_started_ms = 0;
+    m_filament_wizard_poll_in_progress = false;
     m_filament_snapshot_fetch_in_progress = false;
     m_filament_tool_has_color.fill(false);
     m_filament_loaded_tool_colors = {};
@@ -5569,7 +5682,8 @@ void PrinterWebView::refresh_filament_preview_from_selected_machine()
 
             auto meta   = parse_filament_metadata(parse_json_body(metadata_body));
             auto loaded = parse_filament_db(parse_json_body(db_body));
-            const bool keep_local = m_filament_db_write_in_progress || !m_pending_filament_posts.empty();
+            const bool keep_local = m_filament_db_write_in_progress || !m_pending_filament_posts.empty()
+                || m_filament_op_in_progress;
             if (!keep_local && !db_body.empty()) {
                 apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
                                             loaded.item_json, loaded.tool_has_color);
@@ -5674,7 +5788,8 @@ void PrinterWebView::fetch_filament_selections(MachineObject *obj, std::function
                 current->get_dev_id() != machine_id;
             bool ok = http_ok && !lifetime.expired() && !m_destroying && !other_printer
                 && fetch_generation == m_filament_fetch_generation;
-            if (ok && !m_filament_db_write_in_progress && m_pending_filament_posts.empty()) {
+            if (ok && !m_filament_db_write_in_progress && m_pending_filament_posts.empty()
+                && !m_filament_op_in_progress) {
                 const auto loaded = parse_filament_db(parse_json_body(db_body));
                 apply_loaded_filament_cache(loaded.assigned_colors, loaded.materials, loaded.brands,
                                             loaded.item_json, loaded.tool_has_color);
@@ -5784,9 +5899,62 @@ void PrinterWebView::apply_notify_filament_changed(const std::string &dev_id, co
                             << " has_filament=" << has_filament << " type=" << type << " hex=" << hex
                             << " dev_id=" << dev_id;
 
+    if (m_filament_op_in_progress && m_filament_op_awaiting_screen && m_filament_op_tool == tool)
+        set_filament_operation_active(false);
+
     refresh_dashboard_panels(obj);
     paint_filament_dashboard(m_dashboard_page, m_dashboard_state_store.state().filament);
     reveal_dashboard_if_ready(obj);
+}
+
+void PrinterWebView::apply_notify_loading_changed(const std::string &dev_id, const std::string &payload)
+{
+    if (m_destroying || payload.empty())
+        return;
+
+    auto parsed = nlohmann::json::parse(payload, nullptr, false, true);
+    if (parsed.is_discarded() || !parsed.is_object())
+        return;
+
+    const nlohmann::json *item = nullptr;
+    if (parsed.contains("params") && parsed["params"].is_array() && !parsed["params"].empty()) {
+        if (parsed["params"][0].is_object())
+            item = &parsed["params"][0];
+        else if (parsed["params"][0].is_array() && !parsed["params"][0].empty() &&
+                 parsed["params"][0][0].is_object())
+            item = &parsed["params"][0][0];
+    } else if (parsed.contains("params") && parsed["params"].is_object())
+        item = &parsed["params"];
+    else if (parsed.contains("toolhead") || parsed.contains("loading") || parsed.contains("active"))
+        item = &parsed;
+    if (item == nullptr)
+        return;
+
+    int toolhead = 0;
+    if ((*item).contains("toolhead"))
+        toolhead = json_int_flexible((*item)["toolhead"]);
+    bool loading = true;
+    if ((*item).contains("loading") && (*item)["loading"].is_boolean())
+        loading = (*item)["loading"].get<bool>();
+    else if ((*item).contains("active") && (*item)["active"].is_boolean())
+        loading = (*item)["active"].get<bool>();
+
+    BOOST_LOG_TRIVIAL(info) << "apply_notify_loading_changed: toolhead=" << toolhead
+                            << " loading=" << loading << " dev_id=" << dev_id;
+
+    if (!m_filament_op_in_progress || !m_filament_op_awaiting_screen)
+        return;
+    if (toolhead >= 1 && toolhead <= 4 && m_filament_op_tool != toolhead - 1)
+        return;
+    if (loading)
+        return;
+
+    set_filament_operation_active(false);
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj != nullptr)
+        fetch_filament_selections(obj, {});
+    refresh_dashboard_panels(obj);
 }
 
 bool PrinterWebView::show_filament_material_dialog(bool start_load_after_save, const wxPoint& /*anchor_screen_pos*/)
@@ -5832,16 +6000,207 @@ bool PrinterWebView::show_filament_material_dialog(bool start_load_after_save, c
     apply_filament_tool_selection(m_selected_filament_tool);
     if (cleared)
         clear_filament_selection_from_moonraker(ui_tool);
-    else
+    else if (!start_load_after_save)
         save_filament_selection_to_moonraker(ui_tool, selection);
     if (start_load_after_save)
-        show_filament_load_wizard();
+        start_quadro_filament_operation(true);
     return true;
+}
+
+bool PrinterWebView::tool_has_loaded_filament(int tool_0based) const
+{
+    if (tool_0based < 0 || tool_0based >= 4)
+        return false;
+    const bool has_color = m_filament_tool_has_color[tool_0based] && m_filament_loaded_tool_colors[tool_0based].IsOk();
+    const bool has_material = !is_empty_filament_material(m_filament_loaded_tool_materials[tool_0based]);
+    return has_color || has_material;
 }
 
 void PrinterWebView::prompt_and_save_filament_selection_then_load()
 {
-    show_filament_load_wizard();
+    if (m_filament_op_in_progress)
+        return;
+    if (tool_has_loaded_filament(m_selected_filament_tool)) {
+        wxMessageDialog dlg(this, _L("Unload first."), _L("Load filament"),
+            wxOK | wxICON_INFORMATION);
+        dlg.ShowModal();
+        return;
+    }
+    show_filament_material_dialog(true);
+}
+
+void PrinterWebView::start_filament_unload_flow()
+{
+    if (m_filament_op_in_progress)
+        return;
+    if (!tool_has_loaded_filament(m_selected_filament_tool)) {
+        wxMessageDialog dlg(this, _L("This tool has no filament."), _L("Unload filament"),
+            wxOK | wxICON_INFORMATION);
+        dlg.ShowModal();
+        return;
+    }
+    start_quadro_filament_operation(false);
+}
+
+void PrinterWebView::set_filament_operation_active(bool active, int tool_0based)
+{
+    m_filament_op_in_progress = active;
+    m_filament_op_awaiting_screen = false;
+    m_filament_op_tool = active ? std::clamp(tool_0based, 0, 3) : -1;
+    m_filament_op_started_ms = active ? wxGetUTCTimeMillis() : 0;
+    if (!active)
+        ++m_filament_op_generation;
+}
+
+void PrinterWebView::apply_filament_operation_to_state(DeviceDashboard::FilamentState &filament) const
+{
+    if (!m_filament_op_in_progress)
+        return;
+    filament.is_loading = true;
+    filament.loading_tool = m_filament_op_tool;
+    filament.can_load_unload = false;
+}
+
+void PrinterWebView::start_quadro_filament_operation(bool is_load)
+{
+    if (m_filament_op_in_progress)
+        return;
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    if (obj == nullptr || !dashboard_commands_allowed(obj, m_klippy_state) ||
+        print_blocks_manual_controls(m_dashboard_state_store.state().print_job))
+        return;
+    const std::string base = moonraker_base_url(obj);
+    if (base.empty())
+        return;
+
+    const int tool = std::clamp(m_selected_filament_tool, 0, 3);
+    const int ui_tool = tool + 1;
+    nlohmann::json payload;
+    payload["mode"] = is_load ? "load" : "unload";
+    payload["toolhead"] = ui_tool;
+    payload["source"] = "slicer";
+    if (is_load) {
+        const auto item = nlohmann::json::parse(m_filament_tool_item_json[tool], nullptr, false, true);
+        if (item.is_discarded() || !item.is_object())
+            return;
+        const std::string brand = item.value("brand", std::string());
+        const std::string type = item.value("type", std::string());
+        const std::string color = item.value("color", std::string());
+        const std::string hex = hex_for_wizard(item.value("color_hex", item.value("hex", std::string())));
+        if (!brand.empty())
+            payload["brand"] = brand;
+        if (!type.empty())
+            payload["type"] = type;
+        if (!color.empty())
+            payload["color"] = color;
+        if (!hex.empty())
+            payload["hex"] = hex;
+    }
+
+    set_filament_operation_active(true, tool);
+    refresh_dashboard_panels(obj);
+
+    const std::string api_key = moonraker_access_code(obj);
+    const unsigned generation = m_filament_op_generation;
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, base, api_key, is_load, tool, payload, generation]() {
+        const FilamentWizardPostResult result = post_filament_wizard(base, api_key, payload);
+        wxGetApp().CallAfter([this, lifetime, is_load, tool, generation, result]() {
+            if (lifetime.expired() || m_destroying)
+                return;
+            if (generation != m_filament_op_generation || !m_filament_op_in_progress || m_filament_op_tool != tool)
+                return;
+            auto *dev_manager = wxGetApp().getDeviceManager();
+            MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+            if (!result.accepted) {
+                set_filament_operation_active(false);
+                if (obj != nullptr)
+                    fetch_filament_selections(obj, {});
+                refresh_dashboard_panels(obj);
+                const wxString message = result.message.empty()
+                    ? (is_load ? _L("Failed to start filament load.") : _L("Failed to start filament unload."))
+                    : wxString::FromUTF8(result.message);
+                wxMessageDialog dlg(this, message,
+                    is_load ? _L("Load filament") : _L("Unload filament"),
+                    wxOK | wxICON_ERROR);
+                dlg.ShowModal();
+                return;
+            }
+            m_filament_op_awaiting_screen = true;
+            BOOST_LOG_TRIVIAL(info) << "PrinterWebView: filament wizard started mode="
+                                    << (is_load ? "load" : "unload") << " tool=" << tool;
+            refresh_dashboard_panels(obj);
+            wxMessageDialog dlg(this, _L("Continue on the printer screen."),
+                is_load ? _L("Load filament") : _L("Unload filament"),
+                wxOK | wxICON_INFORMATION);
+            dlg.ShowModal();
+        });
+    }).detach();
+}
+
+void PrinterWebView::poll_filament_wizard_if_needed()
+{
+    if (!m_filament_op_awaiting_screen || m_filament_wizard_poll_in_progress || m_destroying)
+        return;
+    auto *dev_manager = wxGetApp().getDeviceManager();
+    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+    const std::string base = moonraker_base_url(obj);
+    if (obj == nullptr || base.empty())
+        return;
+
+    m_filament_wizard_poll_in_progress = true;
+    const std::string api_key = moonraker_access_code(obj);
+    const unsigned generation = m_filament_op_generation;
+    const int tool = m_filament_op_tool;
+    std::weak_ptr<int> lifetime = m_lifetime_token;
+    std::thread([this, lifetime, base, api_key, generation, tool]() {
+        std::string body;
+        auto http = Http::get(base + "/machine/coprint/filament/wizard");
+        if (!api_key.empty())
+            http.header("X-Api-Key", api_key);
+        http.timeout_connect(2)
+            .timeout_max(4)
+            .on_complete([&](std::string response, unsigned status) {
+                if (status == 200)
+                    body = std::move(response);
+            })
+            .on_error([](std::string, std::string, unsigned) {})
+            .perform_sync();
+
+        wxGetApp().CallAfter([this, lifetime, generation, tool, body]() {
+            if (lifetime.expired() || m_destroying)
+                return;
+            m_filament_wizard_poll_in_progress = false;
+            if (generation != m_filament_op_generation || !m_filament_op_awaiting_screen)
+                return;
+            if (body.empty())
+                return;
+            auto parsed = unwrap_coprint_api_result(parse_json_body(body));
+            if (!parsed.is_object())
+                return;
+            bool active = true;
+            if (parsed.contains("active") && parsed["active"].is_boolean())
+                active = parsed["active"].get<bool>();
+            else if (parsed.contains("loading") && parsed["loading"].is_boolean())
+                active = parsed["loading"].get<bool>();
+            else
+                return;
+            int toolhead = 0;
+            if (parsed.contains("toolhead"))
+                toolhead = json_int_flexible(parsed["toolhead"]);
+            if (toolhead >= 1 && toolhead <= 4 && tool != toolhead - 1)
+                return;
+            if (active)
+                return;
+            set_filament_operation_active(false);
+            auto *dev_manager = wxGetApp().getDeviceManager();
+            MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
+            if (obj != nullptr)
+                fetch_filament_selections(obj, {});
+            refresh_dashboard_panels(obj);
+        });
+    }).detach();
 }
 
 void PrinterWebView::save_filament_selection_to_moonraker(int ui_tool, const DeviceDashboard::FilamentSelection &selection)
@@ -6037,6 +6396,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
     }
 
     begin_filament_snapshot_fetch(obj);
+    poll_filament_wizard_if_needed();
 
     if (m_moonraker_status_fetch_in_progress)
         return;
@@ -6656,9 +7016,9 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 patched.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, patched.print_job);
                 patched.movement.is_homing = m_homing_in_progress;
                 patched.filament.can_load_unload = patched.movement.can_move;
-                if (active_tool_index >= 0 && active_tool_index < patched.movement.available_tool_count && m_dashboard_page->printer_status_panel() != nullptr)
-                    m_dashboard_page->printer_status_panel()->set_active_tool(active_tool_index);
                 m_dashboard_state_store.set_state(patched);
+                if (active_tool_index >= 0)
+                    apply_printer_status_tool_selection(active_tool_index);
             }
             finish_status_snapshot();
         });
@@ -7755,165 +8115,6 @@ void PrinterWebView::prompt_ps_target_temperature(bool is_bed, int extruder_inde
     show_bed_temperature_dialog();
 }
 
-void PrinterWebView::show_filament_load_wizard()
-{
-    show_filament_busy_dialog(true);
-}
-
-namespace {
-
-// Native dual-ring style spinner — avoids wxWebView's white startup flash.
-class FilamentBusySpinner : public wxPanel
-{
-public:
-    FilamentBusySpinner(wxWindow *parent, const wxSize &size, const wxColour &bg)
-        : wxPanel(parent, wxID_ANY, wxDefaultPosition, size)
-        , m_timer(this)
-    {
-        SetMinSize(size);
-        SetMaxSize(size);
-        SetBackgroundStyle(wxBG_STYLE_PAINT);
-        SetBackgroundColour(bg);
-        Bind(wxEVT_PAINT, &FilamentBusySpinner::on_paint, this);
-        Bind(wxEVT_TIMER, &FilamentBusySpinner::on_timer, this);
-        Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
-        m_timer.Start(16);
-    }
-
-    ~FilamentBusySpinner() override
-    {
-        if (m_timer.IsRunning())
-            m_timer.Stop();
-    }
-
-private:
-    void on_timer(wxTimerEvent &)
-    {
-        m_angle_deg = std::fmod(m_angle_deg + 6.0, 360.0);
-        Refresh(false);
-    }
-
-    void on_paint(wxPaintEvent &)
-    {
-        wxAutoBufferedPaintDC dc(this);
-        dc.SetBackground(wxBrush(GetBackgroundColour()));
-        dc.Clear();
-
-        const wxSize sz = GetClientSize();
-        if (sz.GetWidth() <= 0 || sz.GetHeight() <= 0)
-            return;
-
-        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
-        if (!gc)
-            return;
-
-        const double side = std::min(sz.GetWidth(), sz.GetHeight());
-        const double cx = sz.GetWidth() * 0.5;
-        const double cy = sz.GetHeight() * 0.5;
-        // Match filament_busy_spinner.svg: r=32, stroke=9 on 100x100 viewBox.
-        const double radius = side * 0.32;
-        const double stroke = std::max(2.0, side * 0.09);
-
-        wxPen pen(wxColour("#25cc7c"), int(std::lround(stroke)));
-        pen.SetCap(wxCAP_ROUND);
-        pen.SetJoin(wxJOIN_ROUND);
-        gc->SetPen(gc->CreatePen(pen));
-
-        wxGraphicsPath path = gc->CreatePath();
-        // Half-circle arc (dasharray ~50% of circumference), matching Dual Ring SVG.
-        constexpr double kPi = 3.14159265358979323846;
-        const double start_rad = m_angle_deg * kPi / 180.0;
-        const double end_rad   = start_rad + kPi;
-        path.AddArc(cx, cy, radius, start_rad, end_rad, true);
-        gc->StrokePath(path);
-    }
-
-    wxTimer m_timer;
-    double  m_angle_deg{0.0};
-};
-
-} // namespace
-
-void PrinterWebView::show_filament_busy_dialog(bool is_load)
-{
-    auto *dev_manager = wxGetApp().getDeviceManager();
-    MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
-    if (obj == nullptr || !obj->is_online() ||
-        print_blocks_manual_controls(m_dashboard_state_store.state().print_job))
-        return;
-
-    const int tool_index = std::clamp(m_selected_filament_tool, 0, 3);
-    const std::string slot = std::to_string(tool_index);
-    BOOST_LOG_TRIVIAL(info) << "PrinterWebView: send filament "
-                            << (is_load ? "load" : "unload") << " command slot=" << slot;
-    obj->command_ams_change_filament(is_load, "0", slot);
-    if (!is_load)
-        clear_filament_selection_from_moonraker(tool_index + 1);
-
-    wxDialog dlg(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE);
-    dlg.SetBackgroundColour(wxColour("#000000"));
-
-    auto *root = new wxBoxSizer(wxVERTICAL);
-    auto *shell = new StaticBox(&dlg, wxID_ANY);
-    shell->SetCornerRadius(FromDIP(10));
-    shell->SetBorderWidth(1);
-    shell->SetBorderColorNormal(wxColour("#C7C7C7"));
-    shell->SetBackgroundColorNormal(*wxWHITE);
-    shell->SetBackgroundColour(*wxWHITE);
-    shell->SetMinSize(wxSize(FromDIP(360), -1));
-
-    auto *shell_sizer = new wxBoxSizer(wxVERTICAL);
-    auto *title_row = new wxBoxSizer(wxHORIZONTAL);
-    auto *title = new wxStaticText(shell, wxID_ANY,
-        wxString::Format(is_load ? "Tool %d loading..." : "Tool %d unloading...", tool_index + 1));
-    title->SetForegroundColour(wxColour("#232527"));
-    {
-        wxFont f = title->GetFont();
-        f.SetPointSize(std::max(12, f.GetPointSize() + 2));
-        f.SetWeight(wxFONTWEIGHT_BOLD);
-        title->SetFont(f);
-    }
-    auto *close = new wxStaticText(shell, wxID_ANY, wxString::FromUTF8("\xC3\x97"));
-    close->SetForegroundColour(wxColour("#232527"));
-    close->SetCursor(wxCursor(wxCURSOR_HAND));
-    title_row->Add(title, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxTOP, FromDIP(22));
-    title_row->Add(close, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT | wxTOP, FromDIP(18));
-    shell_sizer->Add(title_row, 0, wxEXPAND);
-
-    auto *accent = new wxPanel(shell, wxID_ANY);
-    accent->SetMinSize(wxSize(FromDIP(42), FromDIP(4)));
-    accent->SetMaxSize(wxSize(FromDIP(42), FromDIP(4)));
-    accent->SetBackgroundColour(wxColour("#10B79A"));
-    shell_sizer->Add(accent, 0, wxLEFT | wxTOP, FromDIP(22));
-
-    auto *message = new wxStaticText(shell, wxID_ANY,
-        wxString::Format(is_load ? "Tool %d filament loading is in progress." :
-                                   "Tool %d filament unloading is in progress.",
-                         tool_index + 1));
-    message->SetForegroundColour(wxColour("#767C84"));
-    shell_sizer->Add(message, 0, wxLEFT | wxRIGHT | wxTOP, FromDIP(22));
-
-    const int spinner_px = FromDIP(72);
-    auto *spinner = new FilamentBusySpinner(shell, wxSize(spinner_px, spinner_px), *wxWHITE);
-    shell_sizer->Add(spinner, 0, wxALIGN_CENTER_HORIZONTAL | wxTOP | wxBOTTOM, FromDIP(22));
-
-    shell->SetSizer(shell_sizer);
-    root->Add(shell, 1, wxEXPAND);
-    dlg.SetSizer(root);
-    dlg.Fit();
-    dlg.SetMinSize(dlg.GetSize());
-
-    close->Bind(wxEVT_LEFT_DOWN, [&dlg](wxMouseEvent &) { dlg.EndModal(wxID_OK); });
-    dlg.Bind(wxEVT_CLOSE_WINDOW, [&dlg](wxCloseEvent &e) {
-        if (dlg.IsModal())
-            dlg.EndModal(wxID_CANCEL);
-        else
-            e.Skip();
-    });
-
-    dlg.CentreOnParent();
-    dlg.ShowModal();
-}
 
 void PrinterWebView::ensure_storage_page_created()
 {
@@ -8606,7 +8807,7 @@ void PrinterWebView::handle_dashboard_command(const DeviceDashboard::DeviceComma
         break;
     case DeviceDashboard::DeviceCommandKind::UnloadFilament:
         apply_filament_tool_selection(command.tool_index);
-        show_filament_busy_dialog(false);
+        start_filament_unload_flow();
         break;
     case DeviceDashboard::DeviceCommandKind::ConfigureFilament:
         apply_filament_tool_selection(command.tool_index);
@@ -8718,6 +8919,12 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
         if (model_tool_count > 0)
             dashboard_state.movement.available_tool_count = model_tool_count;
     }
+    if (m_filament_op_in_progress && m_filament_op_started_ms > 0 &&
+        wxGetUTCTimeMillis() - m_filament_op_started_ms > 15 * 60 * 1000) {
+        BOOST_LOG_TRIVIAL(warning) << "PrinterWebView: filament operation timed out";
+        set_filament_operation_active(false);
+    }
+
     dashboard_state.filament = m_dashboard_state_store.state().filament;
     dashboard_state.filament.selected_tool    = std::clamp(m_selected_filament_tool, 0, 3);
     dashboard_state.filament.can_load_unload  = false;
@@ -8794,6 +9001,7 @@ void PrinterWebView::refresh_dashboard_panels(MachineObject *obj)
     dashboard_state.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, dashboard_state.print_job);
     dashboard_state.movement.is_homing = m_homing_in_progress;
     dashboard_state.filament.can_load_unload = dashboard_state.movement.can_move;
+    apply_filament_operation_to_state(dashboard_state.filament);
 
     m_dashboard_state_store.set_state(dashboard_state);
     if (m_dashboard_page != nullptr) {
@@ -8813,6 +9021,7 @@ void PrinterWebView::apply_klippy_connection_ui(MachineObject *obj)
     patched.movement.can_move = dashboard_manual_controls_allowed(obj, m_klippy_state, patched.print_job);
     patched.movement.is_homing = m_homing_in_progress;
     patched.filament.can_load_unload = patched.movement.can_move;
+    apply_filament_operation_to_state(patched.filament);
     m_dashboard_state_store.set_state(patched);
     if (m_dashboard_page != nullptr &&
         (is_dashboard_snapshot_ready() || m_device_warn_ack != DeviceWarnAck::None))

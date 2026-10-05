@@ -5593,6 +5593,18 @@ static void apply_filament_ws_to_device_views(const std::string &dev_id, const s
         frame->m_printer_view->apply_notify_filament_changed(dev_id, msg);
 }
 
+static void apply_loading_ws_to_device_views(const std::string &dev_id, const std::string &msg)
+{
+    MainFrame *frame = wxGetApp().mainframe;
+    if (frame == nullptr)
+        return;
+    PrinterWebView *backend = frame->m_monitor != nullptr ? frame->m_monitor->coprint_backend() : nullptr;
+    if (backend != nullptr)
+        backend->apply_notify_loading_changed(dev_id, msg);
+    if (frame->m_printer_view != nullptr && frame->m_printer_view != backend)
+        frame->m_printer_view->apply_notify_loading_changed(dev_id, msg);
+}
+
 // return true if handled
 bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
 {
@@ -5699,8 +5711,14 @@ bool GUI_App::process_network_msg(std::string dev_id, std::string msg)
         return true;
     }
 
-    if (msg.find("notify_filament_changed") != std::string::npos) {
+    if (msg.find("notify_filament_changed") != std::string::npos ||
+        msg.find("coprint:filament_changed") != std::string::npos) {
         apply_filament_ws_to_device_views(dev_id, msg);
+        return true;
+    }
+    if (msg.find("notify_loading_changed") != std::string::npos ||
+        msg.find("coprint:loading_changed") != std::string::npos) {
+        apply_loading_ws_to_device_views(dev_id, msg);
         return true;
     }
 

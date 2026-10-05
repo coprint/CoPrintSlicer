@@ -128,6 +128,7 @@ public:
     /** Cached loaded tool colour/material from Moonraker DB (after sync or device refresh). */
     bool get_loaded_tool_filament(int tool_0based, wxColour *color_out, wxString *material_out) const;
     void apply_notify_filament_changed(const std::string &dev_id, const std::string &payload);
+    void apply_notify_loading_changed(const std::string &dev_id, const std::string &payload);
     void msw_rescale();
 
     void handle_dashboard_command(const DeviceDashboard::DeviceCommand &command);
@@ -167,6 +168,12 @@ private:
     bool send_klipper_gcode_script(const std::string& script);
     bool show_filament_material_dialog(bool start_load_after_save, const wxPoint& anchor_screen_pos = wxDefaultPosition);
     void prompt_and_save_filament_selection_then_load();
+    bool tool_has_loaded_filament(int tool_0based) const;
+    void start_filament_unload_flow();
+    void start_quadro_filament_operation(bool is_load);
+    void set_filament_operation_active(bool active, int tool_0based = -1);
+    void apply_filament_operation_to_state(DeviceDashboard::FilamentState &filament) const;
+    void poll_filament_wizard_if_needed();
     void save_filament_selection_to_moonraker(int ui_tool, const DeviceDashboard::FilamentSelection &selection);
     void clear_filament_selection_from_moonraker(int ui_tool);
     void queue_coprint_filament_write(std::string body);
@@ -201,8 +208,6 @@ private:
     void show_bed_temperature_dialog();
     void show_toolhead_fan_dialog(int active_extruder_index);
     bool send_toolhead_fan_speed_command(int tool_index, int fan_percent);
-    void show_filament_load_wizard();
-    void show_filament_busy_dialog(bool is_load);
     bool confirm_forget_printer();
     void post_coprint_device_name(MachineObject *machine, const std::string &device_name);
     void forget_local_printer(MachineObject *machine);
@@ -282,6 +287,12 @@ private:
     std::array<wxString, 4> m_filament_loaded_tool_brands;
     std::array<std::string, 4> m_filament_tool_item_json;
     std::array<bool, 4> m_filament_tool_has_color{};
+    bool m_filament_op_in_progress{false};
+    bool m_filament_op_awaiting_screen{false};
+    int m_filament_op_tool{-1};
+    unsigned m_filament_op_generation{0};
+    wxLongLong m_filament_op_started_ms{0};
+    bool m_filament_wizard_poll_in_progress{false};
     unsigned m_filament_fetch_generation{ 0 };
     bool m_filament_db_write_in_progress{ false };
     std::vector<std::string> m_pending_filament_posts;
