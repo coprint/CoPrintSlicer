@@ -10,7 +10,7 @@
     "bed_mesh_max": "99999,99999",
     "bed_mesh_min": "-99999,-99999",
     "bed_mesh_probe_distance": "50,50",
-    "bed_temperature_formula": "by_highest_temp",
+    "bed_temperature_formula": "by_first_filament",
     "before_layer_change_gcode": "",
     "best_object_pos": "0.5,0.5",
     "change_extrusion_role_gcode": "",
@@ -173,7 +173,7 @@
         "0"
     ],
     "machine_pause_gcode": "",
-    "machine_start_gcode": "start_print  EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] PURGE_LINE='false' BED_TEMP=[bed_temperature_initial_layer_single] EXT0={is_extruder_used[0]} EXT1={is_extruder_used[1]} EXT2={is_extruder_used[2]} EXT3={is_extruder_used[3]}",
+    "machine_start_gcode": "start_print EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] PURGE_LINE='false' BED_TEMP=[bed_temperature_initial_layer_single] EXT0={is_extruder_used[0]} EXT1={is_extruder_used[1]} EXT2={is_extruder_used[2]} EXT3={is_extruder_used[3]} EXT0_TEMP={nozzle_temperature_initial_layer[0]} EXT1_TEMP={nozzle_temperature_initial_layer[1]} EXT2_TEMP={nozzle_temperature_initial_layer[2]} EXT3_TEMP={nozzle_temperature_initial_layer[3]}",
     "machine_tool_change_time": "1.5",
     "machine_unload_filament_time": "1",
     "manual_filament_change": "0",
@@ -362,7 +362,7 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.13",
+    "version": "2.4.0.15",
     "wipe": [
         "0",
         "0",
