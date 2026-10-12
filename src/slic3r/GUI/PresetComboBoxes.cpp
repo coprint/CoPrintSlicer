@@ -1312,12 +1312,14 @@ void PlaterPresetComboBox::update()
 
     std::vector<std::string> filament_orders = {
         "Co Print PLA (ChromaSet)", "Co Print PLA (Quadro)",
+        "Co Print PLA-HF (ChromaSet)", "Co Print PLA-HF (Quadro)",
+        "Co Print PLA-CF (ChromaSet)", "Co Print PLA-CF (Quadro)",
         "Co Print PETG (ChromaSet)", "Co Print PETG (Quadro)",
         "Co Print ABS (ChromaSet)", "Co Print ABS (Quadro)",
         "Co Print TPU (ChromaSet)", "Co Print TPU (Quadro)"
     };
     std::vector<std::string> first_vendors     = {"", "Co Print", "CoPrint", "Generic"}; // Empty vendor for non-system presets
-    std::vector<std::string> first_types     = {"PLA", "PETG", "ABS", "TPU"};
+    std::vector<std::string> first_types     = {"PLA", "PLA-HF", "PLA-CF", "PETG", "ABS", "TPU"};
     auto  add_presets       = [this, &preset_descriptions, &filament_orders, &preset_filament_vendors, &first_vendors, &preset_filament_types, &preset_aliases, &preset_bundle_ids, &preset_bundle_names, &first_types, &selected_in_ams]
             (std::map<wxString, wxBitmap *> const &presets, wxString const &selected, std::string const &group, wxString const &groupName) {
         if (!presets.empty()) {

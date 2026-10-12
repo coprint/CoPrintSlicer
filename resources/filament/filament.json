@@ -4,27 +4,32 @@
     "PLA": {
       "temp_min": 190,
       "temp_max": 240,
-      "pressure_advance": 0.04
+      "pressure_advance": 0.06
+    },
+    "PLA-HF": {
+      "temp_min": 190,
+      "temp_max": 240,
+      "pressure_advance": 0.06
     },
     "PLA-CF": {
       "temp_min": 190,
       "temp_max": 240,
-      "pressure_advance": 0.04
+      "pressure_advance": 0.06
     },
     "PETG": {
       "temp_min": 190,
       "temp_max": 240,
-      "pressure_advance": 0.04
+      "pressure_advance": 0.06
     },
     "ABS": {
       "temp_min": 190,
       "temp_max": 240,
-      "pressure_advance": 0.04
+      "pressure_advance": 0.06
     },
     "TPU": {
       "temp_min": 190,
       "temp_max": 240,
-      "pressure_advance": 0.04
+      "pressure_advance": 0.06
     }
   },
   "colors": {

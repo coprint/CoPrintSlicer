@@ -1,6 +1,6 @@
 {
     "name": "Co Print",
-    "version": "02.04.00.39",
+    "version": "02.04.00.40",
     "force_update": "0",
     "description": "CoPrint configurations",
     "machine_model_list": [
@@ -135,6 +135,14 @@
         {
             "name": "Co Print PLA (Quadro)",
             "sub_path": "filament/Co Print PLA (Quadro).json"
+        },
+        {
+            "name": "Co Print PLA-HF (ChromaSet)",
+            "sub_path": "filament/Co Print PLA-HF (ChromaSet).json"
+        },
+        {
+            "name": "Co Print PLA-HF (Quadro)",
+            "sub_path": "filament/Co Print PLA-HF (Quadro).json"
         },
         {
             "name": "Co Print PLA-CF (ChromaSet)",

@@ -56,7 +56,7 @@ FilamentCatalog fallback_catalog()
     FilamentCatalog catalog;
     catalog.brands = {wxString::FromUTF8("Co Print"), wxString::FromUTF8("Generic")};
     const std::vector<wxString> type_names = {
-        wxString::FromUTF8("PLA"), wxString::FromUTF8("PLA-CF"), wxString::FromUTF8("PETG"),
+        wxString::FromUTF8("PLA"), wxString::FromUTF8("PLA-HF"), wxString::FromUTF8("PLA-CF"), wxString::FromUTF8("PETG"),
         wxString::FromUTF8("ABS"), wxString::FromUTF8("ASA"), wxString::FromUTF8("TPU")};
     for (const wxString &name : type_names)
         catalog.types.push_back({name, 190, 240, 0.04});

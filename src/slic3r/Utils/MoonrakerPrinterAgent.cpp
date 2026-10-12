@@ -761,6 +761,7 @@ std::string MoonrakerPrinterAgent::map_filament_type_to_generic_id(const std::st
 
     // PLA variants
     if (upper == "PLA")           return "OGFL99";
+    if (upper == "PLA-HF")        return "OGFL99";
     if (upper == "PLA-CF")        return "OGFL98";
     if (upper == "PLA SILK" || upper == "PLA-SILK") return "OGFL96";
     if (upper == "PLA HIGH SPEED" || upper == "PLA-HS" || upper == "PLA HS") return "OGFL95";
