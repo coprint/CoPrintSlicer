@@ -4,17 +4,12 @@
 #include "../DeviceUiStyle.hpp"
 #include "../../wxExtensions.hpp"
 
-#include "libslic3r/Utils.hpp"
-
 #include <algorithm>
-#include <boost/filesystem.hpp>
-#include <boost/log/trivial.hpp>
 #include <cmath>
 #include <utility>
 
 #include <wx/dcbuffer.h>
 #include <wx/dcgraph.h>
-#include <wx/filename.h>
 #include <wx/graphics.h>
 #include <wx/image.h>
 #include <wx/sizer.h>
@@ -213,66 +208,16 @@ void pin_header_icon(wxStaticBitmap* icon, int dip_size)
     icon->SetMaxSize(size);
 }
 
-wxImage try_load_image_file(const boost::filesystem::path& path, wxBitmapType type)
-{
-    const wxString wpath = wxString::FromUTF8(path.string().c_str());
-    if (!wxFileName::FileExists(wpath))
-        return wxImage();
-
-    wxImage image;
-    // Try explicit type first, then auto-detect. Some wx/libpng builds reject AI PNGs.
-    if ((!image.LoadFile(wpath, type) || !image.IsOk()) &&
-        (!image.LoadFile(wpath, wxBITMAP_TYPE_ANY) || !image.IsOk())) {
-        return wxImage();
-    }
-    if (!image.IsOk() || image.GetWidth() < 8 || image.GetHeight() < 8)
-        return wxImage();
-    return image;
-}
-
-wxImage load_camera_idle_source_image(wxWindow* /*win*/)
-{
-    const boost::filesystem::path images_dir =
-        (boost::filesystem::path(resources_dir()) / "images").make_preferred();
-
-    const boost::filesystem::path candidates[] = {
-        images_dir / "camera_idle_placeholder.jpg",
-        images_dir / "camera_idle_placeholder.png",
-    };
-    const wxBitmapType types[] = {wxBITMAP_TYPE_JPEG, wxBITMAP_TYPE_PNG};
-
-    for (size_t i = 0; i < 2; ++i) {
-        wxImage image = try_load_image_file(candidates[i], types[i]);
-        if (image.IsOk()) {
-            BOOST_LOG_TRIVIAL(warning) << "CameraPanel: loaded idle placeholder "
-                                       << candidates[i].string() << " "
-                                       << image.GetWidth() << "x" << image.GetHeight();
-            return image;
-        }
-        BOOST_LOG_TRIVIAL(warning) << "CameraPanel: could not load " << candidates[i].string();
-    }
-
-    // Do NOT fall back to create_scaled_bitmap(): on miss it returns a valid empty bitmap.
-    BOOST_LOG_TRIVIAL(error) << "CameraPanel: failed to load camera_idle_placeholder from "
-                             << images_dir.string();
-    return wxImage();
-}
-
 class CameraIdlePlaceholder final : public wxPanel
 {
 public:
-    explicit CameraIdlePlaceholder(wxWindow* parent, wxImage image)
+    explicit CameraIdlePlaceholder(wxWindow* parent)
         : wxPanel(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
-        , m_image(std::move(image))
     {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         SetBackgroundColour(camera_idle_background());
         Bind(wxEVT_PAINT, &CameraIdlePlaceholder::on_paint, this);
         Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent&) {});
-        Bind(wxEVT_SIZE, [this](wxSizeEvent& evt) {
-            evt.Skip();
-            Refresh(false);
-        });
     }
 
     void set_unavailable_label(wxStaticText* label) { m_unavailable = label; }
@@ -281,32 +226,10 @@ private:
     void on_paint(wxPaintEvent&)
     {
         wxAutoBufferedPaintDC dc(this);
-        const wxSize size = GetClientSize();
         dc.SetBackground(wxBrush(camera_idle_background()));
         dc.Clear();
-        if (size.GetWidth() <= 0 || size.GetHeight() <= 0)
-            return;
-
-        if (m_image.IsOk()) {
-            const double sx = static_cast<double>(size.GetWidth()) / m_image.GetWidth();
-            const double sy = static_cast<double>(size.GetHeight()) / m_image.GetHeight();
-            const double scale = std::max(sx, sy);
-            const int scaled_w = std::max(1, static_cast<int>(std::lround(m_image.GetWidth() * scale)));
-            const int scaled_h = std::max(1, static_cast<int>(std::lround(m_image.GetHeight() * scale)));
-            wxImage scaled = m_image.Scale(scaled_w, scaled_h, wxIMAGE_QUALITY_BILINEAR);
-            if (scaled.IsOk()) {
-                const int x = (size.GetWidth() - scaled_w) / 2;
-                const int y = (size.GetHeight() - scaled_h) / 2;
-                dc.DrawBitmap(wxBitmap(scaled), x, y, false);
-            }
-        }
-
-        if (m_unavailable != nullptr && m_unavailable->IsShown()) {
-            // Label is a child window; nothing to draw here.
-        }
     }
 
-    wxImage m_image;
     wxStaticText* m_unavailable{nullptr};
 };
 
@@ -363,8 +286,7 @@ CameraPanel::CameraPanel(wxWindow* parent)
     // Absolute stacking: idle placeholder and stream host share the same rect.
     m_viewport->SetSizer(nullptr);
 
-    m_idle_source_image = load_camera_idle_source_image(this);
-    auto* idle = new CameraIdlePlaceholder(m_viewport, m_idle_source_image);
+    auto* idle = new CameraIdlePlaceholder(m_viewport);
     m_idle_placeholder = idle;
     m_empty_state = new wxStaticText(m_idle_placeholder, wxID_ANY,
         wxString::FromUTF8("Camera unavailable"),

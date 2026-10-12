@@ -5,7 +5,6 @@
 
 #include <functional>
 
-#include <wx/image.h>
 #include <wx/panel.h>
 
 class wxStaticBitmap;
@@ -53,7 +52,6 @@ private:
     DeviceCardFrame* m_frame{nullptr};
     wxPanel* m_viewport{nullptr};
     wxPanel* m_idle_placeholder{nullptr};
-    wxImage m_idle_source_image;
     wxPanel* m_stream_host{nullptr};
     wxStaticText* m_empty_state{nullptr};
     wxStaticText* m_status_label{nullptr};
