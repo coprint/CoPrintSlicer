@@ -8,7 +8,10 @@
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <AppKit/NSScreen.h>
-#import <WebKit/WebKit.h>
+// Umbrella WebKit.h pulls Network.framework. CommandLineTools SDKs newer than
+// Xcode 26 declare APIs with API_AVAILABLE(anyappleos(...)), which Xcode 26's
+// availability.h cannot parse ("expected ','") and fails this .mm.
+#import <WebKit/WKWebView.h>
 
 #include <objc/runtime.h>
 
@@ -63,7 +66,7 @@ void set_miniaturizable(void * window)
     while(viewObject = (NSView *)[viewEnum nextObject]) {
         if([viewObject class] == [NSTextField self]) {
             //[(NSTextField*)viewObject setTextColor :  NSColor.whiteColor];
-            mainframe_text_field = viewObject;
+            mainframe_text_field = (NSTextField *)viewObject;
         }
     }
 }

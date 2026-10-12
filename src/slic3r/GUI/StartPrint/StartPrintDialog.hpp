@@ -88,7 +88,7 @@ class StartPrintDialog : public DPIDialog
 public:
     explicit StartPrintDialog(wxWindow *parent);
 
-    void prepare(int print_plate_idx);
+    void prepare(int print_plate_idx, bool upload_only = false);
     void prepare_from_storage(PrinterStoragePrintRequest request);
     std::string print_target_dev_id() const { return m_print_target_dev_id; }
 
@@ -129,6 +129,8 @@ private:
     std::string tool_map_script() const;
     std::string print_state_script() const;
     void set_sending_ui(bool sending);
+    void lock_unavailable_print_options();
+    void apply_mode_ui();
     void set_send_status(const wxString &message);
     void begin_device_countdown(const std::string &dev_id);
     void on_countdown_tick(wxTimerEvent &event);
@@ -137,6 +139,7 @@ private:
     Plater *m_plater{nullptr};
     int     m_print_plate_idx{0};
     bool    m_storage_mode{false};
+    bool    m_upload_only{false};
     std::string m_storage_file_path;
     std::string m_locked_machine_id;
     PrinterStoragePrintRequest m_storage_request;
@@ -163,10 +166,13 @@ private:
     wxStaticText *m_printer_status{nullptr};
     std::array<PrinterToolSwatch *, 4> m_printer_tool_swatches{};
 
+    wxPanel  *m_filament_section{nullptr};
     wxPanel  *m_options_section{nullptr};
     CheckBox *m_bed_leveling{nullptr};
     CheckBox *m_timelapse{nullptr};
     CheckBox *m_flow_calibration{nullptr};
+    wxStaticText *m_timelapse_label{nullptr};
+    wxStaticText *m_flow_calibration_label{nullptr};
 
     Button *m_cancel_button{nullptr};
     Button *m_start_button{nullptr};

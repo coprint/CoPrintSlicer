@@ -256,6 +256,8 @@ public:
     void render(wxDC &dc);
 
 private:
+    wxColour fill_colour() const;
+
     ScalableBitmap m_background_bitmap;
     wxBitmap       bitmap_with_background;
     int            m_brightness_value{-1};

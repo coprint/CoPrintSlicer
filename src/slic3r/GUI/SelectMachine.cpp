@@ -32,6 +32,7 @@
 #include <wx/clipbrd.h>
 #include <wx/dcgraph.h>
 #include <wx/mstream.h>
+#include <wx/settings.h>
 #include <miniz.h>
 #include <algorithm>
 #include "Plater.hpp"
@@ -4665,8 +4666,20 @@ void SelectMachineDialog::UpdateStatusCheckWarning_ExtensionTool(MachineObject* 
      render(dc);
  }
 
- void ThumbnailPanel::render(wxDC& dc) {
+wxColour ThumbnailPanel::fill_colour() const
+{
+    for (const wxWindow *w = this; w != nullptr; w = w->GetParent()) {
+        if (!w->UseBgCol())
+            continue;
+        const wxColour c = w->GetBackgroundColour();
+        if (c.IsOk())
+            return c;
+    }
+    return wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+}
 
+ void ThumbnailPanel::render(wxDC& dc) {
+     // Dark models on a dark UI stay on the grid so the silhouette remains visible.
      if (wxGetApp().dark_mode() && m_brightness_value < SHOW_BACKGROUND_BITMAP_PIXEL_THRESHOLD) {
          #ifdef __WXMSW__
              wxMemoryDC memdc;
@@ -4677,10 +4690,29 @@ void SelectMachineDialog::UpdateStatusCheckWarning_ExtensionTool(MachineObject* 
         #else
              dc.DrawBitmap(bitmap_with_background, 0, 0);
         #endif
+         return;
      }
-     else
-         dc.DrawBitmap(m_bitmap, 0, 0);
 
+     // MSW GDI ignores thumbnail alpha and treats clear pixels as opaque black.
+     // Flatten onto the card/parent colour first so holes match the UI behind them.
+     const wxColour bg   = fill_colour();
+     const wxSize   size = GetSize();
+#ifdef __WXMSW__
+     wxBitmap   canvas(size);
+     wxMemoryDC memdc(canvas);
+     memdc.SetBackground(wxBrush(bg));
+     memdc.Clear();
+     if (m_bitmap.IsOk()) {
+         wxGCDC gcdc(memdc);
+         gcdc.DrawBitmap(m_bitmap, 0, 0, true);
+     }
+     dc.Blit(0, 0, size.GetWidth(), size.GetHeight(), &memdc, 0, 0);
+#else
+     dc.SetBackground(wxBrush(bg));
+     dc.Clear();
+     if (m_bitmap.IsOk())
+         dc.DrawBitmap(m_bitmap, 0, 0, true);
+#endif
  }
 
  ThumbnailPanel::~ThumbnailPanel() {}

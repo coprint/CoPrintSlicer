@@ -1866,6 +1866,8 @@ wxBoxSizer* MainFrame::create_side_tools()
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_EXPORT_GCODE));
             else if (m_print_select == eSendGcode)
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_SEND_GCODE));
+            else if (m_print_select == eSendGcodeFile)
+                m_plater->send_gcode_to_device();
             else if (m_print_select == eUploadGcode)
                 wxPostEvent(m_plater, SimpleEvent(EVT_GLTOOLBAR_UPLOAD_GCODE));
             else if (m_print_select == eExportSlicedFile)
@@ -1941,6 +1943,20 @@ wxBoxSizer* MainFrame::create_side_tools()
                         p->Dismiss();
                     });
                     p->append_button(print_plate_btn);
+                }
+
+                if (is_quadro_printer()) {
+                    SideButton* send_gcode_btn = new SideButton(p, _L("Send G-code"), "");
+                    send_gcode_btn->SetCornerRadius(0);
+                    send_gcode_btn->Bind(wxEVT_BUTTON, [this, p](wxCommandEvent&) {
+                        m_print_btn->SetLabel(_L("Send G-code"));
+                        m_print_select = eSendGcodeFile;
+                        m_print_enable = get_enable_print_status();
+                        m_print_btn->Enable(m_print_enable);
+                        this->Layout();
+                        p->Dismiss();
+                    });
+                    p->append_button(send_gcode_btn);
                 }
 
                 if (show_remote_print_action()) {
@@ -2226,6 +2242,12 @@ bool MainFrame::get_enable_print_status()
         if (!can_send_gcode())
             enable = false;
         enable = enable && !is_all_plates;
+    }
+    else if (m_print_select == eSendGcodeFile)
+    {
+        enable = current_plate && current_plate->has_printable_instances()
+            && current_plate->is_slice_result_ready_for_print()
+            && !is_all_plates;
     }
     else if (m_print_select == eUploadGcode)
     {

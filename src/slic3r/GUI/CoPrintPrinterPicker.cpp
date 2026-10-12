@@ -534,29 +534,28 @@ void CoPrintPrinterPicker::build_add_printer()
     m_add_header->SetBackgroundStyle(wxBG_STYLE_PAINT);
     paint_bg(m_add_header, kHeaderBg);
 
-    auto* close_lbl = new wxStaticText(m_add_header, wxID_ANY, wxString::FromUTF8("\xC3\x97"));
-    close_lbl->SetFont(Label::Head_16);
-    close_lbl->SetForegroundColour(kTextPrimary);
-    close_lbl->SetCursor(wxCursor(wxCURSOR_HAND));
-    close_lbl->SetMinSize(wxSize(FromDIP(24), -1));
+    const int close_dip = 16;
+    auto* close_bmp = new wxStaticBitmap(m_add_header, wxID_ANY, create_scaled_bitmap("close", m_add_header, close_dip));
+    close_bmp->SetCursor(wxCursor(wxCURSOR_HAND));
+    close_bmp->SetMinSize(wxSize(FromDIP(close_dip), FromDIP(close_dip)));
 
     auto* title = new wxStaticText(m_add_header, wxID_ANY, _L("Add Printer"));
     title->SetFont(Label::Head_14);
     title->SetForegroundColour(kTextPrimary);
 
     auto* header_row = new wxBoxSizer(wxHORIZONTAL);
-    header_row->Add(close_lbl, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(14));
+    header_row->Add(close_bmp, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(14));
     header_row->AddStretchSpacer(1);
     header_row->Add(title, 0, wxALIGN_CENTER_VERTICAL);
     header_row->AddStretchSpacer(1);
-    header_row->AddSpacer(FromDIP(38));
+    header_row->AddSpacer(FromDIP(14) + FromDIP(close_dip));
     m_add_header->SetSizer(header_row);
     m_add_header->Bind(wxEVT_PAINT, [this](wxPaintEvent&) { paint_add_header(); });
     auto close_add = [this](wxMouseEvent& evt) {
         evt.StopPropagation();
         hide_add_printer();
     };
-    close_lbl->Bind(wxEVT_LEFT_DOWN, close_add);
+    close_bmp->Bind(wxEVT_LEFT_DOWN, close_add);
 
     auto* tab_area = new wxPanel(m_add_panel, wxID_ANY);
     tab_area->SetBackgroundColour(kHeaderBg);

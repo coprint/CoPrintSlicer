@@ -347,6 +347,7 @@ private:
     wxStaticText *m_update_serial_value{ nullptr };
     wxStaticText *m_update_status_value{ nullptr };
     wxStaticText *m_update_version_value{ nullptr };
+    wxStaticText *m_update_last_update_value{ nullptr };
     DeviceDashboard::DeviceStateStore m_dashboard_state_store;
     double m_axis_move_step{ 1.0 };
     bool m_homing_in_progress{ false };
@@ -359,6 +360,7 @@ private:
     std::string m_last_refresh_machine_id;
     std::string m_device_serial;
     std::string m_device_os_version;
+    std::string m_device_last_update;
     int m_refresh_tick_counter{ 0 };
     wxLongLong m_dashboard_connect_started_ms{ 0 };
 

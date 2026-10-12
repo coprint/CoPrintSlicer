@@ -98,6 +98,16 @@ if [ -z "$OSX_DEPLOYMENT_TARGET" ]; then
   export OSX_DEPLOYMENT_TARGET="11.3"
 fi
 
+# Keep compile and link on the Xcode macosx SDK. CommandLineTools MacOSX.sdk
+# may be a newer (e.g. 27) tree whose TBD files Xcode 26 ld cannot parse.
+if [ -z "$OSX_SYSROOT" ]; then
+  OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+  export OSX_SYSROOT
+fi
+if [ -n "$OSX_SYSROOT" ]; then
+  export SDKROOT="$OSX_SYSROOT"
+fi
+
 if [ -z "$CMAKE_IGNORE_PREFIX_PATH" ]; then
   export CMAKE_IGNORE_PREFIX_PATH="/opt/local:/usr/local:/opt/homebrew"
 fi
@@ -117,6 +127,7 @@ echo " - BUILD_CONFIG: $BUILD_CONFIG"
 echo " - BUILD_TARGET: $BUILD_TARGET"
 echo " - CMAKE_GENERATOR: $SLICER_CMAKE_GENERATOR for Slicer, $DEPS_CMAKE_GENERATOR for deps"
 echo " - OSX_DEPLOYMENT_TARGET: $OSX_DEPLOYMENT_TARGET"
+echo " - OSX_SYSROOT: $OSX_SYSROOT"
 echo " - CMAKE_IGNORE_PREFIX_PATH: $CMAKE_IGNORE_PREFIX_PATH"
 echo
 
@@ -161,6 +172,7 @@ function build_deps() {
                         -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
                         -DCMAKE_OSX_ARCHITECTURES:STRING="${_ARCH}" \
                         -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}" \
+                        ${OSX_SYSROOT:+-DCMAKE_OSX_SYSROOT="$OSX_SYSROOT"} \
                         -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}" \
                         ${CMAKE_POLICY_COMPAT}
                 fi
@@ -205,6 +217,7 @@ function build_slicer() {
                     -DCMAKE_BUILD_TYPE="$BUILD_CONFIG" \
                     -DCMAKE_OSX_ARCHITECTURES="${_ARCH}" \
                     -DCMAKE_OSX_DEPLOYMENT_TARGET="${OSX_DEPLOYMENT_TARGET}" \
+                    ${OSX_SYSROOT:+-DCMAKE_OSX_SYSROOT="$OSX_SYSROOT"} \
                     -DCMAKE_IGNORE_PREFIX_PATH="${CMAKE_IGNORE_PREFIX_PATH}" \
                     ${CMAKE_POLICY_COMPAT}
             fi

@@ -628,18 +628,17 @@ void FilamentSelectDialog::build_ui(int ui_tool)
     set_primary(title);
     set_bold(title);
     title->SetBackgroundColour(DeviceUiStyle::card_header_background());
-    auto *close_x = new Button(header, wxString::FromUTF8("\u00D7"));
+    auto *close_x = new Button(header, wxEmptyString, "close", 0, 16);
     close_x->SetStyle(ButtonStyle::Regular, ButtonType::Compact);
     close_x->SetCornerRadius(FromDIP(8));
     close_x->SetMinSize(wxSize(FromDIP(34), FromDIP(34)));
-    close_x->SetPaddingSize(wxSize(FromDIP(6), FromDIP(2)));
+    close_x->SetPaddingSize(wxSize(FromDIP(8), FromDIP(8)));
     close_x->SetBorderWidth(0);
     close_x->SetBackgroundColour(DeviceUiStyle::card_header_background());
     close_x->SetBackgroundColor(StateColor(
         std::pair(wxColour(220, 220, 220), (int) StateColor::Pressed),
         std::pair(wxColour(235, 235, 235), (int) StateColor::Hovered),
         std::pair(DeviceUiStyle::card_header_background(), (int) StateColor::Normal)));
-    close_x->SetTextColor(StateColor(std::pair(DeviceUiStyle::text_primary(), (int) StateColor::Normal)));
     header_sizer->Add(title, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, FromDIP(16));
     header_sizer->Add(close_x, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(10));
     header->SetSizer(header_sizer);
@@ -864,10 +863,11 @@ void FilamentSelectDialog::select_color(int index)
 void FilamentSelectDialog::refresh_info()
 {
     const FilamentTypeInfo *info = m_type_index >= 0 ? m_catalog.find_type(material()) : nullptr;
+    const wxString deg = wxString::FromUTF8("\xC2\xB0");
     if (m_temp_min != nullptr)
-        m_temp_min->SetLabel(info != nullptr ? wxString::Format("Minimum: %d\u00B0", info->temp_min) : wxString());
+        m_temp_min->SetLabel(info != nullptr ? wxString::Format("Minimum: %d%s", info->temp_min, deg) : wxString());
     if (m_temp_max != nullptr)
-        m_temp_max->SetLabel(info != nullptr ? wxString::Format("Maximum: %d\u00B0", info->temp_max) : wxString());
+        m_temp_max->SetLabel(info != nullptr ? wxString::Format("Maximum: %d%s", info->temp_max, deg) : wxString());
     if (m_pa_value != nullptr)
         m_pa_value->SetLabel(info != nullptr ? wxString::Format("%.2fmm", info->pressure_advance) : wxString());
 }

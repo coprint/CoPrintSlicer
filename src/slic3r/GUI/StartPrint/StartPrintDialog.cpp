@@ -18,6 +18,7 @@
 #include "../Widgets/PopupWindow.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 #include "libslic3r/Preset.hpp"
+#include "libslic3r/Print.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/format.hpp"
 #include "slic3r/Utils/Http.hpp"
@@ -926,7 +927,11 @@ wxBoxSizer *make_info_row(wxWindow *parent, const wxString &label, wxStaticText 
     return row;
 }
 
-wxPanel *make_option_row(wxWindow *parent, const wxString &label_text, CheckBox *&checkbox)
+wxPanel *make_option_row(wxWindow *parent,
+                         const wxString &label_text,
+                         CheckBox *&checkbox,
+                         wxStaticText **label_out = nullptr,
+                         bool interactive = true)
 {
     auto *row = new wxPanel(parent, wxID_ANY);
     row->SetBackgroundColour(kCardBackground);
@@ -934,7 +939,14 @@ wxPanel *make_option_row(wxWindow *parent, const wxString &label_text, CheckBox 
     checkbox = new CheckBox(row);
     checkbox->SetBackgroundColour(kCardBackground);
     auto *label = new wxStaticText(row, wxID_ANY, label_text);
-    style_primary_text(label);
+    if (interactive)
+        style_primary_text(label);
+    else
+        style_muted_text(label);
+    checkbox->Enable(interactive);
+    label->Enable(interactive);
+    if (label_out != nullptr)
+        *label_out = label;
     sizer->Add(checkbox, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, parent->FromDIP(6));
     sizer->Add(label, 0, wxALIGN_CENTER_VERTICAL);
     row->SetSizer(sizer);
@@ -1276,14 +1288,20 @@ void StartPrintDialog::build_ui()
 
     main_sizer->AddSpacer(FromDIP(12));
 
+    m_filament_section = new wxPanel(this, wxID_ANY);
+    m_filament_section->SetBackgroundColour(kPageBackground);
+    auto *filament_section_sizer = new wxBoxSizer(wxVERTICAL);
+
     // Filament mapping section stays visible even when no printer is selected.
-    auto *mapping_card = make_card(this, kCardBackground);
+    auto *mapping_card = make_card(m_filament_section, kCardBackground);
     mapping_card->SetBorderWidth(0);
     auto *mapping_outer = new wxBoxSizer(wxHORIZONTAL);
     mapping_outer->AddSpacer(margin);
     mapping_outer->Add(mapping_card, 1, wxEXPAND);
     mapping_outer->AddSpacer(margin);
-    main_sizer->Add(mapping_outer, 0, wxEXPAND);
+    filament_section_sizer->Add(mapping_outer, 0, wxEXPAND);
+    m_filament_section->SetSizer(filament_section_sizer);
+    main_sizer->Add(m_filament_section, 0, wxEXPAND);
 
     auto *mapping_sizer = new wxBoxSizer(wxVERTICAL);
     auto *mapping_title = new wxStaticText(mapping_card, wxID_ANY, _L("Filament"));
@@ -1327,14 +1345,13 @@ void StartPrintDialog::build_ui()
 
     auto *options_row = new wxBoxSizer(wxHORIZONTAL);
     options_row->Add(make_option_row(options_card, _L("Bed leveling"), m_bed_leveling), 0, wxRIGHT, FromDIP(18));
-    options_row->Add(make_option_row(options_card, _L("Flow calibration"), m_flow_calibration), 0, wxRIGHT, FromDIP(18));
-    options_row->Add(make_option_row(options_card, _L("Timelapse"), m_timelapse), 0);
+    options_row->Add(make_option_row(options_card, _L("Flow calibration"), m_flow_calibration, &m_flow_calibration_label, false), 0, wxRIGHT, FromDIP(18));
+    options_row->Add(make_option_row(options_card, _L("Timelapse"), m_timelapse, &m_timelapse_label, false), 0);
     options_card->SetSizer(new wxBoxSizer(wxVERTICAL));
     options_card->GetSizer()->Add(options_row, 0, wxALL, FromDIP(10));
 
-    m_bed_leveling->SetValue(true);
-    m_timelapse->SetValue(false);
-    m_flow_calibration->SetValue(false);
+    m_bed_leveling->SetValue(false);
+    lock_unavailable_print_options();
 
     m_options_section->SetSizer(options_outer_sizer);
     main_sizer->Add(m_options_section, 0, wxEXPAND);
@@ -1374,7 +1391,7 @@ void StartPrintDialog::build_ui()
     main_sizer->Add(footer, 0, wxEXPAND | wxBOTTOM, FromDIP(16));
 
     SetSizer(main_sizer);
-    SetMinSize(wxSize(FromDIP(540), FromDIP(640)));
+    apply_mode_ui();
 }
 
 void StartPrintDialog::bind_events()
@@ -1497,16 +1514,30 @@ void StartPrintDialog::on_task_name_enter()
     m_task_name_normal_panel->Layout();
 }
 
-void StartPrintDialog::prepare(int print_plate_idx)
+void StartPrintDialog::apply_mode_ui()
+{
+    SetTitle(m_upload_only ? _L("Send G-code") : _L("Start Print"));
+    if (m_start_button != nullptr)
+        m_start_button->SetLabel(m_upload_only ? _L("Send") : _L("Start Print"));
+    if (m_filament_section != nullptr)
+        m_filament_section->Show(!m_upload_only);
+    if (m_options_section != nullptr && m_upload_only)
+        m_options_section->Hide();
+    SetMinSize(wxSize(FromDIP(540), m_upload_only ? FromDIP(460) : FromDIP(640)));
+}
+
+void StartPrintDialog::prepare(int print_plate_idx, bool upload_only)
 {
     m_print_plate_idx = print_plate_idx;
     m_storage_mode = false;
+    m_upload_only = upload_only;
     m_storage_file_path.clear();
     m_locked_machine_id.clear();
     m_storage_request = {};
     m_print_target_dev_id.clear();
     m_countdown_timer.Stop();
     m_countdown_left = 0;
+    apply_mode_ui();
     set_sending_ui(false);
     set_send_status(wxEmptyString);
 }
@@ -1514,6 +1545,7 @@ void StartPrintDialog::prepare(int print_plate_idx)
 void StartPrintDialog::prepare_from_storage(PrinterStoragePrintRequest request)
 {
     m_storage_mode = true;
+    m_upload_only = false;
     m_print_plate_idx = 0;
     m_storage_request = std::move(request);
     m_storage_file_path = m_storage_request.file_path;
@@ -1521,6 +1553,7 @@ void StartPrintDialog::prepare_from_storage(PrinterStoragePrintRequest request)
     m_print_target_dev_id.clear();
     m_countdown_timer.Stop();
     m_countdown_left = 0;
+    apply_mode_ui();
     set_sending_ui(false);
     set_send_status(wxEmptyString);
 }
@@ -1569,7 +1602,7 @@ int StartPrintDialog::ShowModal()
     refresh_printer_list();
     m_user_mapped_tools = false;
     m_filament_sync_done = false;
-    if (printer_view_has_loaded_filaments()) {
+    if (!m_upload_only && printer_view_has_loaded_filaments()) {
         m_filament_sync_done = true;
         if (m_storage_mode)
             fill_storage_filament_slots();
@@ -1578,9 +1611,11 @@ int StartPrintDialog::ShowModal()
         update_printer_status();
     }
     update_start_button_state();
-    sync_filaments_then_map(!m_storage_mode);
-    if (m_storage_mode)
-        fill_storage_filament_slots();
+    if (!m_upload_only) {
+        sync_filaments_then_map(!m_storage_mode);
+        if (m_storage_mode)
+            fill_storage_filament_slots();
+    }
     Layout();
     Fit();
     CenterOnParent();
@@ -1591,14 +1626,27 @@ int StartPrintDialog::ShowModal()
     return result;
 }
 
+void StartPrintDialog::lock_unavailable_print_options()
+{
+    auto lock = [](CheckBox *checkbox, wxStaticText *label) {
+        if (checkbox != nullptr) {
+            checkbox->SetValue(false);
+            checkbox->Enable(false);
+        }
+        if (label != nullptr) {
+            style_muted_text(label);
+            label->Enable(false);
+        }
+    };
+    lock(m_timelapse, m_timelapse_label);
+    lock(m_flow_calibration, m_flow_calibration_label);
+}
+
 void StartPrintDialog::reset_print_options()
 {
     if (m_bed_leveling)
-        m_bed_leveling->SetValue(true);
-    if (m_flow_calibration)
-        m_flow_calibration->SetValue(false);
-    if (m_timelapse)
-        m_timelapse->SetValue(false);
+        m_bed_leveling->SetValue(false);
+    lock_unavailable_print_options();
 }
 
 void StartPrintDialog::apply_storage_locks()
@@ -1709,11 +1757,11 @@ void StartPrintDialog::fill_storage_filament_slots()
 void StartPrintDialog::start_print_job()
 {
     MachineObject *obj = selected_machine();
-    if (obj == nullptr || !obj->is_online() || obj->is_in_printing()) {
+    if (obj == nullptr || !obj->is_online() || (!m_upload_only && obj->is_in_printing())) {
         show_error(this, _L("Selected printer is not ready."));
         return;
     }
-    if (has_unloaded_mapping()) {
+    if (!m_upload_only && has_unloaded_mapping()) {
         show_error(this, _L("Empty filament (EF). Map each color to a loaded tool before starting."));
         return;
     }
@@ -1742,12 +1790,12 @@ void StartPrintDialog::start_print_job()
     if (upload_first) {
         PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
         if (!plate_ready_for_device_print(plate)) {
-            show_error(this, _L("Slice the plate before starting a print."));
+            show_error(this, m_upload_only ? _L("Slice the plate before sending G-code.") : _L("Slice the plate before starting a print."));
             return;
         }
         local_gcode = plate->get_gcode_filename();
         if (local_gcode.empty()) {
-            show_error(this, _L("Slice the plate before starting a print."));
+            show_error(this, m_upload_only ? _L("Slice the plate before sending G-code.") : _L("Slice the plate before starting a print."));
             return;
         }
         const std::string task_name = m_task_name_label != nullptr
@@ -1765,11 +1813,12 @@ void StartPrintDialog::start_print_job()
 
     m_refresh_timer.Stop();
     set_sending_ui(true);
-    set_send_status(_L("Sending print job..."));
+    set_send_status(m_upload_only ? _L("Sending G-code...") : _L("Sending print job..."));
 
+    const bool upload_only = m_upload_only;
     // Upload → SET_TOOL_MAP (this job only) → PRINT_STATE → POST /printer/print/start.
-    // Sliced G-code is not rewritten. Firmware END_PRINT / CANCEL_PRINT restores TOOL_MAP.
-    std::thread([upload_first, local_gcode, base, api_key, tool_map, print_state, remote_filename,
+    // Send G-code stops after upload. Firmware END_PRINT / CANCEL_PRINT restores TOOL_MAP.
+    std::thread([upload_first, local_gcode, base, api_key, tool_map, print_state, remote_filename, upload_only,
                  dev_id, weak_dlg = wxWeakRef<StartPrintDialog>(this)]() {
         std::string error;
         bool ok = true;
@@ -1777,20 +1826,24 @@ void StartPrintDialog::start_print_job()
             if (!printer_http_reachable(base, api_key, error)) {
                 ok = false;
             } else {
-                std::string reset_error;
-                nlohmann::json reset_payload;
-                reset_payload["script"] = "SDCARD_RESET_FILE";
-                post_moonraker_json(base + "/printer/gcode/script", api_key, reset_payload, 5, reset_error);
+                if (!upload_only) {
+                    std::string reset_error;
+                    nlohmann::json reset_payload;
+                    reset_payload["script"] = "SDCARD_RESET_FILE";
+                    post_moonraker_json(base + "/printer/gcode/script", api_key, reset_payload, 5, reset_error);
+                }
                 if (!upload_gcode_to_moonraker(base, api_key, local_gcode, remote_filename, error))
                     ok = false;
             }
         }
-        if (ok && !post_gcode_script(base, api_key, tool_map, error))
-            ok = false;
-        if (ok && !post_gcode_script(base, api_key, print_state, error))
-            ok = false;
-        if (ok && !start_printer_storage_print(base, api_key, remote_filename, error))
-            ok = false;
+        if (!upload_only) {
+            if (ok && !post_gcode_script(base, api_key, tool_map, error))
+                ok = false;
+            if (ok && !post_gcode_script(base, api_key, print_state, error))
+                ok = false;
+            if (ok && !start_printer_storage_print(base, api_key, remote_filename, error))
+                ok = false;
+        }
 
         wxGetApp().CallAfter([weak_dlg, ok, error, dev_id]() {
             StartPrintDialog *dlg = weak_dlg.get();
@@ -1854,12 +1907,9 @@ void StartPrintDialog::set_sending_ui(bool sending)
         m_start_button->Enable(false);
     if (m_bed_leveling != nullptr)
         m_bed_leveling->Enable(!sending);
-    if (m_timelapse != nullptr)
-        m_timelapse->Enable(!sending);
-    if (m_flow_calibration != nullptr)
-        m_flow_calibration->Enable(!sending);
     if (m_options_section != nullptr)
         m_options_section->Enable(!sending);
+    lock_unavailable_print_options();
     for (StartPrintFilamentSlot *slot : m_filament_slots) {
         if (slot != nullptr)
             slot->set_input_enabled(!sending);
@@ -1935,10 +1985,22 @@ void StartPrintDialog::refresh_from_plate()
 
     PartPlate *plate = plate_for_dialog(m_plater, m_print_plate_idx);
 
-    wxString filename = m_plater->get_export_gcode_filename(wxEmptyString, true);
+    wxString filename;
+    if (plate != nullptr) {
+        if (Print *print = plate->fff_print()) {
+            try {
+                filename = from_u8(print->output_filename());
+            } catch (const std::exception &) {
+                filename.clear();
+            }
+        }
+    }
     if (filename.empty())
-        filename = _L("Untitled");
+        filename = m_plater->get_export_gcode_filename(".gcode", true);
+    if (filename.empty())
+        filename = _L("Untitled") + ".gcode";
     m_current_task_name = wxFileName(filename).GetFullName();
+    m_current_task_name = from_u8(filter_characters(m_current_task_name.ToUTF8().data(), "<>[]:/\\|?*\""));
     if (m_task_name_label != nullptr)
         m_task_name_label->SetLabel(m_current_task_name);
     if (m_task_name_switch_panel != nullptr)
@@ -2419,21 +2481,21 @@ void StartPrintDialog::update_start_button_state()
         return;
     const bool slice_ready = m_storage_mode ? !m_storage_file_path.empty() : plate_ready_for_device_print(plate);
     const bool printer_connected = obj && obj->is_online();
-    const bool printer_ready = printer_connected && !obj->is_in_printing();
-    const bool mapping_ready = m_filament_sync_done && !has_unloaded_mapping();
+    const bool printer_ready = printer_connected && (m_upload_only || !obj->is_in_printing());
+    const bool mapping_ready = m_upload_only || (m_filament_sync_done && !has_unloaded_mapping());
     const bool can_start = slice_ready && printer_ready && mapping_ready;
     m_start_button->Enable(can_start);
-    if (m_options_section != nullptr && m_options_section->IsShown() != printer_connected) {
-        m_options_section->Show(printer_connected);
+    if (m_filament_section != nullptr && m_filament_section->IsShown() == m_upload_only)
+        m_filament_section->Show(!m_upload_only);
+    const bool show_options = !m_upload_only && printer_connected;
+    if (m_options_section != nullptr && m_options_section->IsShown() != show_options) {
+        m_options_section->Show(show_options);
         Layout();
         Refresh();
     }
     if (m_bed_leveling)
         m_bed_leveling->Enable(printer_ready);
-    if (m_timelapse)
-        m_timelapse->Enable(printer_ready);
-    if (m_flow_calibration)
-        m_flow_calibration->Enable(printer_ready);
+    lock_unavailable_print_options();
 }
 
 void StartPrintDialog::on_refresh_printers(wxCommandEvent &)
@@ -2453,17 +2515,20 @@ void StartPrintDialog::on_printer_changed(wxCommandEvent &)
     const int selection = m_printer_combo->GetSelection();
     if (dev_manager && selection >= 0 && selection < static_cast<int>(m_printer_ids.size()))
         dev_manager->set_selected_machine(m_printer_ids[selection]);
-    m_user_mapped_tools = false;
-    m_filament_sync_done = false;
-    ++m_filament_sync_generation;
-    if (MainFrame *frame = wxGetApp().mainframe) {
-        if (auto *controller = frame->coprint_device_controller())
-            controller->reset_loaded_tool_filaments();
+    if (!m_upload_only) {
+        m_user_mapped_tools = false;
+        m_filament_sync_done = false;
+        ++m_filament_sync_generation;
+        if (MainFrame *frame = wxGetApp().mainframe) {
+            if (auto *controller = frame->coprint_device_controller())
+                controller->reset_loaded_tool_filaments();
+        }
+        clear_stale_printer_filament_ui();
     }
-    clear_stale_printer_filament_ui();
     update_printer_status();
     update_start_button_state();
-    sync_filaments_then_map(true);
+    if (!m_upload_only)
+        sync_filaments_then_map(true);
 }
 
 void StartPrintDialog::on_cancel(wxCommandEvent &)

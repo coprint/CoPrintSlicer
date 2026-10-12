@@ -996,6 +996,43 @@ add_subdirectory(deps_src)
 add_subdirectory(src)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT CoPrintSlicer_app_gui)
 
+# Deps may bake CommandLineTools SDK TBD paths (often a newer MacOSX.sdk than
+# the Xcode in use). Xcode 26 ld rejects macOS 27 TBD files that list
+# arm64e.x1-macos. Point those links at the active Xcode SDK instead.
+# Runtime deployment target is unchanged.
+if(APPLE)
+    if(CMAKE_OSX_SYSROOT)
+        set(_coprint_macos_sysroot "${CMAKE_OSX_SYSROOT}")
+    else()
+        execute_process(COMMAND xcrun --sdk macosx --show-sdk-path
+            OUTPUT_VARIABLE _coprint_macos_sysroot
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+    endif()
+    function(coprint_remap_clt_sdk_libs dir)
+        get_property(_imported DIRECTORY "${dir}" PROPERTY IMPORTED_TARGETS)
+        foreach(_tgt IN LISTS _imported)
+            if(NOT TARGET "${_tgt}")
+                continue()
+            endif()
+            get_property(_libs TARGET "${_tgt}" PROPERTY INTERFACE_LINK_LIBRARIES)
+            if(NOT _libs)
+                continue()
+            endif()
+            set(_new "${_libs}")
+            string(REGEX REPLACE "/Library/Developer/CommandLineTools/SDKs/MacOSX[^/;]*\\.sdk"
+                "${_coprint_macos_sysroot}" _new "${_new}")
+            if(NOT _new STREQUAL _libs)
+                set_property(TARGET "${_tgt}" PROPERTY INTERFACE_LINK_LIBRARIES "${_new}")
+            endif()
+        endforeach()
+        get_property(_subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+        foreach(_sd IN LISTS _subdirs)
+            coprint_remap_clt_sdk_libs("${_sd}")
+        endforeach()
+    endfunction()
+    coprint_remap_clt_sdk_libs("${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+
 add_dependencies(gettext_make_pot hintsToPot)
 
 if(SLIC3R_BUILD_SANDBOXES)

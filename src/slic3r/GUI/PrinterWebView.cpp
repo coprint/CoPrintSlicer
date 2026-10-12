@@ -36,8 +36,13 @@
 #include "libslic3r/Zipper.hpp"
 #include "libslic3r_version.h"
 
+#ifdef __APPLE__
+#include "../Utils/MacDarkMode.hpp"
+#endif
+
 #include <wx/filename.h>
 #include <wx/dcbuffer.h>
+#include <wx/image.h>
 #include <wx/gauge.h>
 #include <wx/sizer.h>
 #include <wx/string.h>
@@ -482,55 +487,18 @@ static std::string json_first_string(const nlohmann::json &object, std::initiali
     return {};
 }
 
-static std::string serial_from_coprint_info(const std::string &body)
+static std::string coprint_info_string(const std::string &body, const char *key)
 {
-    if (body.empty())
+    if (body.empty() || key == nullptr)
         return {};
     auto parsed = nlohmann::json::parse(body, nullptr, false, true);
     if (parsed.is_discarded())
         return {};
     nlohmann::json payload = json_result_object(std::move(parsed));
-    std::string serial = json_first_string(payload,
-        {"serial", "serial_number", "serial_no", "sn", "device_serial"});
-    if (serial.empty() && payload.contains("device") && payload["device"].is_object())
-        serial = json_first_string(payload["device"],
-            {"serial", "serial_number", "serial_no", "sn", "device_serial"});
-    return serial;
-}
-
-static std::string os_version_from_coprint_info(const std::string &body)
-{
-    if (body.empty())
-        return {};
-    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
-    if (parsed.is_discarded())
-        return {};
-    nlohmann::json payload = json_result_object(std::move(parsed));
-    std::string os_version = json_first_string(payload,
-        {"os_version", "os", "operating_system", "distro"});
-    if (os_version.empty() && payload.contains("device") && payload["device"].is_object())
-        os_version = json_first_string(payload["device"],
-            {"os_version", "os", "operating_system", "distro"});
-    return os_version;
-}
-
-static std::string os_version_from_system_info(const std::string &body)
-{
-    if (body.empty())
-        return {};
-    auto parsed = nlohmann::json::parse(body, nullptr, false, true);
-    if (parsed.is_discarded())
-        return {};
-    nlohmann::json payload = json_result_object(std::move(parsed));
-    nlohmann::json dist = nlohmann::json::object();
-    if (payload.contains("system_info") && payload["system_info"].is_object()) {
-        const auto &system_info = payload["system_info"];
-        if (system_info.contains("distribution") && system_info["distribution"].is_object())
-            dist = system_info["distribution"];
-    } else if (payload.contains("distribution") && payload["distribution"].is_object()) {
-        dist = payload["distribution"];
-    }
-    return json_first_string(dist, {"name", "version", "id"});
+    std::string value = json_first_string(payload, {key});
+    if (value.empty() && payload.contains("device") && payload["device"].is_object())
+        value = json_first_string(payload["device"], {key});
+    return value;
 }
 
 static std::string display_name_from_coprint_info_body(const std::string &body)
@@ -978,14 +946,24 @@ wxBitmap create_dark_printer_thumbnail(wxWindow *win, const std::string &name, i
 
 wxBitmap create_quadro_printer_thumbnail(wxWindow *win, int dip)
 {
-    try {
-        wxBitmap bmp = create_scaled_bitmap("quadro_icon", win, dip);
-        if (bmp.IsOk())
-            return bmp;
-    } catch (const std::exception &) {
-    }
+    wxImage img;
+    if (!img.LoadFile(from_u8(Slic3r::var("quadro_icon.png")), wxBITMAP_TYPE_PNG) || !img.IsOk())
+        return create_dark_printer_thumbnail(win, "printer_thumbnail", dip);
 
-    return create_dark_printer_thumbnail(win, "printer_thumbnail", dip);
+#ifdef __APPLE__
+    const double scale = std::max(1.0, mac_max_scaling_factor());
+    const int px_h = std::max(1, (int) std::lround(dip * scale));
+    const int px_w = std::max(1, (int) std::lround((double) img.GetWidth() * px_h / img.GetHeight()));
+    if (img.GetWidth() != px_w || img.GetHeight() != px_h)
+        img.Rescale(px_w, px_h, wxIMAGE_QUALITY_HIGH);
+    return wxBitmap(std::move(img), -1, scale);
+#else
+    const int px_h = std::max(1, win->FromDIP(dip));
+    const int px_w = std::max(1, (int) std::lround((double) img.GetWidth() * px_h / img.GetHeight()));
+    if (img.GetWidth() != px_w || img.GetHeight() != px_h)
+        img.Rescale(px_w, px_h, wxIMAGE_QUALITY_HIGH);
+    return wxBitmap(img);
+#endif
 }
 
 std::string camera_lan_host(MachineObject *obj)
@@ -6368,6 +6346,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_homing_started_ms = 0;
         m_device_serial.clear();
         m_device_os_version.clear();
+        m_device_last_update.clear();
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
         reset_filament_cache_and_ui();
@@ -6389,6 +6368,7 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         m_homing_started_ms = 0;
         m_device_serial.clear();
         m_device_os_version.clear();
+        m_device_last_update.clear();
         m_device_warn_ack = DeviceWarnAck::None;
         abort_preview_thumbnail();
         reset_filament_cache_and_ui();
@@ -6424,7 +6404,6 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
         std::string body;
         std::string fan_body;
         std::string coprint_info_body;
-        std::string system_info_body;
         std::string metadata_body;
         std::string server_info_body;
         Http::get(base + "/server/info")
@@ -6448,16 +6427,6 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             .on_complete([&](std::string response, unsigned status) {
                 if (status == 200)
                     coprint_info_body = std::move(response);
-            })
-            .on_error([](std::string, std::string, unsigned) {})
-            .perform_sync();
-
-        Http::get(base + "/machine/system_info")
-            .timeout_connect(2)
-            .timeout_max(5)
-            .on_complete([&](std::string response, unsigned status) {
-                if (status == 200)
-                    system_info_body = std::move(response);
             })
             .on_error([](std::string, std::string, unsigned) {})
             .perform_sync();
@@ -6556,10 +6525,9 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
             };
             capture_hostname("/server/info");
             capture_hostname("/printer/info");
-            capture_hostname("/machine/system_info");
         }
 
-        wxGetApp().CallAfter([this, lifetime, machine_id, body, fan_body, coprint_info_body, system_info_body, objects_list_body, metadata_body, hostname_hint, base, server_info_body]() {
+        wxGetApp().CallAfter([this, lifetime, machine_id, body, fan_body, coprint_info_body, objects_list_body, metadata_body, hostname_hint, base, server_info_body]() {
             if (lifetime.expired() || m_destroying)
                 return;
             if (m_moonraker_status_machine_id == machine_id)
@@ -6570,14 +6538,9 @@ void PrinterWebView::refresh_moonraker_status_from_selected_machine()
                 return;
 
             {
-                const std::string serial = serial_from_coprint_info(coprint_info_body);
-                if (!serial.empty())
-                    m_device_serial = serial;
-                std::string os_version = os_version_from_coprint_info(coprint_info_body);
-                if (os_version.empty())
-                    os_version = os_version_from_system_info(system_info_body);
-                if (!os_version.empty())
-                    m_device_os_version = os_version;
+                m_device_serial = coprint_info_string(coprint_info_body, "serial_number");
+                m_device_os_version = coprint_info_string(coprint_info_body, "os_version");
+                m_device_last_update = coprint_info_string(coprint_info_body, "last_update_time");
                 if (m_update_page != nullptr && m_update_page->IsShownOnScreen())
                     refresh_update_page_from_selected_machine();
                 refresh_printer_info_labels(obj);
@@ -8283,8 +8246,12 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     auto *top_row = new wxBoxSizer(wxHORIZONTAL);
     top_row->AddSpacer(FromDIP(31));
 
-    m_update_printer_bitmap = new wxStaticBitmap(body, wxID_ANY, create_quadro_printer_thumbnail(this, 202));
+    m_update_printer_bitmap = new wxStaticBitmap(body, wxID_ANY, create_quadro_printer_thumbnail(this, 182));
     m_update_printer_bitmap->SetMinSize(wxSize(FromDIP(241), FromDIP(182)));
+    m_update_printer_bitmap->SetMaxSize(wxSize(FromDIP(241), FromDIP(182)));
+#if wxCHECK_VERSION(3, 1, 0)
+    m_update_printer_bitmap->SetScaleMode(wxStaticBitmap::Scale_AspectFit);
+#endif
     top_row->Add(m_update_printer_bitmap, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(31));
 
     auto *info_box = new StaticBox(body, wxID_ANY);
@@ -8293,7 +8260,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     info_box->SetBorderColorNormal(wxColour("#C7C7C7"));
     info_box->SetBackgroundColorNormal(*wxWHITE);
     info_box->SetBackgroundColour(*wxWHITE);
-    info_box->SetMinSize(wxSize(FromDIP(351), FromDIP(156)));
+    info_box->SetMinSize(wxSize(FromDIP(351), FromDIP(196)));
 
     auto *info_col = new wxBoxSizer(wxVERTICAL);
     info_col->AddSpacer(FromDIP(21));
@@ -8317,7 +8284,8 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
 
     info_col->Add(make_info_row("Model", &m_update_model_value), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(18));
     info_col->Add(make_info_row("Serial", &m_update_serial_value), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(18));
-    info_col->Add(make_info_row("Version", &m_update_version_value), 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(18));
+    info_col->Add(make_info_row("Version", &m_update_version_value), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(18));
+    info_col->Add(make_info_row("Last Update", &m_update_last_update_value), 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(18));
     info_box->SetSizer(info_col);
     top_row->Add(info_box, 0, wxALIGN_CENTER_VERTICAL);
     top_row->AddStretchSpacer(1);
@@ -8361,7 +8329,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
     status_sizer->Add(status_col, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(26));
     status_sizer->AddStretchSpacer(1);
     status_box->SetSizer(status_sizer);
-    body_sizer->Add(status_box, 0, wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(16));
+    status_box->Hide();
 
     auto *actions = new wxPanel(body, wxID_ANY);
     actions->SetBackgroundColour(*wxWHITE);
@@ -8433,7 +8401,7 @@ wxPanel *PrinterWebView::create_update_page(wxWindow *parent)
         m_update_progress_timer->Start(250);
         refresh_update_page_from_selected_machine();
     });
-    actions_sizer->Add(update_button, 0, wxRIGHT, FromDIP(18));
+    update_button->Hide();
 
     auto *export_log_button = new Button(actions, "Export Log");
     export_log_button->SetMinSize(wxSize(FromDIP(189), FromDIP(44)));
@@ -9470,6 +9438,7 @@ void PrinterWebView::refresh_update_page_from_selected_machine()
         if (m_update_model_value != nullptr) m_update_model_value->SetLabelText("-");
         if (m_update_serial_value != nullptr) m_update_serial_value->SetLabelText("-");
         if (m_update_version_value != nullptr) m_update_version_value->SetLabelText("-");
+        if (m_update_last_update_value != nullptr) m_update_last_update_value->SetLabelText("-");
         if (m_update_status_value != nullptr) m_update_status_value->SetLabelText("Waiting for printer connection");
         if (m_update_percent_value != nullptr) {
             m_update_percent_value->SetLabelText("0%");
@@ -9487,10 +9456,8 @@ void PrinterWebView::refresh_update_page_from_selected_machine()
 
     const wxString klippy_label = klippy_state_label(m_klippy_state);
     const wxColour klippy_colour = klippy_state_colour(m_klippy_state);
-    if (m_update_header_title != nullptr) {
-        const wxString header_title = wxString::Format("%s (%s)", from_u8(obj->get_dev_name()), klippy_label);
-        m_update_header_title->SetLabelText(header_title);
-    }
+    if (m_update_header_title != nullptr)
+        m_update_header_title->SetLabelText(from_u8(obj->get_dev_name()));
     if (m_update_connection_badge != nullptr) {
         m_update_connection_badge->SetLabelText(wxString::Format("  %s  ", klippy_label));
         m_update_connection_badge->SetForegroundColour(klippy_colour);
@@ -9513,6 +9480,13 @@ void PrinterWebView::refresh_update_page_from_selected_machine()
             m_update_version_value->SetLabelText(from_u8(m_device_os_version));
         else
             m_update_version_value->SetLabelText("-");
+    }
+
+    if (m_update_last_update_value != nullptr) {
+        if (!m_device_last_update.empty())
+            m_update_last_update_value->SetLabelText(from_u8(m_device_last_update));
+        else
+            m_update_last_update_value->SetLabelText("-");
     }
 
     wxString current_version = "-";
@@ -9583,7 +9557,7 @@ void PrinterWebView::refresh_update_page_from_selected_machine()
 
     if (m_update_printer_bitmap != nullptr) {
         try {
-            const wxBitmap bmp = create_quadro_printer_thumbnail(this, 150);
+            const wxBitmap bmp = create_quadro_printer_thumbnail(this, 182);
             if (bmp.IsOk())
                 m_update_printer_bitmap->SetBitmap(bmp);
         } catch (...) {

@@ -15064,6 +15064,18 @@ void Plater::send_to_printer(bool isall)
     p->on_action_send_to_printer(isall);
 }
 
+void Plater::send_gcode_to_device()
+{
+    if (wxGetApp().preset_bundle && wxGetApp().preset_bundle->use_device_print_flow()) {
+        if (!p->m_start_print_dlg)
+            p->m_start_print_dlg = new StartPrintDialog(this);
+        p->m_start_print_dlg->prepare(p->partplate_list.get_curr_plate_index(), true);
+        p->m_start_print_dlg->ShowModal();
+    } else {
+        send_gcode_legacy();
+    }
+}
+
 //BBS export gcode 3mf to file
 void Plater::export_gcode_3mf(bool export_all)
 {
