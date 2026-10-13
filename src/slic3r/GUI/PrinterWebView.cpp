@@ -1163,86 +1163,82 @@ std::vector<wxString> configured_camera_snapshot_urls(MachineObject *obj)
         if (!host.empty())
             append_unique_camera_url(urls, wxString::Format("http://%s/webcam/?action=snapshot", host));
     }
+    for (const wxString &stream : configured_camera_stream_urls(obj))
+        append_unique_camera_url(urls, snapshot_url_from_stream_url(stream));
     return urls;
 }
 
-wxString camera_stream_page(const std::vector<wxString> &stream_urls, const std::vector<wxString> &snapshot_urls)
+wxString camera_stream_page(const std::vector<wxString> &snapshot_urls)
 {
-    // WKWebView does not reliably decode MJPEG (multipart/x-mixed-replace) in
-    // <img>. Snapshot JPEGs do load, so the live view is a short poll of
-    // /webcam/?action=snapshot rather than the never-ending stream URL.
+    // WKWebView does not reliably decode MJPEG. Poll JPEG snapshots instead,
+    // double-buffer so a failed fetch never blanks the last good frame, and
+    // keep retrying for as long as Play is on.
     const wxString snapshots_js = camera_urls_to_js(snapshot_urls);
-    const wxString streams_js = camera_urls_to_js(stream_urls);
 
     return "<!doctype html><html><head><meta charset='utf-8'>"
            "<style>"
            "html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;}"
-           "body{display:flex;align-items:center;justify-content:center;color:#b8bec8;font-family:Arial,sans-serif;}"
-           "#camera-stream{width:100%;height:100%;object-fit:contain;background:#000;}"
-           ".message{display:none;position:absolute;inset:0;align-items:center;justify-content:center;background:#000;}"
-           "body.loading .message,body.failed .message{display:flex;}"
+           "body{color:#b8bec8;font-family:Arial,sans-serif;}"
+           "#stage{position:absolute;inset:0;background:#000;}"
+           "#stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;"
+           "object-position:center;opacity:0;pointer-events:none;-webkit-user-select:none;"
+           "user-select:none;-webkit-user-drag:none;}"
+           "#stage img.show{opacity:1;}"
+           ".message{display:none;position:absolute;inset:0;align-items:center;justify-content:center;"
+           "background:#000;z-index:2;}"
+           "body.loading .message{display:flex;}"
            "</style></head><body class='loading'>"
-           "<img id='camera-stream' alt='Camera stream'>"
-           "<div class='message'>Camera stream unavailable</div>"
+           "<div id='stage'><img id='cam0' alt='' draggable='false'><img id='cam1' alt='' draggable='false'></div>"
+           "<div class='message'>Trying camera stream...</div>"
            "<script>"
            "const snapshots=[" + snapshots_js + "];"
-           "const streams=[" + streams_js + "];"
-           "let index=0,ok=false,timer=null,poll=null,errors=0;"
-           "const img=document.getElementById('camera-stream');"
+           "let index=0,ok=false,busy=false,poll=null,hang=null,errors=0,shown=0;"
+           "const imgs=[document.getElementById('cam0'),document.getElementById('cam1')];"
            "const msg=document.querySelector('.message');"
            "function bust(u){return u+(u.indexOf('?')>=0?'&':'?')+'_t='+Date.now();}"
            "function markOk(){"
            "if(ok)return;"
            "ok=true;"
-           "if(timer){clearTimeout(timer);timer=null;}"
            "document.title='coprint-camera-ok';"
            "document.body.className='';"
            "}"
-           "function fail(){"
-           "if(ok)return;"
-           "if(poll){clearTimeout(poll);poll=null;}"
-           "if(timer){clearTimeout(timer);timer=null;}"
-           "document.title='coprint-camera-fail';"
-           "document.body.className='failed';"
-           "msg.textContent='Camera stream unavailable';"
-           "}"
-           "function hasFrame(){return img.naturalWidth>0&&img.naturalHeight>0;}"
+           "function schedule(ms){if(poll)clearTimeout(poll);poll=setTimeout(loadSnap,ms);}"
+           "function clearHang(){if(hang){clearTimeout(hang);hang=null;}}"
            "function loadSnap(){"
-           "if(index>=snapshots.length){fail();return;}"
-           "img.src=bust(snapshots[index]);"
-           "}"
-           "function nextSnap(){"
-           "if(ok)return;"
-           "index++;"
-           "errors=0;"
-           "if(timer){clearTimeout(timer);timer=null;}"
-           "if(index>=snapshots.length){fail();return;}"
-           "timer=setTimeout(function(){if(!ok)nextSnap();},8000);"
-           "loadSnap();"
-           "}"
-           "img.onload=function(){"
-           "if(!hasFrame())return;"
-           "errors=0;"
+           "if(busy||!snapshots.length)return;"
+           "busy=true;"
+           "const hidden=imgs[1-shown];"
+           "clearHang();"
+           "hang=setTimeout(function(){if(!busy)return;busy=false;errors++;schedule(ok?1500:500);},8000);"
+           "hidden.onload=function(){"
+           "clearHang();if(!busy)return;"
+           "busy=false;errors=0;"
+           "imgs[shown].className='';"
+           "hidden.className='show';"
+           "shown=1-shown;"
            "markOk();"
-           "if(poll)clearTimeout(poll);"
-           "poll=setTimeout(loadSnap,400);"
+           "schedule(400);"
            "};"
-           "img.onerror=function(){"
-           "if(ok){if(poll)clearTimeout(poll);poll=setTimeout(loadSnap,800);return;}"
-           "errors++;"
-           "if(errors>=3)nextSnap();"
-           "else{if(poll)clearTimeout(poll);poll=setTimeout(loadSnap,500);}"
+           "hidden.onerror=function(){"
+           "clearHang();if(!busy)return;"
+           "busy=false;errors++;"
+           "if(!ok){"
+           "if(errors>=3){index=(index+1)%snapshots.length;errors=0;}"
+           "schedule(500);"
+           "return;"
+           "}"
+           "schedule(Math.min(4000,800*Math.min(errors,5)));"
            "};"
+           "hidden.src=bust(snapshots[index]);"
+           "}"
            "if(snapshots.length){"
            "document.title='coprint-camera-loading';"
-           "msg.textContent='Trying camera stream...';"
-           "timer=setTimeout(function(){if(!ok)nextSnap();},8000);"
+           "setTimeout(function(){if(!ok)msg.textContent='Waiting for camera...';},12000);"
            "loadSnap();"
-           "}else if(streams.length){"
-           "img.src=streams[0];"
-           "timer=setTimeout(function(){if(!ok)fail();},8000);"
-           "setInterval(function(){if(!ok&&hasFrame())markOk();},250);"
-           "}else{fail();}"
+           "}else{"
+           "document.title='coprint-camera-fail';"
+           "msg.textContent='Camera stream unavailable';"
+           "}"
            "</script></body></html>";
 }
 
@@ -7027,12 +7023,6 @@ void PrinterWebView::ensure_camera_webview_created()
             return;
         handle_camera_webview_title(event.GetString());
     });
-    m_camera_webview->Bind(wxEVT_WEBVIEW_LOADED, [this, title_lifetime](wxWebViewEvent &) {
-        if (title_lifetime.expired() || m_destroying || !m_camera_stream_requested)
-            return;
-        if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
-            m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Live);
-    });
     m_camera_webview->Bind(wxEVT_WEBVIEW_ERROR, [this, title_lifetime](wxWebViewEvent &event) {
         if (title_lifetime.expired() || m_destroying)
             return;
@@ -9216,7 +9206,6 @@ void PrinterWebView::handle_camera_webview_title(const wxString &title)
     }
     if (title != "coprint-camera-fail")
         return;
-    m_camera_stream_requested = false;
     m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Failed);
 }
 
@@ -9226,7 +9215,6 @@ void PrinterWebView::load_camera_snapshot_fallback()
     MachineObject *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;
     const std::vector<wxString> snapshot_urls = configured_camera_snapshot_urls(obj);
     if (snapshot_urls.empty() || m_camera_webview == nullptr) {
-        m_camera_stream_requested = false;
         m_camera_using_direct_url = false;
         if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
             m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Failed);
@@ -9235,7 +9223,7 @@ void PrinterWebView::load_camera_snapshot_fallback()
 
     m_camera_using_direct_url = false;
     m_camera_stream_url = snapshot_urls.front();
-    m_camera_webview->SetPage(camera_stream_page({}, snapshot_urls), m_camera_stream_url.BeforeLast('/'));
+    m_camera_webview->SetPage(camera_stream_page(snapshot_urls), m_camera_stream_url.BeforeLast('/'));
 }
 
 void PrinterWebView::handle_camera_webview_error(const wxWebViewEvent &event)
@@ -9257,20 +9245,23 @@ void PrinterWebView::handle_camera_webview_error(const wxWebViewEvent &event)
 void PrinterWebView::refresh_camera_stream(MachineObject *obj)
 {
     const std::string next_machine_id = obj != nullptr ? obj->get_dev_id() : "";
-    const std::vector<wxString> camera_urls = configured_camera_stream_urls(obj);
-    const wxString next_url = camera_urls.empty() ? wxString() : camera_urls.front();
+    const std::vector<wxString> snapshot_urls = configured_camera_snapshot_urls(obj);
+    const wxString next_url = snapshot_urls.empty() ? wxString() : snapshot_urls.front();
 
     const bool machine_changed = next_machine_id != m_camera_machine_id;
     if (machine_changed) {
-        m_camera_stream_requested = false;
-        m_camera_using_direct_url = false;
-        if (m_camera_webview != nullptr)
-            m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
+        if (next_machine_id.empty())
+            return;
         m_camera_machine_id = next_machine_id;
         m_camera_stream_url.clear();
-        if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
-            m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Idle);
-        return;
+        m_camera_using_direct_url = false;
+        if (!m_camera_stream_requested) {
+            if (m_camera_webview != nullptr)
+                m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
+            if (m_dashboard_page != nullptr && m_dashboard_page->camera_panel() != nullptr)
+                m_dashboard_page->camera_panel()->set_load_state(DeviceDashboard::CameraLoadState::Idle);
+            return;
+        }
     }
 
     if (!m_camera_stream_requested)
@@ -9278,18 +9269,19 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
 
     DeviceDashboard::CameraPanel *cam =
         m_dashboard_page != nullptr ? m_dashboard_page->camera_panel() : nullptr;
-    const bool stream_changed = next_url != m_camera_stream_url;
-    m_camera_stream_url = next_url;
 
     if (next_url.IsEmpty()) {
-        m_camera_stream_requested = false;
         m_camera_using_direct_url = false;
-        if (m_camera_webview != nullptr)
-            m_camera_webview->SetPage("<!doctype html><html><body style='margin:0;background:#000'></body></html>", "");
-        if (cam != nullptr)
+        if (cam != nullptr && cam->load_state() != DeviceDashboard::CameraLoadState::Live)
             cam->set_load_state(DeviceDashboard::CameraLoadState::Failed);
         return;
     }
+
+    if (next_url == m_camera_stream_url)
+        return;
+
+    m_camera_stream_url = next_url;
+    m_camera_using_direct_url = false;
 
     if (cam != nullptr && cam->load_state() != DeviceDashboard::CameraLoadState::Live)
         cam->set_load_state(DeviceDashboard::CameraLoadState::Initializing);
@@ -9298,18 +9290,12 @@ void PrinterWebView::refresh_camera_stream(MachineObject *obj)
         ensure_camera_webview_created();
 
     if (m_camera_webview == nullptr) {
-        m_camera_stream_requested = false;
         if (cam != nullptr)
             cam->set_load_state(DeviceDashboard::CameraLoadState::Failed);
         return;
     }
 
-    if (stream_changed) {
-        m_camera_using_direct_url = false;
-        m_camera_webview->SetPage(camera_live_page(next_url), next_url.BeforeLast('/'));
-        if (cam != nullptr)
-            cam->set_load_state(DeviceDashboard::CameraLoadState::Live);
-    }
+    m_camera_webview->SetPage(camera_stream_page(snapshot_urls), next_url.BeforeLast('/'));
 }
 
 void PrinterWebView::toggle_camera_timelapse()
