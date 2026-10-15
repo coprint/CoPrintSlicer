@@ -9,23 +9,35 @@
 	"filament_vendor": [
 		"Co Print"
 	],
+	"close_fan_the_first_x_layers": [
+		"3"
+	],
+	"fan_cooling_layer_time": [
+		"30"
+	],
 	"fan_max_speed": [
-		"90"
+		"40"
 	],
 	"fan_min_speed": [
-		"60"
+		"30"
 	],
-	"filament_deretraction_speed": [
-		"50"
+	"filament_flow_ratio": [
+		"0.935"
+	],
+	"filament_max_volumetric_speed": [
+		"14"
 	],
 	"filament_retraction_length": [
-		"1.2"
+		"1.5"
 	],
 	"filament_retraction_speed": [
-		"50"
+		"30"
 	],
 	"filament_type": [
 		"PETG"
+	],
+	"full_fan_speed_layer": [
+		"0"
 	],
 	"hot_plate_temp": [
 		"70"
@@ -34,10 +46,25 @@
 		"70"
 	],
 	"nozzle_temperature": [
-		"240"
+		"245"
 	],
 	"nozzle_temperature_initial_layer": [
-		"240"
+		"245"
+	],
+	"nozzle_temperature_range_high": [
+		"270"
+	],
+	"nozzle_temperature_range_low": [
+		"230"
+	],
+	"overhang_fan_threshold": [
+		"10%"
+	],
+	"pressure_advance": [
+		"0.044"
+	],
+	"slow_down_layer_time": [
+		"10"
 	],
 	"compatible_printers": [
 		"Co Print Quadro 0.2 nozzle",

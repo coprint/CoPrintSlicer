@@ -9,6 +9,9 @@
 	"filament_vendor": [
 		"Co Print"
 	],
+	"fan_cooling_layer_time": [
+		"100"
+	],
 	"fan_max_speed": [
 		"80"
 	],
@@ -19,19 +22,25 @@
 		"20"
 	],
 	"filament_flow_ratio": [
-		"0.97"
+		"0.95"
+	],
+	"filament_max_volumetric_speed": [
+		"3"
 	],
 	"filament_retract_when_changing_layer": [
 		"0"
 	],
 	"filament_retraction_length": [
-		"1.8"
+		"1"
 	],
 	"filament_retraction_speed": [
 		"20"
 	],
 	"filament_type": [
 		"TPU"
+	],
+	"full_fan_speed_layer": [
+		"0"
 	],
 	"hot_plate_temp": [
 		"50"
@@ -44,6 +53,18 @@
 	],
 	"nozzle_temperature_initial_layer": [
 		"230"
+	],
+	"overhang_fan_threshold": [
+		"95%"
+	],
+	"pressure_advance": [
+		"0.06"
+	],
+	"slow_down_layer_time": [
+		"8"
+	],
+	"slow_down_min_speed": [
+		"10"
 	],
 	"compatible_printers": [
 		"Co Print Quadro 0.2 nozzle",
