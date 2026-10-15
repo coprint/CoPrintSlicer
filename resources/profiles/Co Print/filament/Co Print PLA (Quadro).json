@@ -16,10 +16,10 @@
         "9.75"
     ],
     "filament_flow_ratio": [
-        "0.97"
+        "0.935"
     ],
     "filament_max_volumetric_speed": [
-        "16"
+        "14"
     ],
     "full_fan_speed_layer": [
         "2"
@@ -31,10 +31,10 @@
         "220"
     ],
     "pressure_advance": [
-        "0.06"
+        "0.044"
     ],
     "slow_down_layer_time": [
-        "4"
+        "7"
     ],
     "slow_down_min_speed": [
         "20"

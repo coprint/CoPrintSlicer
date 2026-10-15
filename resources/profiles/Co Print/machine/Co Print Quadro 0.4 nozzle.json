@@ -94,7 +94,7 @@
     "input_shaping_freq_x": "0",
     "input_shaping_freq_y": "0",
     "input_shaping_type": "Default",
-    "layer_change_gcode": "TIMELAPSE_TAKE_FRAME\n",
+    "layer_change_gcode": "TIMELAPSE_TAKE_PHOTO\n",
     "long_retractions_when_cut": [
         "0",
         "0",
@@ -102,7 +102,7 @@
         "0"
     ],
     "machine_end_gcode": "end_print",
-    "machine_load_filament_time": "1",
+    "machine_load_filament_time": "0",
     "machine_max_acceleration_e": [
         "5000",
         "5000"
@@ -120,15 +120,15 @@
         "12000"
     ],
     "machine_max_acceleration_x": [
-        "7000",
+        "10000",
         "7000"
     ],
     "machine_max_acceleration_y": [
-        "7000",
+        "10000",
         "7000"
     ],
     "machine_max_acceleration_z": [
-        "100",
+        "500",
         "100"
     ],
     "machine_max_jerk_e": [
@@ -151,19 +151,19 @@
         "0.01"
     ],
     "machine_max_speed_e": [
-        "100",
+        "200",
         "100"
     ],
     "machine_max_speed_x": [
-        "300",
+        "350",
         "300"
     ],
     "machine_max_speed_y": [
-        "300",
+        "350",
         "300"
     ],
     "machine_max_speed_z": [
-        "7",
+        "20",
         "7"
     ],
     "machine_min_extruding_rate": [
@@ -174,8 +174,8 @@
     ],
     "machine_pause_gcode": "",
     "machine_start_gcode": "start_print EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] PURGE_LINE='false' BED_TEMP=[bed_temperature_initial_layer_single] EXT0={is_extruder_used[0]} EXT1={is_extruder_used[1]} EXT2={is_extruder_used[2]} EXT3={is_extruder_used[3]} EXT0_TEMP={nozzle_temperature_initial_layer[0]} EXT1_TEMP={nozzle_temperature_initial_layer[1]} EXT2_TEMP={nozzle_temperature_initial_layer[2]} EXT3_TEMP={nozzle_temperature_initial_layer[3]}",
-    "machine_tool_change_time": "1.5",
-    "machine_unload_filament_time": "1",
+    "machine_tool_change_time": "0",
+    "machine_unload_filament_time": "0",
     "manual_filament_change": "0",
     "master_extruder_id": "1",
     "max_layer_height": [
@@ -321,10 +321,10 @@
         "18"
     ],
     "retraction_length": [
-        "0.5",
-        "0.5",
-        "0.5",
-        "0.5"
+        "0.4",
+        "0.4",
+        "0.4",
+        "0.4"
     ],
     "retraction_minimum_travel": [
         "1",
@@ -333,10 +333,10 @@
         "1"
     ],
     "retraction_speed": [
-        "60",
-        "60",
-        "60",
-        "60"
+        "30",
+        "30",
+        "30",
+        "30"
     ],
     "scan_first_layer": "0",
     "silent_mode": "0",
@@ -362,7 +362,7 @@
     "use_3mf": "0",
     "use_firmware_retraction": "0",
     "use_relative_e_distances": "1",
-    "version": "2.4.0.15",
+    "version": "2.4.0.16",
     "wipe": [
         "1",
         "1",

@@ -9,8 +9,20 @@
     "filament_vendor": [
         "Co Print"
     ],
+    "filament_flow_ratio": [
+        "0.97"
+    ],
+    "filament_max_volumetric_speed": [
+        "16"
+    ],
     "filament_type": [
         "PLA-HF"
+    ],
+    "pressure_advance": [
+        "0.06"
+    ],
+    "slow_down_layer_time": [
+        "4"
     ],
     "compatible_printers": [
         "Co Print Quadro 0.2 nozzle",
