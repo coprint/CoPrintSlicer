@@ -678,9 +678,11 @@ bool is_coprint_filament_preset(const Preset *preset)
 {
     if (preset == nullptr)
         return false;
-    if (boost::algorithm::istarts_with(preset->name, "CoPrint "))
-        return true;
-    if (boost::algorithm::icontains(preset->name, "CoPrint Generic"))
+    // Installed names are "Co Print TPU (Quadro)", not "CoPrint ...".
+    if (boost::algorithm::istarts_with(preset->name, "CoPrint ") ||
+        boost::algorithm::istarts_with(preset->name, "Co Print ") ||
+        boost::algorithm::icontains(preset->name, "CoPrint Generic") ||
+        boost::algorithm::icontains(preset->name, "Co Print"))
         return true;
     const std::string vendor = preset->config.opt_string("filament_vendor", 0u);
     return boost::algorithm::iequals(vendor, "Co Print") || boost::algorithm::iequals(vendor, "CoPrint");
@@ -969,7 +971,12 @@ void PresetBundle::enforce_coprint_identity(const std::string &preferred_printer
         if (is_coprint_filament_preset(current))
             continue;
 
-        const std::string filament_type = current ? current->config.opt_string("filament_type", 0u) : std::string("PLA");
+        // Missing slot used to default to PLA, which replaced TPU/custom on
+        // filament 1 after 3MF load. Infer the type from the stored name
+        // ("... TPU ...") so remap lands on the matching Co Print generic.
+        const std::string filament_type = current
+            ? current->config.opt_string("filament_type", 0u)
+            : this->filament_presets[i];
         const std::string target_name   = map_filament_type_to_coprint_generic(filament_type, is_quadro);
         Preset *target                  = this->filaments.find_preset(target_name, false);
         if (target == nullptr) {
@@ -5734,7 +5741,8 @@ void PresetBundle::update_multi_material_filament_presets(size_t to_delete_filam
     size_t num_extruders  = nozzle_diameter->values.size();
     if (num_extruders > num_filaments) { // Verify validity of the current filament presets.
         for (size_t i = 0; i < std::min(this->filament_presets.size(), num_extruders); ++i)
-            this->filament_presets[i] = this->filaments.find_preset(this->filament_presets[i], true)->name;
+            if (const Preset *preset = this->filaments.find_preset(this->filament_presets[i], false))
+                this->filament_presets[i] = preset->name;
         // Append the rest of filament presets.
         this->filament_presets.resize(num_extruders, this->filament_presets.empty() ? this->filaments.first_visible().name :
                                                                                       this->filament_presets.back());

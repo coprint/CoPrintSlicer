@@ -2577,9 +2577,14 @@ void Sidebar::update_presets(Preset::Type preset_type)
         const size_t filament_cnt = p->combos_filament.size();
 #endif
         const std::string &name = preset_bundle.filaments.get_selected_preset_name();
+        // Only a true single-filament project should copy the Filament tab's
+        // selected preset into slot 0. Combo widgets are often still size 1
+        // while a 3MF with 4 filaments is loading; using that count here
+        // replaced TPU/custom slot 1 with the printer default (PLA) while
+        // leaving slots 2-4 intact.
         if (p->editing_filament >= 0) {
             preset_bundle.set_filament_preset(p->editing_filament, name);
-        } else if (filament_cnt == 1) {
+        } else if (filament_cnt <= 1 && preset_bundle.filament_presets.size() <= 1) {
             // Single filament printer, synchronize the filament presets.
             Preset *preset = preset_bundle.filaments.find_preset(name, false);
             if (preset) {
@@ -6698,6 +6703,7 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             }
 
                             preset_bundle->load_config_model(filename.string(), std::move(config), file_version, coprint_target_printer);
+                            const std::vector<std::string> loaded_filament_presets = preset_bundle->filament_presets;
 
                             ConfigOption* bed_type_opt = preset_bundle->project_config.option("curr_bed_type");
                             if (bed_type_opt != nullptr) {
@@ -6766,15 +6772,29 @@ std::vector<size_t> Plater::priv::load_files(const std::vector<fs::path>& input_
                             // For exporting from the amf/3mf we shouldn't check printer_presets for the containing information about "Print Host upload"
                             // BBS: add preset combo box re-active logic
                             // currently found only needs re-active here
+                            sidebar->finish_param_edit();
                             wxGetApp().load_current_presets(false, false);
                             // CoPrint: load_current_presets can rebind UI around foreign project presets —
                             // enforce again with the chosen/restore/native target so Bambu never sticks.
                             preset_bundle->enforce_coprint_identity(coprint_target_printer);
                             wxGetApp().load_current_presets(false, false);
+                            // load_current_presets / Filament tab reload can replace slot 0 with the
+                            // printer default (PLA) while leaving slots 2-4 from the 3MF. Put the
+                            // loaded names back, then remap any remaining foreign presets.
+                            if (!loaded_filament_presets.empty()) {
+                                if (preset_bundle->filament_presets.size() < loaded_filament_presets.size())
+                                    preset_bundle->filament_presets.resize(loaded_filament_presets.size());
+                                for (size_t i = 0; i < loaded_filament_presets.size() && i < preset_bundle->filament_presets.size(); ++i) {
+                                    if (preset_bundle->filaments.find_preset(loaded_filament_presets[i], false))
+                                        preset_bundle->filament_presets[i] = loaded_filament_presets[i];
+                                }
+                                preset_bundle->enforce_coprint_identity(coprint_target_printer);
+                            }
                             // Update filament colors for the MM-printer profile in the full config
                             // to avoid black (default) colors for Extruders in the ObjectList,
                             // when for extruder colors are used filament colors
                             q->on_filament_count_change(preset_bundle->filament_presets.size());
+                            sidebar->update_presets(Preset::TYPE_FILAMENT);
                             is_project_file = true;
 
                             DynamicConfig& proj_cfg = preset_bundle->project_config;
@@ -9668,6 +9688,16 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
 
     if (preset_type == Preset::TYPE_FILAMENT) {
         wxGetApp().preset_bundle->set_filament_preset(idx, preset_name);
+        // Slot 0 is the Filament tab's selected preset. Multi-filament UI
+        // skips Tab::select_preset below, so without this the tab stays on
+        // the printer default (PLA) and 3MF export/load restores PLA for
+        // filament 1 while slots 2-4 keep the chosen TPU/custom preset.
+        if (idx == 0) {
+            if (Preset *fp = wxGetApp().preset_bundle->filaments.find_preset(preset_name, false)) {
+                fp->is_visible = true;
+                wxGetApp().preset_bundle->filaments.select_preset_by_name(preset_name, true);
+            }
+        }
         wxGetApp().plater()->update_project_dirty_from_presets();
         wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
         sidebar->update_dynamic_filament_list();
@@ -15684,6 +15714,17 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
     // take care about private data stored into .3mf
     // modify model
     publish(p->model, strategy);
+
+    // Keep filament_settings_id[0] on the sidebar slot-1 preset. Multi-filament
+    // UI does not always select that preset in the Filament tab, which otherwise
+    // stays on the printer default (PLA) and would be exported for filament 1.
+    if (!wxGetApp().preset_bundle->filament_presets.empty()) {
+        if (Preset *first = wxGetApp().preset_bundle->filaments.find_preset(
+                wxGetApp().preset_bundle->filament_presets.front(), false)) {
+            first->is_visible = true;
+            wxGetApp().preset_bundle->filaments.select_preset_by_name(first->name, true);
+        }
+    }
 
     DynamicPrintConfig cfg = wxGetApp().preset_bundle->full_config_secure();
     const std::string path_u8 = into_u8(path);
