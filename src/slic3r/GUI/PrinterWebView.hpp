@@ -72,6 +72,8 @@ public:
     void ensure_coprint_storage_page();
     void set_coprint_storage_mode(bool print_models);
     void attach_media_pages(CloudTaskManagerPage *timelapse, CloudTaskManagerPage *models);
+    void set_open_media_timelapse_handler(std::function<void()> handler);
+    void open_media_timelapse_page();
     void mark_printer_connecting(const std::string &dev_id);
     bool is_printer_connecting(const MachineObject *machine) const;
 
@@ -326,6 +328,7 @@ private:
     CloudTaskManagerPage *m_storage_page{ nullptr };
     CloudTaskManagerPage *m_media_timelapse_page{ nullptr };
     CloudTaskManagerPage *m_media_models_page{ nullptr };
+    std::function<void()> m_open_media_timelapse_handler;
     DeviceDashboard::PrinterOfflineOverlay *m_update_offline_overlay{nullptr};
     bool m_embedded_in_monitor{false};
     enum class DeviceWarnAck { None, KlippyFault, Unreachable };

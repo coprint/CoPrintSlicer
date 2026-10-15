@@ -290,6 +290,7 @@ void MonitorPanel::ensure_coprint_backend()
     }
 
     m_coprint_backend->attach_media_pages(m_coprint_storage_page, m_coprint_print_models_page);
+    m_coprint_backend->set_open_media_timelapse_handler([this]() { show_coprint_media_timelapse_page(); });
 }
 
 void MonitorPanel::sync_coprint_page_hosting(bool embedded)
@@ -439,6 +440,18 @@ void MonitorPanel::show_coprint_status_page()
         m_coprint_backend->refresh_layer_info_from_selected_machine();
     if (m_coprint_printer_picker != nullptr)
         m_coprint_printer_picker->set_status_page_active(true);
+    Layout();
+}
+
+void MonitorPanel::show_coprint_media_timelapse_page()
+{
+    if (m_tabpanel == nullptr || m_coprint_models_tab_index < 0)
+        return;
+    m_tabpanel->SetSelection(m_coprint_models_tab_index);
+    if (m_coprint_print_models_page != nullptr)
+        m_coprint_print_models_page->show_timelapse();
+    if (m_coprint_printer_picker != nullptr)
+        m_coprint_printer_picker->set_status_page_active(false);
     Layout();
 }
 

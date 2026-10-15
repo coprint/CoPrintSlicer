@@ -2510,7 +2510,7 @@ PrinterWebView::PrinterWebView(wxWindow *parent)
         else
             start_camera_stream();
     });
-    m_dashboard_page->set_camera_timelapse_handler([this]() { toggle_camera_timelapse(); });
+    m_dashboard_page->set_camera_timelapse_handler([this]() { open_media_timelapse_page(); });
 
     if (m_camera_webview_host != nullptr) {
         m_camera_webview_host->SetMinSize(wxSize(FromDIP(420), FromDIP(236)));
@@ -2680,6 +2680,25 @@ void PrinterWebView::set_sidebar_visible(bool visible)
     if (m_preview_menu_panel != nullptr)
         m_preview_menu_panel->Show(visible);
     Layout();
+}
+
+void PrinterWebView::set_open_media_timelapse_handler(std::function<void()> handler)
+{
+    m_open_media_timelapse_handler = std::move(handler);
+}
+
+void PrinterWebView::open_media_timelapse_page()
+{
+    if (m_embedded_in_monitor && m_open_media_timelapse_handler) {
+        m_open_media_timelapse_handler();
+        return;
+    }
+
+    select_tab(PrinterWebViewTab::PrintModels);
+    if (m_storage_page != nullptr)
+        m_storage_page->show_timelapse();
+    else if (m_media_models_page != nullptr)
+        m_media_models_page->show_timelapse();
 }
 
 void PrinterWebView::attach_media_pages(CloudTaskManagerPage *timelapse, CloudTaskManagerPage *models)

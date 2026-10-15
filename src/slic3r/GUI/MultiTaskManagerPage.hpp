@@ -199,6 +199,7 @@ public:
     void page_num_enter_evt();
 
     void msw_rescale();
+    void show_timelapse();
 
 private:
     void set_media_mode(bool timelapse);

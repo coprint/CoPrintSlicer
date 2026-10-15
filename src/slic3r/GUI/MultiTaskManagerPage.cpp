@@ -3842,6 +3842,11 @@ CloudTaskManagerPage::~CloudTaskManagerPage()
     delete m_flipping_timer;
 }
 
+void CloudTaskManagerPage::show_timelapse()
+{
+    set_media_mode(true);
+}
+
 void CloudTaskManagerPage::set_media_mode(bool timelapse)
 {
     if (m_media_presentation != MediaPresentation::Combined)

@@ -163,6 +163,7 @@ public:
     }
     bool is_quadro_device_ui() const { return m_device_ui_mode == DeviceUiMode::CoPrint; }
     void show_coprint_status_page();
+    void show_coprint_media_timelapse_page();
     Tabbook* get_tabpanel() { return m_tabpanel; };
     DeviceDashboard::MoonrakerDeviceController* coprint_device_controller() { return m_coprint_controller.get(); }
     PrinterWebView* coprint_backend() { return m_coprint_backend; }
