@@ -6672,6 +6672,14 @@ void Tab::save_preset(std::string name /*= ""*/, bool detach, bool save_to_proje
     // to the treectrl so that the EVT_* events are fired for the input field having
     // focus currently.is there anything better than this ?
 //!	m_tabctrl->OnSetFocus();
+    int filament_slot = -1;
+    if (m_type == Preset::TYPE_FILAMENT && wxGetApp().plater() != nullptr) {
+        if (m_presets_choice != nullptr)
+            filament_slot = m_presets_choice->get_filament_idx();
+        if (filament_slot < 0)
+            filament_slot = wxGetApp().plater()->sidebar().editing_filament_idx();
+    }
+
     if (from_input) {
         SavePresetDialog dlg(m_parent, m_type, m_mode, detach ? _u8L("Detached") : "");
         dlg.Show(false);
@@ -6747,8 +6755,14 @@ void Tab::save_preset(std::string name /*= ""*/, bool detach, bool save_to_proje
     // Update the selection boxes at the plater.
     on_presets_changed();
 
-    //BBS if create a new prset name, preset changed from preset name to new preset name
-    if (!exist_preset) {
+    // Apply the new name only to the color slot being edited. Remapping every
+    // slot that still pointed at PLA (the Filament tab default) would leave the
+    // TPU/PETG slot unchanged and make the save dialog look like PLA.
+    if (m_type == Preset::TYPE_FILAMENT && filament_slot >= 0 &&
+        filament_slot < static_cast<int>(m_preset_bundle->filament_presets.size())) {
+        m_preset_bundle->set_filament_preset(filament_slot, new_preset->name);
+        wxGetApp().plater()->sidebar().update_presets(Preset::TYPE_FILAMENT);
+    } else if (!exist_preset) {
         wxGetApp().plater()->sidebar().update_presets_from_to(m_type, curr_preset_name, new_preset->name);
     }
 

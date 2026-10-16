@@ -4245,6 +4245,8 @@ bool Sidebar::show_object_list(bool show) const
 
 void Sidebar::finish_param_edit() { p->editing_filament = -1; }
 
+int Sidebar::editing_filament_idx() const { return p->editing_filament; }
+
 std::vector<PlaterPresetComboBox*>& Sidebar::combos_filament()
 {
     return p->combos_filament;
@@ -9688,11 +9690,10 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
 
     if (preset_type == Preset::TYPE_FILAMENT) {
         wxGetApp().preset_bundle->set_filament_preset(idx, preset_name);
-        // Slot 0 is the Filament tab's selected preset. Multi-filament UI
-        // skips Tab::select_preset below, so without this the tab stays on
-        // the printer default (PLA) and 3MF export/load restores PLA for
-        // filament 1 while slots 2-4 keep the chosen TPU/custom preset.
-        if (idx == 0) {
+        // Slot 0 is the Filament tab's selected preset. Sync it only when
+        // the user actually changes slot 0 and is not editing another color
+        // (backup/export used to force PLA here and wipe TPU/PETG edits).
+        if (idx == 0 && sidebar->editing_filament_idx() <= 0) {
             if (Preset *fp = wxGetApp().preset_bundle->filaments.find_preset(preset_name, false)) {
                 fp->is_visible = true;
                 wxGetApp().preset_bundle->filaments.select_preset_by_name(preset_name, true);
@@ -15714,17 +15715,6 @@ int Plater::export_3mf(const boost::filesystem::path& output_path, SaveStrategy 
     // take care about private data stored into .3mf
     // modify model
     publish(p->model, strategy);
-
-    // Keep filament_settings_id[0] on the sidebar slot-1 preset. Multi-filament
-    // UI does not always select that preset in the Filament tab, which otherwise
-    // stays on the printer default (PLA) and would be exported for filament 1.
-    if (!wxGetApp().preset_bundle->filament_presets.empty()) {
-        if (Preset *first = wxGetApp().preset_bundle->filaments.find_preset(
-                wxGetApp().preset_bundle->filament_presets.front(), false)) {
-            first->is_visible = true;
-            wxGetApp().preset_bundle->filaments.select_preset_by_name(first->name, true);
-        }
-    }
 
     DynamicPrintConfig cfg = wxGetApp().preset_bundle->full_config_secure();
     const std::string path_u8 = into_u8(path);
