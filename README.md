@@ -25,7 +25,7 @@ For detailed information about Quadro, visit <a href="https://coprint3d.com/page
 
 </div>
 
-> **Note:** A dedicated wiki for CoPrintSlicer and Quadro is not published yet. Once available, it will be linked here and at [wiki.coprint3d.com](https://wiki.coprint3d.com/).
+> **Note:** Documentation lives at [wiki.coprint3d.com/en/CoPrintSlicer](https://wiki.coprint3d.com/en/CoPrintSlicer).
 
 # Download
 

@@ -8,7 +8,9 @@
 #include "MainFrame.hpp"
 #include "format.hpp"
 #include "Widgets/Button.hpp"
+#include "Widgets/Label.hpp"
 
+#include <algorithm>
 #include <wx/clipbrd.h>
 
 namespace Slic3r {
@@ -37,6 +39,29 @@ void AboutDialogLogo::onRepaint(wxEvent &event)
     event.Skip();
 }
 
+// wxHtmlWindow on macOS measures regular spaces as zero-width when SetFonts
+// uses the system UI face (".AppleSystemUIFont"). Words then run together.
+static wxString html_preserve_spaces(const wxString &text)
+{
+    wxString out = text;
+    out.Replace(" ", "&nbsp;", true);
+    return out;
+}
+
+static void apply_html_fonts(wxHtmlWindow *html, const wxWindow *host)
+{
+    wxFont      font = get_default_font(host);
+    const int   fs   = font.GetPointSize();
+    int         size[] = {fs, fs, fs, fs, fs, fs, fs};
+#ifdef __WXOSX__
+    const wxString face("Helvetica");
+#else
+    wxString face = font.GetFaceName();
+    if (face.empty() || face.StartsWith("."))
+        face = "Arial";
+#endif
+    html->SetFonts(face, face, size);
+}
 
 // -----------------------------------------
 // CopyrightsDialog
@@ -61,12 +86,7 @@ CopyrightsDialog::CopyrightsDialog()
                               wxSize(40 * em_unit(), 20 * em_unit()), wxHW_SCROLLBAR_AUTO);
     m_html->SetMinSize(wxSize(FromDIP(870),FromDIP(520)));
     m_html->SetBackgroundColour(*wxWHITE);
-    wxFont font = get_default_font(this);
-    const int fs = font.GetPointSize();
-    const int fs2 = static_cast<int>(1.2f*fs);
-    int size[] = { fs, fs, fs, fs, fs2, fs2, fs2 };
-
-    m_html->SetFonts(font.GetFaceName(), font.GetFaceName(), size);
+    apply_html_fonts(m_html, this);
     m_html->SetBorders(2);
     m_html->SetPage(get_html_text());
 
@@ -130,33 +150,29 @@ wxString CopyrightsDialog::get_html_text()
     const auto text_clr_str = encode_color(ColorRGB(text_clr.Red(), text_clr.Green(), text_clr.Blue()));
     const auto bgr_clr_str = encode_color(ColorRGB(bgr_clr.Red(), bgr_clr.Green(), bgr_clr.Blue()));
 
-    const wxString copyright_str = _L("Copyright") + "&copy; ";
-
     wxString text = wxString::Format(
         "<html>"
-            "<body bgcolor= %s link= %s>"
-            "<font color=%s>"
+            "<body bgcolor=\"%s\" link=\"%s\">"
+            "<font color=\"%s\">"
                 "<font size=\"5\">%s</font><br/>"
-                "<font size=\"5\">%s</font>"
-                "<a href=\"%s\">%s.</a><br/>"
-                "<font size=\"5\">%s.</font><br/>"
+                "<font size=\"4\">%s<a href=\"%s\">%s</a>.</font><br/>"
+                "<font size=\"4\">%s.</font><br/>"
                 "<br /><br />"
                 "<font size=\"5\">%s</font><br/>"
-                "<font size=\"5\">%s:</font><br/>"
+                "<font size=\"4\">%s:</font><br/>"
                 "<br />"
                 "<font size=\"3\">",
          bgr_clr_str, text_clr_str, text_clr_str,
-        _L("License"),
-        _L("CoPrintSlicer is licensed under "),
-        "https://www.gnu.org/licenses/agpl-3.0.html",_L("GNU Affero General Public License, version 3"),
-        _L("CoPrintSlicer is based on OrcaSlicer"),
-        _L("Libraries"),
-        _L("This software uses open source components whose copyright and other proprietary rights belong to their respective owners"));
+        html_preserve_spaces(_L("License")),
+        html_preserve_spaces(_L("CoPrintSlicer is licensed under ")),
+        "https://www.gnu.org/licenses/agpl-3.0.html",
+        html_preserve_spaces(_L("GNU Affero General Public License, version 3")),
+        html_preserve_spaces(_L("CoPrintSlicer is based on OrcaSlicer")),
+        html_preserve_spaces(_L("Libraries")),
+        html_preserve_spaces(_L("This software uses open source components whose copyright and other proprietary rights belong to their respective owners")));
 
     for (auto& entry : m_entries) {
-        text += format_wxstr(
-                    "%s<br/>"
-                    , entry.lib_name);
+        text += html_preserve_spaces(from_u8(entry.lib_name)) + "<br/>";
 
          text += wxString::Format(
                     "<a href=\"%s\">%s</a><br/><br/>"
@@ -174,12 +190,7 @@ wxString CopyrightsDialog::get_html_text()
 
 void CopyrightsDialog::on_dpi_changed(const wxRect &suggested_rect)
 {
-    const wxFont& font = GetFont();
-    const int fs = font.GetPointSize();
-    const int fs2 = static_cast<int>(1.2f*fs);
-    int font_size[] = { fs, fs, fs, fs, fs2, fs2, fs2 };
-
-    m_html->SetFonts(font.GetFaceName(), font.GetFaceName(), font_size);
+    apply_html_fonts(m_html, this);
 
     const int& em = em_unit();
 
@@ -217,7 +228,6 @@ AboutDialog::AboutDialog()
     wxPanel* m_panel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(560), FromDIP(125)), wxTAB_TRAVERSAL);
 
     wxBoxSizer *panel_versizer = new wxBoxSizer(wxVERTICAL);
-    wxBoxSizer *vesizer  = new wxBoxSizer(wxVERTICAL);
 
     m_panel->SetSizer(panel_versizer);
 
@@ -229,52 +239,55 @@ AboutDialog::AboutDialog()
 
 	bool is_dark = wxGetApp().app_config->get("dark_color_mode") == "1";
 
-    // logo
+    // Banner is painted as a single surface. Overlay wxStaticText widgets pick up
+    // UpdateDlgDarkUI's opaque dark fill on Windows and show a black box over the logo.
     m_logo_bitmap = ScalableBitmap(this, is_dark ? "CoPrintSlicer_about_dark" : "CoPrintSlicer_about", 125);
-    m_logo = new wxStaticBitmap(this, wxID_ANY, m_logo_bitmap.bmp(), wxDefaultPosition,wxDefaultSize, 0);
-    m_logo->SetSizer(vesizer);
+    m_banner = new wxPanel(m_panel, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(560), FromDIP(125)));
+    m_banner->SetBackgroundStyle(wxBG_STYLE_PAINT);
+    m_banner->SetMinSize(wxSize(FromDIP(560), FromDIP(125)));
+    m_banner->Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent &) {});
+    m_banner->Bind(wxEVT_PAINT, [this](wxPaintEvent &) {
+        wxPaintDC dc(m_banner);
+        const wxBitmap &bmp = m_logo_bitmap.bmp();
+        if (bmp.IsOk())
+            dc.DrawBitmap(bmp, 0, 0, false);
 
-    panel_versizer->Add(m_logo, 1, wxALL | wxEXPAND, 0);
-
-    // version
-    {
-
-        auto _build_string_font = Label::Body_12;
-        // _build_string_font.SetStyle(wxFONTSTYLE_ITALIC);
-
-        vesizer->Add(0, 0, 1, wxEXPAND, FromDIP(5));
-        auto          version_string = std::string(SoftFever_VERSION); // _L("CoPrintSlicer ") + " " + std::string(SoftFever_VERSION);
-        wxStaticText* version = new wxStaticText(this, wxID_ANY, version_string.c_str(), wxDefaultPosition, wxDefaultSize);
-        wxStaticText* credits_string = new wxStaticText(this, wxID_ANY, wxString::Format("Build %s", std::string(GIT_COMMIT_HASH)), wxDefaultPosition, wxDefaultSize);
-        credits_string->SetFont(_build_string_font);
         wxFont version_font = GetFont();
-        #ifdef __WXMSW__
-			version_font.SetPointSize(version_font.GetPointSize()-1);
-        #else
-            version_font.SetPointSize(11);
-        #endif
         version_font.SetPointSize(20);
-        version->SetFont(version_font);
-        version->SetForegroundColour(wxColour("#949494"));
-        credits_string->SetForegroundColour(wxColour("#949494"));
-        version->SetBackgroundColour(wxColour("#FFFFFF"));
-        credits_string->SetBackgroundColour(wxColour("#FFFFFF"));
 
-        vesizer->Add(version, 0, wxRIGHT | wxALIGN_RIGHT, FromDIP(20));
-        vesizer->AddSpacer(FromDIP(5));
-        vesizer->Add(credits_string, 0, wxRIGHT | wxALIGN_RIGHT, FromDIP(20));
-        vesizer->Add(0, 0, 1, wxEXPAND, FromDIP(5));
-    }
+        const wxString version_string(SoftFever_VERSION);
+        const wxString build_string = wxString::Format("Build %s", std::string(GIT_COMMIT_HASH));
+
+        dc.SetTextForeground(wxColour(0x94, 0x94, 0x94));
+        dc.SetFont(version_font);
+        const wxSize version_size = dc.GetTextExtent(version_string);
+        dc.SetFont(Label::Body_12);
+        const wxSize build_size = dc.GetTextExtent(build_string);
+
+        const wxSize client = m_banner->GetClientSize();
+        const int    pad    = FromDIP(20);
+        const int    gap    = FromDIP(5);
+        const int    block_h = version_size.GetHeight() + gap + build_size.GetHeight();
+        const int    y      = std::max(0, (client.GetHeight() - block_h) / 2);
+
+        dc.SetFont(version_font);
+        dc.DrawText(version_string, client.GetWidth() - pad - version_size.GetWidth(), y);
+        dc.SetFont(Label::Body_12);
+        dc.DrawText(build_string, client.GetWidth() - pad - build_size.GetWidth(), y + version_size.GetHeight() + gap);
+    });
+
+    panel_versizer->Add(m_banner, 1, wxALL | wxEXPAND, 0);
 
     wxBoxSizer *text_sizer_horiz = new wxBoxSizer(wxHORIZONTAL);
     wxBoxSizer *text_sizer = new wxBoxSizer(wxVERTICAL);
     text_sizer_horiz->Add( 0, 0, 0, wxLEFT, FromDIP(20));
 
     std::vector<wxString> text_list;
-    text_list.push_back(_L("CoPrintSlicer is based on BambuStudio, PrusaSlicer, and SuperSlicer."));
-    text_list.push_back(_L("BambuStudio is originally based on PrusaSlicer by PrusaResearch."));
-    text_list.push_back(_L("PrusaSlicer is originally based on Slic3r by Alessandro Ranellucci."));
-    text_list.push_back(_L("Slic3r was created by Alessandro Ranellucci with the help of many other contributors."));
+    text_list.push_back(_L("CoPrintSlicer is forked from OrcaSlicer by SoftFever."));
+    text_list.push_back(_L("OrcaSlicer is forked from Bambu Studio by Bambu Lab."));
+    text_list.push_back(_L("Bambu Studio is forked from PrusaSlicer by Prusa Research, which is from Slic3r by Alessandro Ranellucci and the RepRap community. OrcaSlicer incorporates a lot of features from SuperSlicer by @supermerill."));
+    text_list.push_back(_L("CoPrintSlicer integrates some features from the 3D printing open-source community, with specific attributions provided in the code comments."));
+    text_list.push_back(_L("CoPrintSlicer is licensed under the GNU Affero General Public License, version 3."));
 
     text_sizer->Add( 0, 0, 0, wxTOP, FromDIP(33));
     bool is_zh = wxGetApp().app_config->get("language") == "zh_CN";
@@ -316,7 +329,7 @@ AboutDialog::AboutDialog()
 
     copyright_hor_sizer->Add(copyright_ver_sizer, 0, wxLEFT, FromDIP(20));
 
-    wxStaticText *html_text = new wxStaticText(this, wxID_ANY, "Copyright(C) 2022-2025 Li Jiang All Rights Reserved", wxDefaultPosition, wxDefaultSize);
+    wxStaticText *html_text = new wxStaticText(this, wxID_ANY, "Copyright © 2025-2026 Co Print. All rights reserved.", wxDefaultPosition, wxDefaultSize);
     html_text->SetForegroundColour(wxColour(107, 107, 107));
 
     copyright_ver_sizer->Add(html_text, 0, wxALL , 0);
@@ -333,7 +346,7 @@ AboutDialog::AboutDialog()
               (boost::format(
               "<html>"
               "<body>"
-              "<p style=\"text-align:left\"><a style=\"color:#009789\" href=\"https://github.com/CoPrintSlicer/CoPrintSlicer\">https://github.com/CoPrintSlicer/CoPrintSlicer</ a></p>"
+              "<p style=\"text-align:left\"><a style=\"color:#009789\" href=\"https://github.com/coprint/CoPrintSlicer\">https://github.com/coprint/CoPrintSlicer</ a></p>"
               "</body>"
               "</html>")
             ).str());
@@ -366,7 +379,8 @@ AboutDialog::AboutDialog()
 void AboutDialog::on_dpi_changed(const wxRect &suggested_rect)
 {
     m_logo_bitmap.msw_rescale();
-    m_logo->SetBitmap(m_logo_bitmap.bmp());
+    if (m_banner)
+        m_banner->Refresh();
 
     const wxFont& font = GetFont();
     const int fs = font.GetPointSize() - 1;

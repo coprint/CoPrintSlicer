@@ -34,7 +34,7 @@
         "30",
         "30"
     ],
-    "disable_m73": "1",
+    "disable_m73": "0",
     "emit_machine_limits_to_gcode": "1",
     "enable_filament_ramming": "0",
     "enable_long_retraction_when_cut": "0",
@@ -94,7 +94,7 @@
     "input_shaping_freq_x": "0",
     "input_shaping_freq_y": "0",
     "input_shaping_type": "Default",
-    "layer_change_gcode": "TIMELAPSE_TAKE_PHOTO\n",
+    "layer_change_gcode": "TIMELAPSE_TAKE_PHOTO\n;LAYER:{layer_num+1}\n\nSET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}",
     "long_retractions_when_cut": [
         "0",
         "0",
@@ -173,7 +173,7 @@
         "0"
     ],
     "machine_pause_gcode": "",
-    "machine_start_gcode": "start_print EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] PURGE_LINE='false' BED_TEMP=[bed_temperature_initial_layer_single] EXT0={is_extruder_used[0]} EXT1={is_extruder_used[1]} EXT2={is_extruder_used[2]} EXT3={is_extruder_used[3]} EXT0_TEMP={nozzle_temperature_initial_layer[0]} EXT1_TEMP={nozzle_temperature_initial_layer[1]} EXT2_TEMP={nozzle_temperature_initial_layer[2]} EXT3_TEMP={nozzle_temperature_initial_layer[3]}",
+    "machine_start_gcode": "start_print EXTRUDER=[initial_extruder] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] PURGE_LINE='false' BED_TEMP=[bed_temperature_initial_layer_single] EXT0={is_extruder_used[0]} EXT1={is_extruder_used[1]} EXT2={is_extruder_used[2]} EXT3={is_extruder_used[3]} EXT0_TEMP={nozzle_temperature_initial_layer[0]} EXT1_TEMP={nozzle_temperature_initial_layer[1]} EXT2_TEMP={nozzle_temperature_initial_layer[2]} EXT3_TEMP={nozzle_temperature_initial_layer[3]}\n\n;LAYER_COUNT:[total_layer_count]\n\n;LAYER:0\n\nSET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]",
     "machine_tool_change_time": "1.5",
     "machine_unload_filament_time": "1",
     "manual_filament_change": "0",

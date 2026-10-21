@@ -24,4 +24,4 @@
 > A guide for users on how to download the artifacts from this PR.
 -->
 
-[How to Download Pull Requests Artifacts for Testing](https://www.orcaslicer.com/wiki/how_to_download_pr_artifacts)
+[How to Download Pull Requests Artifacts for Testing](https://wiki.coprint3d.com/en/CoPrintSlicer/how_to_download_pr_artifacts)
