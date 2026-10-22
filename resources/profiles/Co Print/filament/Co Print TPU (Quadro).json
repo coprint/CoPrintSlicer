@@ -9,14 +9,17 @@
 	"filament_vendor": [
 		"Co Print"
 	],
+	"enable_pressure_advance": [
+		"0"
+	],
 	"fan_cooling_layer_time": [
 		"100"
 	],
 	"fan_max_speed": [
-		"80"
+		"100"
 	],
 	"fan_min_speed": [
-		"80"
+		"100"
 	],
 	"filament_deretraction_speed": [
 		"20"
@@ -25,10 +28,7 @@
 		"0.95"
 	],
 	"filament_max_volumetric_speed": [
-		"3"
-	],
-	"filament_retract_when_changing_layer": [
-		"0"
+		"2"
 	],
 	"filament_retraction_length": [
 		"1"
@@ -43,10 +43,10 @@
 		"0"
 	],
 	"hot_plate_temp": [
-		"50"
+		"35"
 	],
 	"hot_plate_temp_initial_layer": [
-		"50"
+		"35"
 	],
 	"nozzle_temperature": [
 		"230"
@@ -61,7 +61,7 @@
 		"0.06"
 	],
 	"slow_down_layer_time": [
-		"8"
+		"14"
 	],
 	"slow_down_min_speed": [
 		"10"
