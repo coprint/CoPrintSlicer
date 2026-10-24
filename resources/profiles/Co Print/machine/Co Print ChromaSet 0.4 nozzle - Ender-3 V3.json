@@ -7,7 +7,7 @@
 	"instantiation": "true",
 	"printer_model": "Co Print ChromaSet",
 	"default_print_profile": "0.2mm Standard @Co Print ChromaSet 0.4",
-	"printer_agent": "coprint",
+	"printer_agent": "moonraker",
 	"host_type": "moonraker",
 	"printer_variant": "0.4",
 	"nozzle_diameter": [

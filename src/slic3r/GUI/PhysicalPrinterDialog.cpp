@@ -140,7 +140,9 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
             } catch (const boost::bad_any_cast&) {
                 // If value is not an int, ignore
             }
-            this->update();
+            // Keep the dropdown on the user's choice. A full update()/reload_config
+            // would treat the fake enum as the string option and snap back.
+            this->update_printer_agent_type();
         } else if (opt_key == "host_type" || opt_key == "printhost_authorization_type") {
             this->update();
         }
@@ -175,12 +177,22 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
                 def.enum_labels.push_back(agent.display_name);
             }
 
-            // Resolve selected agent: use config value if valid, otherwise fall back to default
+            // Resolve selected agent: use config value if valid, otherwise fall back to default.
+            // Quadro keeps the custom CoPrint agent; ChromaSet uses Moonraker so
+            // the Device tab can open Mainsail/Fluidd. Do not overwrite a user choice.
             std::string selected_agent = m_config->opt_string("printer_agent");
             const std::string printer_model = m_config->opt_string("printer_model");
-            const bool is_coprint_printer = boost::icontains(printer_model, "Co Print") || boost::icontains(printer_model, "CoPrint");
-            if (is_coprint_printer)
-                selected_agent = COPRINT_PRINTER_AGENT_ID;
+            if (selected_agent.empty()) {
+                if (boost::icontains(printer_model, "Quadro"))
+                    selected_agent = COPRINT_PRINTER_AGENT_ID;
+                else if (boost::icontains(printer_model, "ChromaSet"))
+                    selected_agent = "moonraker";
+            } else if (boost::icontains(printer_model, "ChromaSet") &&
+                       selected_agent == COPRINT_PRINTER_AGENT_ID) {
+                // Old ChromaSet profiles were locked to CoPrint; migrate to Moonraker.
+                selected_agent = "moonraker";
+                m_config->set_key_value("printer_agent", new ConfigOptionString(selected_agent));
+            }
 
             auto it = std::find_if(agents.begin(), agents.end(), [&selected_agent](const auto& a) { return a.id == selected_agent; });
             if (it == agents.end()) {
@@ -786,6 +798,7 @@ void PhysicalPrinterDialog::update(bool printer_change)
     update_preset_input();
 
     update_printhost_buttons();
+    update_printer_agent_type();
 
     this->SetSize(this->GetBestSize());
     this->Layout();
@@ -834,20 +847,11 @@ void PhysicalPrinterDialog::update_printer_agent_type()
     if (!agent_choice)
         return;
 
-    // Sync selection with current config value
+    // Sync selection with current config value. Never force CoPrint here —
+    // ChromaSet (and any other non-Quadro machine) may keep Moonraker.
     const std::string current_agent = m_config->opt_string("printer_agent");
 
     auto agents = NetworkAgentFactory::get_registered_printer_agents();
-    const std::string printer_model = m_config->opt_string("printer_model");
-    if (boost::icontains(printer_model, "Co Print") || boost::icontains(printer_model, "CoPrint")) {
-        for (size_t i = 0; i < agents.size(); ++i) {
-            if (agents[i].id == COPRINT_PRINTER_AGENT_ID) {
-                agent_choice->set_value(i);
-                return;
-            }
-        }
-    }
-
     for (size_t i = 0; i < agents.size(); ++i) {
         if (agents[i].id == current_agent) {
             agent_choice->set_value(i);

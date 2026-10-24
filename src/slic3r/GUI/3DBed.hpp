@@ -114,6 +114,7 @@ private:
     GLTexture m_texture;
     GLModel m_model;
     Vec3d m_model_offset{ Vec3d::Zero() };
+    Vec3d m_model_scale{ Vec3d::Ones() };
     Axes m_axes;
 
     float m_scale_factor{ 1.0f };
@@ -152,6 +153,7 @@ public:
 
     // CoPrint: Quadro and ChromaSet both draw the STL plate from above; SVG lettering is overlaid after the grid.
     bool is_quadro_bed() const;
+    bool is_chromaset_bed() const;
 
     // get the bed shape type
     BuildVolume_Type get_build_volume_type() const { return m_build_volume.type(); }

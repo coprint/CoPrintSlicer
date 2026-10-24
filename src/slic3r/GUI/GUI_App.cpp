@@ -3619,8 +3619,13 @@ void GUI_App::switch_printer_agent()
                 effective_agent_id = value;
         }
         const std::string printer_model = config.opt_string("printer_model");
-        if (boost::icontains(printer_model, "Co Print") || boost::icontains(printer_model, "CoPrint"))
+        // Only Quadro is locked to the custom CoPrint agent. ChromaSet keeps
+        // the configured agent (Moonraker by default) so Mainsail/Fluidd works.
+        if (boost::icontains(printer_model, "Quadro"))
             effective_agent_id = COPRINT_PRINTER_AGENT_ID;
+        else if (boost::icontains(printer_model, "ChromaSet") &&
+                 (effective_agent_id.empty() || effective_agent_id == COPRINT_PRINTER_AGENT_ID))
+            effective_agent_id = "moonraker";
     }
 
     // Check if agent is registered

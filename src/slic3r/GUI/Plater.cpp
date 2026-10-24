@@ -2467,6 +2467,7 @@ void Sidebar::update_all_preset_comboboxes()
         auto print_btn_type = MainFrame::PrintSelectType::eExportGcode;
         if (is_chromaset) {
             print_btn_type = MainFrame::PrintSelectType::eSendGcode;
+            p_mainframe->load_printer_url();
         } else if (preset_bundle.use_device_print_flow()) {
             // Sidebar printer preset is for slicing only; Moonraker target is picked in Start Print dialog.
             print_btn_type = MainFrame::PrintSelectType::ePrintPlate;

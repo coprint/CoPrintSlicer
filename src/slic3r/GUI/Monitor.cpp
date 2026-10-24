@@ -2,6 +2,7 @@
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/AppConfig.hpp"
+#include "libslic3r/PrintConfig.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
 
@@ -21,6 +22,7 @@
 #include <wx/tglbtn.h>
 
 #include "wxExtensions.hpp"
+#include "GUI.hpp"
 #include "GUI_App.hpp"
 #include "GUI_ObjectList.hpp"
 #include "Plater.hpp"
@@ -335,6 +337,38 @@ void MonitorPanel::sync_coprint_page_hosting(bool embedded)
     m_coprint_backend->select_tab(PrinterWebViewTab::Status);
 }
 
+void MonitorPanel::load_host_webui(const wxString &url, const wxString &apikey)
+{
+    ensure_coprint_backend();
+    if (m_coprint_backend == nullptr)
+        return;
+    m_coprint_backend->set_webui_mode(true);
+    wxString mutable_url = url;
+    m_coprint_backend->load_url(mutable_url, apikey);
+}
+
+void MonitorPanel::load_host_webui()
+{
+    if (wxGetApp().preset_bundle == nullptr)
+        return;
+
+    const auto &cfg = wxGetApp().preset_bundle->printers.get_edited_preset().config;
+    wxString url = cfg.opt_string("print_host_webui").empty() ? cfg.opt_string("print_host") : cfg.opt_string("print_host_webui");
+    wxString apikey;
+    if (url.empty()) {
+        url = wxString::Format("file://%s/web/orca/missing_connection.html", from_u8(resources_dir()));
+    } else {
+        if (!url.Lower().starts_with("http"))
+            url = wxString::Format("http://%s", url);
+        if (cfg.has("host_type") && cfg.has("printhost_apikey")) {
+            const auto host_type = cfg.option<ConfigOptionEnum<PrintHostType>>("host_type")->value;
+            if (host_type != htSimplyPrint)
+                apikey = cfg.opt_string("printhost_apikey");
+        }
+    }
+    load_host_webui(url, apikey);
+}
+
 void MonitorPanel::configure_device_ui(DeviceUiMode mode)
 {
     if (!m_initialized)
@@ -343,7 +377,9 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
         ensure_coprint_backend();
 
     if (mode == m_device_ui_mode) {
-        if (mode == DeviceUiMode::CoPrint || mode == DeviceUiMode::CoPrintLegacy)
+        if (mode == DeviceUiMode::CoPrintLegacy)
+            load_host_webui();
+        else if (mode == DeviceUiMode::CoPrint)
             refresh_coprint_printer_names();
         return;
     }
@@ -414,12 +450,19 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
             m_coprint_printer_picker->set_status_page_active(true);
     }
 
+    if (legacy) {
+        load_host_webui();
+    } else if (m_coprint_backend != nullptr) {
+        m_coprint_backend->set_webui_mode(false);
+    }
+
     if (coprint) {
         if (auto* dev = wxGetApp().getDeviceManager()) {
             if (dev->get_selected_machine() == nullptr)
                 dev->load_last_machine();
         }
-        refresh_coprint_printer_names();
+        if (!legacy)
+            refresh_coprint_printer_names();
     }
 
     {

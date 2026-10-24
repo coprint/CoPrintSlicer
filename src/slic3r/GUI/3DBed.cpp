@@ -54,6 +54,18 @@ bool Bed3D::is_quadro_bed() const
     return is_coprint_quadro_printer();
 }
 
+bool Bed3D::is_chromaset_bed() const
+{
+    if (boost::algorithm::icontains(m_model_filename, "ChromaSet") ||
+        boost::algorithm::icontains(m_texture_filename, "ChromaSet"))
+        return true;
+    auto bundle = wxGetApp().preset_bundle;
+    if (bundle == nullptr)
+        return false;
+    const auto *opt = bundle->printers.get_edited_preset().config.opt<ConfigOptionString>("printer_model");
+    return opt != nullptr && boost::algorithm::icontains(opt->value, "ChromaSet");
+}
+
 bool init_model_from_poly(GLModel &model, const ExPolygon &poly, float z)
 {
     if (poly.empty())
@@ -449,6 +461,8 @@ BoundingBoxf3 Bed3D::calc_extended_bounding_box() const
     out.merge(m_printable_bounding_box);
     BoundingBoxf3 model_bb = m_model.get_bounding_box();
     if (model_bb.defined) {
+        model_bb.min = model_bb.min.cwiseProduct(m_model_scale);
+        model_bb.max = model_bb.max.cwiseProduct(m_model_scale);
         model_bb.translate(m_model_offset);
         out.merge(model_bb);
     }
@@ -595,6 +609,30 @@ void Bed3D::update_model_offset()
     Vec3d* model_offset_ptr = const_cast<Vec3d*>(&m_model_offset);
     *model_offset_ptr = shift;
     (*model_offset_ptr)(2) = -0.41 + GROUND_Z;
+
+    // ChromaSet STL is a fixed 225×225 plate centered on origin. Stretch it to the
+    // current printable rectangle so a custom bed size does not leave a small black
+    // plate sitting inside a larger grid.
+    m_model_scale = Vec3d::Ones();
+    if (is_chromaset_bed() && !m_bed_shape.empty()) {
+        const BoundingBoxf3 model_bb = m_model.get_bounding_box();
+        if (model_bb.defined) {
+            Vec2d bed_min = m_bed_shape.front();
+            Vec2d bed_max = bed_min;
+            for (const Vec2d &p : m_bed_shape) {
+                bed_min = bed_min.cwiseMin(p).eval();
+                bed_max = bed_max.cwiseMax(p).eval();
+            }
+            const double model_w = model_bb.max.x() - model_bb.min.x();
+            const double model_h = model_bb.max.y() - model_bb.min.y();
+            const double bed_w = bed_max.x() - bed_min.x();
+            const double bed_h = bed_max.y() - bed_min.y();
+            if (model_w > 1e-3 && model_h > 1e-3 && bed_w > 1e-3 && bed_h > 1e-3) {
+                m_model_scale.x() = bed_w / model_w;
+                m_model_scale.y() = bed_h / model_h;
+            }
+        }
+    }
 
     // update extended bounding box
     const_cast<BoundingBoxf3 &>(m_printable_bounding_box) = calc_printable_bounding_box();
@@ -796,7 +834,7 @@ void Bed3D::render_model(const Transform3d& view_matrix, const Transform3d& proj
         if (shader != nullptr) {
             shader->start_using();
             shader->set_uniform("emission_factor", 0.0f);
-            const Transform3d model_matrix = Geometry::assemble_transform(m_model_offset);
+            const Transform3d model_matrix = Geometry::assemble_transform(m_model_offset, Vec3d::Zero(), m_model_scale);
             shader->set_uniform("volume_world_matrix",  model_matrix);
             shader->set_uniform("view_model_matrix", view_matrix * model_matrix);
             shader->set_uniform("projection_matrix", projection_matrix);

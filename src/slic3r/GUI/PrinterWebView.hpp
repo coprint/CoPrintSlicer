@@ -58,6 +58,8 @@ public:
     ~PrinterWebView() override;
 
     void load_url(wxString &url, wxString apikey);
+    void set_webui_mode(bool webui);
+    bool is_webui_mode() const { return m_webui_mode; }
     bool Show(bool show) override;
     void reload();
     void update_mode();
@@ -214,6 +216,7 @@ private:
     void post_coprint_device_name(MachineObject *machine, const std::string &device_name);
     void forget_local_printer(MachineObject *machine);
     void ensure_camera_webview_created();
+    void ensure_host_browser();
     void ensure_storage_page_created();
     void update_sidebar_connect_attempt_state();
     void begin_sidebar_connect_attempt(const std::string &dev_id);
@@ -228,6 +231,7 @@ private:
 
     wxString m_apikey;
     bool m_apikey_sent{ false };
+    bool m_webui_mode{ false };
     wxPanel *m_assistant_page{ nullptr };
     wxWebView *m_browser{ nullptr };
     wxPanel *m_connected_printer_panel{ nullptr };

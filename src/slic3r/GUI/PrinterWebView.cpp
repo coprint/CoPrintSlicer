@@ -2604,13 +2604,55 @@ PrinterWebView::~PrinterWebView()
 }
 
 
+void PrinterWebView::ensure_host_browser()
+{
+    if (m_browser != nullptr || m_destroying)
+        return;
+
+    m_browser = WebView::CreateWebView(this, wxString());
+    if (m_browser == nullptr) {
+        BOOST_LOG_TRIVIAL(error) << "PrinterWebView: failed to create host WebView";
+        return;
+    }
+    m_browser->Hide();
+    Bind(wxEVT_WEBVIEW_NAVIGATED, &PrinterWebView::OnLoaded, this);
+    Bind(wxEVT_WEBVIEW_ERROR, &PrinterWebView::OnError, this);
+    if (wxSizer *sizer = GetSizer())
+        sizer->Add(m_browser, 1, wxEXPAND);
+}
+
+void PrinterWebView::set_webui_mode(bool webui)
+{
+    if (webui)
+        ensure_host_browser();
+    m_webui_mode = webui;
+    if (wxSizer *sizer = GetSizer()) {
+        for (size_t i = 0; i < sizer->GetItemCount(); ++i) {
+            wxSizerItem *item = sizer->GetItem(i);
+            if (item == nullptr)
+                continue;
+            if (item->IsWindow() && item->GetWindow() == m_browser)
+                item->Show(webui && m_browser != nullptr);
+            else
+                item->Show(!webui);
+        }
+    }
+    if (!webui)
+        set_sidebar_visible(!m_embedded_in_monitor);
+    Layout();
+}
+
 void PrinterWebView::load_url(wxString& url, wxString apikey)
 {
-    // Legacy Orca monitor surface. CoPrint uses the native dashboard below; keep
-    // this stub so upstream callers can pass credentials without recreating WebView.
-    (void) url;
     m_apikey = apikey;
-    return;
+    m_apikey_sent = false;
+    if (!m_webui_mode)
+        return;
+    ensure_host_browser();
+    if (m_browser == nullptr)
+        return;
+    WebView::LoadUrl(m_browser, url);
+    UpdateState();
 }
 
 bool PrinterWebView::Show(bool show)
@@ -2622,8 +2664,8 @@ bool PrinterWebView::Show(bool show)
 
 void PrinterWebView::reload()
 {
-    // Native CoPrint dashboard does not have a browser page to reload.
-    return;
+    if (m_webui_mode && m_browser != nullptr)
+        m_browser->Reload();
 }
 
 void PrinterWebView::update_mode()
@@ -2678,7 +2720,7 @@ void PrinterWebView::msw_rescale()
 void PrinterWebView::set_sidebar_visible(bool visible)
 {
     if (m_preview_menu_panel != nullptr)
-        m_preview_menu_panel->Show(visible);
+        m_preview_menu_panel->Show(visible && !m_webui_mode);
     Layout();
 }
 
@@ -9340,7 +9382,7 @@ void PrinterWebView::toggle_camera_timelapse()
 
 void PrinterWebView::refresh_layer_info_from_selected_machine()
 {
-    if (m_destroying)
+    if (m_destroying || m_webui_mode)
         return;
     auto *dev_manager = wxGetApp().getDeviceManager();
     auto *obj = dev_manager ? dev_manager->get_selected_machine() : nullptr;

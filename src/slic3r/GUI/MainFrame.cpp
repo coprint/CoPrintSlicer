@@ -113,6 +113,8 @@ bool is_chromaset_printer()
 
 bool is_quadro_printer()
 {
+    if (wxGetApp().preset_bundle)
+        return wxGetApp().preset_bundle->current_printer_is_quadro();
     return boost::algorithm::icontains(current_printer_model(), "Quadro");
 }
 
@@ -1295,8 +1297,10 @@ void MainFrame::show_device(bool bBBLPrinter) {
     if (m_monitor != nullptr) {
         MonitorPanel::DeviceUiMode mode = MonitorPanel::DeviceUiMode::Bambu;
         if (!bBBLPrinter)
-            mode = is_chromaset_printer() ? MonitorPanel::DeviceUiMode::CoPrintLegacy
-                                          : MonitorPanel::DeviceUiMode::CoPrint;
+            // Custom dashboard is Quadro-only. ChromaSet and other Klipper
+            // printers keep the Mainsail/Fluidd web view.
+            mode = is_quadro_printer() ? MonitorPanel::DeviceUiMode::CoPrint
+                                       : MonitorPanel::DeviceUiMode::CoPrintLegacy;
         m_monitor->configure_device_ui(mode);
     }
 
@@ -4164,14 +4168,19 @@ void MainFrame::load_url(wxString url)
 
 void MainFrame::load_printer_url(wxString url, wxString apikey)
 {
-    BOOST_LOG_TRIVIAL(trace) << "load_printer_url skipped (device tab detached from print host):" << url;
-    (void) apikey;
-    return;
+    BOOST_LOG_TRIVIAL(trace) << "load_printer_url:" << url;
+    if (m_monitor != nullptr && !is_quadro_printer())
+        m_monitor->load_host_webui(url, apikey);
 }
 
 void MainFrame::load_printer_url()
 {
-    return;
+    if (wxGetApp().preset_bundle == nullptr || wxGetApp().preset_bundle->use_bbl_device_tab())
+        return;
+    if (is_quadro_printer())
+        return;
+    if (m_monitor != nullptr)
+        m_monitor->load_host_webui();
 }
 
 bool MainFrame::is_printer_view() const { return m_tabpanel->GetSelection() == TabPosition::tpMonitor; }

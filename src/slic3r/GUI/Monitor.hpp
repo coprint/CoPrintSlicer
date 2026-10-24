@@ -156,6 +156,8 @@ public:
     void configure_device_ui(DeviceUiMode mode);
     void ensure_coprint_backend();
     void sync_coprint_page_hosting(bool embedded);
+    void load_host_webui();
+    void load_host_webui(const wxString &url, const wxString &apikey);
     bool is_coprint_device_ui() const
     {
         return m_device_ui_mode == DeviceUiMode::CoPrint
