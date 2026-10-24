@@ -381,11 +381,17 @@ wxString display_ip_only(const MachineObject* machine)
 
 bool machine_matches_mdns(const MachineObject* machine, const CoprintMdnsPrinter& printer)
 {
-    if (machine == nullptr || printer.ip.empty())
+    if (machine == nullptr)
         return false;
     if (!printer.id.empty() &&
         (machine->get_dev_id() == printer.id || machine->get_dev_ip() == printer.id))
         return true;
+    // Do not treat a shared/wrong IP as identity when the advertisement
+    // has a stable id — two Quadros on the same LAN used to collapse here.
+    if (!printer.id.empty())
+        return false;
+    if (printer.ip.empty())
+        return false;
     const std::string discovered = host_without_port(printer.ip);
     if (discovered.empty())
         return false;
@@ -1035,7 +1041,9 @@ void CoPrintPrinterPicker::on_mdns_printer(const CoprintMdnsPrinter& printer, bo
     auto same = [&](const CoprintMdnsPrinter& existing) {
         if (!printer.service.empty() && existing.service == printer.service)
             return true;
-        return !printer.ip.empty() && existing.ip == printer.ip;
+        if (!printer.id.empty() && existing.id == printer.id)
+            return true;
+        return false;
     };
 
     if (lost) {

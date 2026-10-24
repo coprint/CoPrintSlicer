@@ -9,13 +9,17 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
 #else
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/select.h>
@@ -110,6 +114,52 @@ bool prefer_ipv4(const std::string &current, const std::string &incoming)
     return current_v6 && !incoming_v6;
 }
 
+bool is_loopback_or_linklocal(const std::string &ip)
+{
+    return ip.rfind("127.", 0) == 0 || ip.rfind("169.254.", 0) == 0 || ip == "::1";
+}
+
+std::unordered_set<std::string> local_ipv4_set()
+{
+    std::unordered_set<std::string> out;
+#ifdef _WIN32
+    ULONG size = 0;
+    if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                             nullptr, nullptr, &size) != ERROR_BUFFER_OVERFLOW)
+        return out;
+    std::vector<unsigned char> buffer(size);
+    auto *addresses = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
+    if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                             nullptr, addresses, &size) != NO_ERROR)
+        return out;
+    for (auto *adapter = addresses; adapter != nullptr; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp)
+            continue;
+        for (auto *unicast = adapter->FirstUnicastAddress; unicast != nullptr; unicast = unicast->Next) {
+            if (unicast->Address.lpSockaddr == nullptr ||
+                unicast->Address.lpSockaddr->sa_family != AF_INET)
+                continue;
+            const std::string ip = sockaddr_ip(unicast->Address.lpSockaddr);
+            if (!ip.empty() && !is_loopback_or_linklocal(ip))
+                out.insert(ip);
+        }
+    }
+#else
+    struct ifaddrs *ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) != 0)
+        return out;
+    for (struct ifaddrs *ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET)
+            continue;
+        const std::string ip = sockaddr_ip(ifa->ifa_addr);
+        if (!ip.empty() && !is_loopback_or_linklocal(ip))
+            out.insert(ip);
+    }
+    freeifaddrs(ifaddr);
+#endif
+    return out;
+}
+
 struct PartialPrinter
 {
     CoprintMdnsPrinter printer;
@@ -119,12 +169,18 @@ struct PartialPrinter
     std::chrono::steady_clock::time_point lost_since{};
     bool               has_lost_since{false};
     bool               published{false};
+    bool               ip_from_record{false};
 };
 
 struct QueryContext
 {
     std::map<std::string, PartialPrinter> printers;
+    // Last A/AAAA for a hostname. Applied only to the service instance
+    // whose SRV points at that host in the same packet — never broadcast
+    // to every printer that happens to share a cloned hostname.
     std::map<std::string, std::string>    host_ips;
+    std::vector<std::string>              packet_services;
+    std::unordered_set<std::string>       local_ips;
     CoprintMdnsDiscovery::UpdateFn        on_update;
     std::string                           sender_ip;
 };
@@ -163,22 +219,75 @@ void publish_if_ready(QueryContext *ctx, PartialPrinter &partial, bool lost)
     ctx->on_update(snapshot, false);
 }
 
-void apply_host_ip(QueryContext *ctx, const std::string &hostname, const std::string &ip)
+void apply_ip_to_printer(PartialPrinter &partial, const std::string &ip, bool authoritative)
 {
-    if (ctx == nullptr || hostname.empty() || ip.empty())
+    if (ip.empty() || is_loopback_or_linklocal(ip))
         return;
-    const std::string key = service_key(hostname);
-    auto &stored = ctx->host_ips[key];
-    if (prefer_ipv4(stored, ip) || stored.empty())
-        stored = ip;
-    for (auto &entry : ctx->printers) {
-        PartialPrinter &partial = entry.second;
-        if (service_key(partial.hostname) != key)
-            continue;
-        if (prefer_ipv4(partial.printer.ip, stored) || partial.printer.ip.empty())
-            partial.printer.ip = stored;
-        publish_if_ready(ctx, partial, false);
+    if (partial.printer.ip.empty() || authoritative || prefer_ipv4(partial.printer.ip, ip)) {
+        partial.printer.ip = ip;
+        if (authoritative)
+            partial.ip_from_record = true;
     }
+}
+
+void remember_packet_service(QueryContext *ctx, const std::string &key)
+{
+    if (ctx == nullptr || key.empty())
+        return;
+    if (std::find(ctx->packet_services.begin(), ctx->packet_services.end(), key) == ctx->packet_services.end())
+        ctx->packet_services.push_back(key);
+}
+
+bool sender_usable(const QueryContext *ctx)
+{
+    if (ctx == nullptr || ctx->sender_ip.empty() || is_loopback_or_linklocal(ctx->sender_ip))
+        return false;
+    return ctx->local_ips.find(ctx->sender_ip) == ctx->local_ips.end();
+}
+
+void apply_packet_address(QueryContext *ctx, const std::string &hostname, const std::string &ip)
+{
+    if (ctx == nullptr || ip.empty() || is_loopback_or_linklocal(ip))
+        return;
+    if (ctx->local_ips.find(ip) != ctx->local_ips.end())
+        return;
+    if (!hostname.empty()) {
+        auto &stored = ctx->host_ips[service_key(hostname)];
+        if (stored.empty() || prefer_ipv4(stored, ip))
+            stored = ip;
+    }
+
+    // Additional A/AAAA in a response belongs to the instance(s) in this datagram.
+    // One service in the packet: always bind the address to that instance, even if
+    // two printers cloned the same hostname.
+    if (ctx->packet_services.size() == 1) {
+        PartialPrinter &partial = ctx->printers[ctx->packet_services.front()];
+        apply_ip_to_printer(partial, ip, true);
+        publish_if_ready(ctx, partial, false);
+        return;
+    }
+
+    const std::string host_key = service_key(hostname);
+    for (const std::string &key : ctx->packet_services) {
+        auto it = ctx->printers.find(key);
+        if (it == ctx->printers.end())
+            continue;
+        if (!host_key.empty() && service_key(it->second.hostname) != host_key)
+            continue;
+        apply_ip_to_printer(it->second, ip, true);
+        publish_if_ready(ctx, it->second, false);
+    }
+}
+
+void finish_packet(QueryContext *ctx)
+{
+    if (ctx == nullptr || ctx->packet_services.size() != 1 || !sender_usable(ctx))
+        return;
+    PartialPrinter &partial = ctx->printers[ctx->packet_services.front()];
+    if (partial.ip_from_record || !partial.printer.ip.empty())
+        return;
+    apply_ip_to_printer(partial, ctx->sender_ip, false);
+    publish_if_ready(ctx, partial, false);
 }
 
 void touch_printer(QueryContext *ctx, const std::string &service, uint32_t ttl)
@@ -186,6 +295,7 @@ void touch_printer(QueryContext *ctx, const std::string &service, uint32_t ttl)
     if (ctx == nullptr || service.empty() || !name_is_coprint_service(service))
         return;
     const std::string key = service_key(service);
+    remember_packet_service(ctx, key);
     PartialPrinter &partial = ctx->printers[key];
     if (partial.printer.service.empty())
         partial.printer.service = strip_trailing_dot(service);
@@ -198,14 +308,6 @@ void touch_printer(QueryContext *ctx, const std::string &service, uint32_t ttl)
         return;
     }
     partial.has_lost_since = false;
-    if (partial.printer.ip.empty() && !ctx->sender_ip.empty())
-        partial.printer.ip = ctx->sender_ip;
-    if (!partial.hostname.empty()) {
-        auto host_it = ctx->host_ips.find(service_key(partial.hostname));
-        if (host_it != ctx->host_ips.end() &&
-            (partial.printer.ip.empty() || prefer_ipv4(partial.printer.ip, host_it->second)))
-            partial.printer.ip = host_it->second;
-    }
     publish_if_ready(ctx, partial, false);
 }
 
@@ -219,7 +321,8 @@ int query_callback(int /*sock*/, const struct sockaddr *from, size_t /*addrlen*/
     if (ctx == nullptr || entry == MDNS_ENTRYTYPE_QUESTION)
         return 0;
 
-    ctx->sender_ip = sockaddr_ip(from);
+    if (ctx->sender_ip.empty())
+        ctx->sender_ip = sockaddr_ip(from);
 
     char name_buf[256];
     size_t name_ofs = name_offset;
@@ -248,10 +351,12 @@ int query_callback(int /*sock*/, const struct sockaddr *from, size_t /*addrlen*/
         if (srv.port > 0)
             partial.printer.port = srv.port;
         partial.hostname = from_mdns(srv.name);
-        if (!partial.hostname.empty()) {
+        // Bind a cached A/AAAA only to this instance, not every printer
+        // that reused the same hostname on a cloned image.
+        if (!partial.hostname.empty() && ctx->packet_services.size() == 1) {
             auto host_it = ctx->host_ips.find(service_key(partial.hostname));
             if (host_it != ctx->host_ips.end())
-                partial.printer.ip = host_it->second;
+                apply_ip_to_printer(partial, host_it->second, true);
         }
         if (ttl > 0)
             publish_if_ready(ctx, partial, false);
@@ -262,7 +367,7 @@ int query_callback(int /*sock*/, const struct sockaddr *from, size_t /*addrlen*/
         struct sockaddr_in addr;
         std::memset(&addr, 0, sizeof(addr));
         mdns_record_parse_a(data, size, record_offset, record_length, &addr);
-        apply_host_ip(ctx, record_name, sockaddr_ip(reinterpret_cast<struct sockaddr *>(&addr)));
+        apply_packet_address(ctx, record_name, sockaddr_ip(reinterpret_cast<struct sockaddr *>(&addr)));
         return 0;
     }
 
@@ -270,7 +375,7 @@ int query_callback(int /*sock*/, const struct sockaddr *from, size_t /*addrlen*/
         struct sockaddr_in6 addr;
         std::memset(&addr, 0, sizeof(addr));
         mdns_record_parse_aaaa(data, size, record_offset, record_length, &addr);
-        apply_host_ip(ctx, record_name, sockaddr_ip(reinterpret_cast<struct sockaddr *>(&addr)));
+        apply_packet_address(ctx, record_name, sockaddr_ip(reinterpret_cast<struct sockaddr *>(&addr)));
         return 0;
     }
 
@@ -293,6 +398,8 @@ int query_callback(int /*sock*/, const struct sockaddr *from, size_t /*addrlen*/
                 partial.printer.fw = txt_val;
             else if (txt_key == "name" || txt_key == "device_name")
                 partial.printer.name = txt_val;
+            else if (txt_key == "ip" || txt_key == "address" || txt_key == "ipv4")
+                apply_ip_to_printer(partial, txt_val, true);
         }
         if (ttl > 0)
             publish_if_ready(ctx, partial, false);
@@ -401,6 +508,7 @@ void CoprintMdnsDiscovery::worker()
     }
 
     QueryContext ctx;
+    ctx.local_ips = local_ipv4_set();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         ctx.on_update = m_on_update;
@@ -445,7 +553,10 @@ void CoprintMdnsDiscovery::worker()
                     continue;
                 if (!FD_ISSET(sockets[i], &readset))
                     continue;
+                ctx.packet_services.clear();
+                ctx.sender_ip.clear();
                 mdns_query_recv(sockets[i], recv_buffer, sizeof(recv_buffer), query_callback, &ctx, 0);
+                finish_packet(&ctx);
             }
         }
         sweep_lost(&ctx);
