@@ -612,25 +612,28 @@ void Bed3D::update_model_offset()
 
     // ChromaSet STL is a fixed 225×225 plate centered on origin. Stretch it to the
     // current printable rectangle so a custom bed size does not leave a small black
-    // plate sitting inside a larger grid.
+    // plate sitting inside a larger grid. set_shape() resets the GL model first, so
+    // fall back to the factory size when the bounding box is not loaded yet.
     m_model_scale = Vec3d::Ones();
     if (is_chromaset_bed() && !m_bed_shape.empty()) {
         const BoundingBoxf3 model_bb = m_model.get_bounding_box();
-        if (model_bb.defined) {
-            Vec2d bed_min = m_bed_shape.front();
-            Vec2d bed_max = bed_min;
-            for (const Vec2d &p : m_bed_shape) {
-                bed_min = bed_min.cwiseMin(p).eval();
-                bed_max = bed_max.cwiseMax(p).eval();
-            }
-            const double model_w = model_bb.max.x() - model_bb.min.x();
-            const double model_h = model_bb.max.y() - model_bb.min.y();
-            const double bed_w = bed_max.x() - bed_min.x();
-            const double bed_h = bed_max.y() - bed_min.y();
-            if (model_w > 1e-3 && model_h > 1e-3 && bed_w > 1e-3 && bed_h > 1e-3) {
-                m_model_scale.x() = bed_w / model_w;
-                m_model_scale.y() = bed_h / model_h;
-            }
+        Vec2d bed_min = m_bed_shape.front();
+        Vec2d bed_max = bed_min;
+        for (const Vec2d &p : m_bed_shape) {
+            bed_min = bed_min.cwiseMin(p).eval();
+            bed_max = bed_max.cwiseMax(p).eval();
+        }
+        double model_w = model_bb.defined ? (model_bb.max.x() - model_bb.min.x()) : 0.0;
+        double model_h = model_bb.defined ? (model_bb.max.y() - model_bb.min.y()) : 0.0;
+        if (model_w <= 1e-3 || model_h <= 1e-3) {
+            model_w = 225.0;
+            model_h = 225.0;
+        }
+        const double bed_w = bed_max.x() - bed_min.x();
+        const double bed_h = bed_max.y() - bed_min.y();
+        if (model_w > 1e-3 && model_h > 1e-3 && bed_w > 1e-3 && bed_h > 1e-3) {
+            m_model_scale.x() = bed_w / model_w;
+            m_model_scale.y() = bed_h / model_h;
         }
     }
 

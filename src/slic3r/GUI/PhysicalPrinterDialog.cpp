@@ -60,14 +60,15 @@ PhysicalPrinterDialog::PhysicalPrinterDialog(wxWindow* parent) :
 
     // input the preset name
     Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINTER);
-    m_presets = tab->get_presets();
+    m_presets = tab != nullptr ? tab->get_presets() : &wxGetApp().preset_bundle->printers;
     const Preset &sel_preset  = m_presets->get_selected_preset();
     std::string suffix = _CTX_utf8(L_CONTEXT("Copy", "PresetName"), "PresetName");
     std::string   preset_name = sel_preset.is_default ? "Untitled" : sel_preset.is_system ? (boost::format(("%1% - %2%")) % sel_preset.name % suffix).str() : sel_preset.name;
 
     auto input_sizer = new wxBoxSizer(wxVERTICAL);
 
-    wxStaticText *label_top = new wxStaticText(this, wxID_ANY, from_u8((boost::format(_utf8(L("Save %s as"))) % into_u8(tab->title())).str()));
+    const wxString tab_title = tab != nullptr ? tab->title() : _L("Printer Settings");
+    wxStaticText *label_top = new wxStaticText(this, wxID_ANY, from_u8((boost::format(_utf8(L("Save %s as"))) % into_u8(tab_title)).str()));
     label_top->SetFont(::Label::Body_14);
     label_top->SetForegroundColour(wxColour(38,46,48));
 
@@ -156,8 +157,11 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
 
     m_optgroup->append_single_option_line("host_type");
 
-    // Build printer agent dropdown from registry (only if network agent is available)
-    if (wxGetApp().getAgent() != nullptr) {
+    // Printer Agent is a Quadro/CoPrint control. ChromaSet uses the stock Orca
+    // print-host dialog (Moonraker hostname / Browse / Test) like other Klipper printers.
+    const std::string printer_model = m_config->opt_string("printer_model");
+    const bool is_chromaset = boost::icontains(printer_model, "ChromaSet");
+    if (!is_chromaset && wxGetApp().getAgent() != nullptr) {
         auto agents = NetworkAgentFactory::get_registered_printer_agents();
 
         if (!agents.empty()) {
@@ -177,22 +181,9 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
                 def.enum_labels.push_back(agent.display_name);
             }
 
-            // Resolve selected agent: use config value if valid, otherwise fall back to default.
-            // Quadro keeps the custom CoPrint agent; ChromaSet uses Moonraker so
-            // the Device tab can open Mainsail/Fluidd. Do not overwrite a user choice.
             std::string selected_agent = m_config->opt_string("printer_agent");
-            const std::string printer_model = m_config->opt_string("printer_model");
-            if (selected_agent.empty()) {
-                if (boost::icontains(printer_model, "Quadro"))
-                    selected_agent = COPRINT_PRINTER_AGENT_ID;
-                else if (boost::icontains(printer_model, "ChromaSet"))
-                    selected_agent = "moonraker";
-            } else if (boost::icontains(printer_model, "ChromaSet") &&
-                       selected_agent == COPRINT_PRINTER_AGENT_ID) {
-                // Old ChromaSet profiles were locked to CoPrint; migrate to Moonraker.
-                selected_agent = "moonraker";
-                m_config->set_key_value("printer_agent", new ConfigOptionString(selected_agent));
-            }
+            if (selected_agent.empty() && boost::icontains(printer_model, "Quadro"))
+                selected_agent = COPRINT_PRINTER_AGENT_ID;
 
             auto it = std::find_if(agents.begin(), agents.end(), [&selected_agent](const auto& a) { return a.id == selected_agent; });
             if (it == agents.end()) {
@@ -205,7 +196,6 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
                 def.set_default_value(new ConfigOptionInt(static_cast<int>(default_idx)));
             }
 
-            // Create and append the option line
             auto agent_option = Option(def, "printer_agent");
             Line agent_line   = m_optgroup->create_single_option_line(agent_option);
             m_optgroup->append_line(agent_line);
@@ -505,8 +495,10 @@ void PhysicalPrinterDialog::build_printhost_settings(ConfigOptionsGroup* m_optgr
     // Always fill in the "printhost_port" combo box from the config and select it.
     {
         Choice* choice = dynamic_cast<Choice*>(m_optgroup->get_field("printhost_port"));
-        choice->set_values(std::vector<std::string>{ m_config->opt_string("printhost_port") });
-        choice->set_selection();
+        if (choice != nullptr) {
+            choice->set_values(std::vector<std::string>{ m_config->opt_string("printhost_port") });
+            choice->set_selection();
+        }
     }
 
     update();
@@ -574,6 +566,8 @@ void PhysicalPrinterDialog::update_webui()
 
 void PhysicalPrinterDialog::update_printhost_buttons()
 {
+    if (m_printhost_test_btn == nullptr || m_printhost_browse_btn == nullptr || m_printhost_logout_btn == nullptr)
+        return;
     std::unique_ptr<PrintHost> host(PrintHost::get_print_host(m_config));
     if (host) {
         m_printhost_test_btn->Enable(!m_config->opt_string("print_host").empty() && host->can_test());
@@ -663,7 +657,11 @@ void PhysicalPrinterDialog::update_preset_input() {
 
 void PhysicalPrinterDialog::update(bool printer_change)
 {
-    m_optgroup->reload_config();
+    if (m_optgroup == nullptr)
+        return;
+    // printer_agent is a string in the preset and a fake enum in this dialog.
+    // Reloading it as an enum calls getInt() on ConfigOptionString and crashes.
+    m_optgroup->reload_config_except("printer_agent");
 
     const PrinterTechnology tech = Preset::printer_technology(*m_config);
     // Only offer the host type selection for FFF, for SLA it's always the SL1 printer (at the moment)
@@ -671,6 +669,8 @@ void PhysicalPrinterDialog::update(bool printer_change)
     if (tech == ptFFF) {
         update_host_type(printer_change);
         const auto opt = m_config->option<ConfigOptionEnum<PrintHostType>>("host_type");
+        if (opt == nullptr)
+            return;
         m_optgroup->show_field("host_type");
 
         m_optgroup->enable_field("print_host");
@@ -683,7 +683,8 @@ void PhysicalPrinterDialog::update(bool printer_change)
 
         // hide pre-configured address, in case user switched to a different host type
         if (Field* printhost_field = m_optgroup->get_field("print_host"); printhost_field) {
-            if (wxTextCtrl* temp = dynamic_cast<TextCtrl*>(printhost_field)->text_ctrl(); temp) {
+            auto *host_ctrl = dynamic_cast<TextCtrl*>(printhost_field);
+            if (wxTextCtrl* temp = host_ctrl != nullptr ? host_ctrl->text_ctrl() : nullptr; temp) {
                 const auto current_host = temp->GetValue();
                 if (current_host == L"https://connect.prusa3d.com" ||
                     current_host == L"https://app.obico.io" ||
@@ -793,7 +794,8 @@ void PhysicalPrinterDialog::update(bool printer_change)
     }
 
     m_optgroup->show_field("printhost_port", supports_multiple_printers);
-    m_printhost_port_browse_btn->Show(supports_multiple_printers);
+    if (m_printhost_port_browse_btn)
+        m_printhost_port_browse_btn->Show(supports_multiple_printers);
 
     update_preset_input();
 
@@ -806,11 +808,21 @@ void PhysicalPrinterDialog::update(bool printer_change)
 
 void PhysicalPrinterDialog::update_host_type(bool printer_change)
 {
-    if (m_config == nullptr)
+    if (m_config == nullptr || m_optgroup == nullptr)
         return;
     Field* ht = m_optgroup->get_field("host_type");
+    Choice* choice = dynamic_cast<Choice*>(ht);
+    const ConfigOption *host_opt = m_config->option("host_type");
+    if (ht == nullptr || choice == nullptr || host_opt == nullptr)
+        return;
+
     wxArrayString types;
-    int last_in_conf = m_config->option("host_type")->getInt(); //  this is real position in last choice
+    int last_in_conf = 0;
+    try {
+        last_in_conf = host_opt->getInt();
+    } catch (const std::exception &) {
+        return;
+    }
 
     // Append localized enum_labels
     assert(ht->m_opt.enum_labels.size() == ht->m_opt.enum_values.size());
@@ -819,16 +831,21 @@ void PhysicalPrinterDialog::update_host_type(bool printer_change)
         types.Add(label);
     }
 
-    Choice* choice = dynamic_cast<Choice*>(ht);
     choice->set_values(types);
-    int index_in_choice = (printer_change ? std::clamp(last_in_conf - ((int)ht->m_opt.enum_values.size() - (int)types.size()), 0, (int)ht->m_opt.enum_values.size() - 1) : last_in_conf);
+    const int enum_count = static_cast<int>(ht->m_opt.enum_values.size());
+    if (enum_count <= 0)
+        return;
+    int index_in_choice = printer_change
+        ? std::clamp(last_in_conf - (enum_count - static_cast<int>(types.size())), 0, enum_count - 1)
+        : last_in_conf;
+    index_in_choice = std::clamp(index_in_choice, 0, enum_count - 1);
     choice->set_value(index_in_choice);
-    if ("prusalink" == ht->m_opt.enum_values.at(index_in_choice))
+    if ("prusalink" == ht->m_opt.enum_values[index_in_choice])
         m_config->set_key_value("host_type", new ConfigOptionEnum<PrintHostType>(htPrusaLink));
-    else if ("prusaconnect" == ht->m_opt.enum_values.at(index_in_choice))
+    else if ("prusaconnect" == ht->m_opt.enum_values[index_in_choice])
         m_config->set_key_value("host_type", new ConfigOptionEnum<PrintHostType>(htPrusaConnect));
     else {
-        int host_type = std::clamp(index_in_choice + ((int)ht->m_opt.enum_values.size() - (int)types.size()), 0, (int)ht->m_opt.enum_values.size() - 1);
+        int host_type = std::clamp(index_in_choice + (enum_count - static_cast<int>(types.size())), 0, enum_count - 1);
         PrintHostType type = static_cast<PrintHostType>(host_type);
         m_config->set_key_value("host_type", new ConfigOptionEnum<PrintHostType>(type));
     }
@@ -911,7 +928,12 @@ void PhysicalPrinterDialog::check_host_key_valid()
 
 void PhysicalPrinterDialog::OnOK(wxEvent& event)
 {
-    wxGetApp().get_tab(Preset::TYPE_PRINTER)->save_preset("", false, false, true, m_preset_name);
+    Tab *tab = wxGetApp().get_tab(Preset::TYPE_PRINTER);
+    if (tab == nullptr) {
+        event.Skip();
+        return;
+    }
+    tab->save_preset("", false, false, true, m_preset_name);
     event.Skip();
 
     // Defer printer agent switch to ensure preset save completes first

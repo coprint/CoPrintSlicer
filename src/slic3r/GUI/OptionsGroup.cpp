@@ -25,6 +25,19 @@ namespace Slic3r { namespace GUI {
 // BBS: new layout
 constexpr int titleWidth = 20;
 
+// PhysicalPrinterDialog shows printer_agent as a fake enum, but the option is a string.
+// Never call getInt() on a mismatched ConfigOption — it throws and takes the dialog (and app) down.
+static int enum_int_from_config(const DynamicPrintConfig &config, const std::string &opt_key)
+{
+    const ConfigOption *opt = config.option(opt_key);
+    if (opt == nullptr)
+        return 0;
+    const ConfigOptionType type = opt->type();
+    if (type == coEnum || type == coInt || type == coEnums)
+        return opt->getInt();
+    return 0;
+}
+
 const t_field& OptionsGroup::build_field(const Option& opt) {
     return build_field(opt.opt_id, opt.opt);
 }
@@ -741,9 +754,16 @@ void ConfigOptionsGroup::on_kill_focus(const std::string& opt_key)
 
 void ConfigOptionsGroup::reload_config()
 {
+	reload_config_except({});
+}
+
+void ConfigOptionsGroup::reload_config_except(const std::string& skip_opt_id)
+{
 	for (auto &kvp : m_opt_map) {
 		// Name of the option field (name of the configuration key, possibly suffixed with '#' and the index of a scalar inside a vector.
 		const std::string &opt_id    = kvp.first;
+		if (!skip_opt_id.empty() && opt_id == skip_opt_id)
+			continue;
 		// option key (may be scalar or vector)
 		const std::string &opt_key   = kvp.second.first;
 		// index in the vector option, zero for scalars
@@ -1083,7 +1103,7 @@ boost::any ConfigOptionsGroup::get_config_value(const DynamicPrintConfig& config
             ret = global_cfg.option("curr_bed_type")->getInt();
             break;
         }
-        ret = config.option(opt_key)->getInt();
+        ret = enum_int_from_config(config, opt_key);
         break;
     // BBS
     case coEnums:
@@ -1221,7 +1241,7 @@ boost::any ConfigOptionsGroup::get_config_value2(const DynamicPrintConfig& confi
         ret = config.opt_int(opt_key, idx);
         break;
     case coEnum:
-        ret = config.option(opt_key)->getInt();
+        ret = enum_int_from_config(config, opt_key);
         break;
     case coEnums:
         ret = config.opt_int(opt_key, idx);
