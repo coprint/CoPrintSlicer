@@ -175,15 +175,49 @@ struct PartialPrinter
 struct QueryContext
 {
     std::map<std::string, PartialPrinter> printers;
-    // Last A/AAAA for a hostname. Applied only to the service instance
-    // whose SRV points at that host in the same packet — never broadcast
-    // to every printer that happens to share a cloned hostname.
-    std::map<std::string, std::string>    host_ips;
     std::vector<std::string>              packet_services;
     std::unordered_set<std::string>       local_ips;
     CoprintMdnsDiscovery::UpdateFn        on_update;
     std::string                           sender_ip;
 };
+
+bool ip_owned_by_other(const QueryContext *ctx, const std::string &ip, const std::string &self_key)
+{
+    if (ctx == nullptr || ip.empty())
+        return false;
+    for (const auto &entry : ctx->printers) {
+        if (entry.first == self_key)
+            continue;
+        if (entry.second.printer.ip == ip)
+            return true;
+    }
+    return false;
+}
+
+bool is_clone_hostname(const std::string &hostname)
+{
+    const std::string host_key = service_key(hostname);
+    return host_key == "co-print.local" || host_key == "co-print" || host_key == "coprint.local";
+}
+
+bool hostname_shared(const QueryContext *ctx, const std::string &hostname)
+{
+    if (hostname.empty())
+        return false;
+    if (is_clone_hostname(hostname))
+        return true;
+    if (ctx == nullptr)
+        return false;
+    const std::string host_key = service_key(hostname);
+    int count = 0;
+    for (const auto &entry : ctx->printers) {
+        if (service_key(entry.second.hostname) == host_key) {
+            if (++count > 1)
+                return true;
+        }
+    }
+    return false;
+}
 
 CoprintMdnsPrinter make_complete(const PartialPrinter &partial)
 {
@@ -219,15 +253,16 @@ void publish_if_ready(QueryContext *ctx, PartialPrinter &partial, bool lost)
     ctx->on_update(snapshot, false);
 }
 
-void apply_ip_to_printer(PartialPrinter &partial, const std::string &ip, bool authoritative)
+void apply_ip_to_printer(PartialPrinter &partial, const std::string &ip, bool force)
 {
     if (ip.empty() || is_loopback_or_linklocal(ip))
         return;
-    if (partial.printer.ip.empty() || authoritative || prefer_ipv4(partial.printer.ip, ip)) {
-        partial.printer.ip = ip;
-        if (authoritative)
-            partial.ip_from_record = true;
-    }
+    if (partial.printer.ip == ip)
+        return;
+    if (!partial.printer.ip.empty() && !force && !prefer_ipv4(partial.printer.ip, ip))
+        return;
+    partial.printer.ip = ip;
+    partial.ip_from_record = true;
 }
 
 void remember_packet_service(QueryContext *ctx, const std::string &key)
@@ -251,42 +286,33 @@ void apply_packet_address(QueryContext *ctx, const std::string &hostname, const 
         return;
     if (ctx->local_ips.find(ip) != ctx->local_ips.end())
         return;
-    if (!hostname.empty()) {
-        auto &stored = ctx->host_ips[service_key(hostname)];
-        if (stored.empty() || prefer_ipv4(stored, ip))
-            stored = ip;
-    }
-
-    // Additional A/AAAA in a response belongs to the instance(s) in this datagram.
-    // One service in the packet: always bind the address to that instance, even if
-    // two printers cloned the same hostname.
-    if (ctx->packet_services.size() == 1) {
-        PartialPrinter &partial = ctx->printers[ctx->packet_services.front()];
-        apply_ip_to_printer(partial, ip, true);
-        publish_if_ready(ctx, partial, false);
+    // Cloned images share CO-PRINT.local. An A record for that hostname must
+    // never be broadcast to every instance — only the datagram sender / TXT
+    // may bind the address.
+    if (ctx->packet_services.size() != 1)
         return;
-    }
-
-    const std::string host_key = service_key(hostname);
-    for (const std::string &key : ctx->packet_services) {
-        auto it = ctx->printers.find(key);
-        if (it == ctx->printers.end())
-            continue;
-        if (!host_key.empty() && service_key(it->second.hostname) != host_key)
-            continue;
-        apply_ip_to_printer(it->second, ip, true);
-        publish_if_ready(ctx, it->second, false);
-    }
+    const std::string &key = ctx->packet_services.front();
+    if (ip_owned_by_other(ctx, ip, key))
+        return;
+    PartialPrinter &partial = ctx->printers[key];
+    if (hostname_shared(ctx, partial.hostname) || is_clone_hostname(hostname))
+        return;
+    apply_ip_to_printer(partial, ip, false);
+    publish_if_ready(ctx, partial, false);
 }
 
 void finish_packet(QueryContext *ctx)
 {
     if (ctx == nullptr || ctx->packet_services.size() != 1 || !sender_usable(ctx))
         return;
-    PartialPrinter &partial = ctx->printers[ctx->packet_services.front()];
-    if (partial.ip_from_record || !partial.printer.ip.empty())
+    const std::string &key = ctx->packet_services.front();
+    if (ip_owned_by_other(ctx, ctx->sender_ip, key))
         return;
-    apply_ip_to_printer(partial, ctx->sender_ip, false);
+    PartialPrinter &partial = ctx->printers[key];
+    const bool shared = hostname_shared(ctx, partial.hostname);
+    if (!partial.printer.ip.empty() && !shared && partial.printer.ip != ctx->sender_ip)
+        return;
+    apply_ip_to_printer(partial, ctx->sender_ip, shared || partial.printer.ip.empty());
     publish_if_ready(ctx, partial, false);
 }
 
@@ -351,13 +377,6 @@ int query_callback(int /*sock*/, const struct sockaddr *from, size_t /*addrlen*/
         if (srv.port > 0)
             partial.printer.port = srv.port;
         partial.hostname = from_mdns(srv.name);
-        // Bind a cached A/AAAA only to this instance, not every printer
-        // that reused the same hostname on a cloned image.
-        if (!partial.hostname.empty() && ctx->packet_services.size() == 1) {
-            auto host_it = ctx->host_ips.find(service_key(partial.hostname));
-            if (host_it != ctx->host_ips.end())
-                apply_ip_to_printer(partial, host_it->second, true);
-        }
         if (ttl > 0)
             publish_if_ready(ctx, partial, false);
         return 0;
@@ -398,8 +417,10 @@ int query_callback(int /*sock*/, const struct sockaddr *from, size_t /*addrlen*/
                 partial.printer.fw = txt_val;
             else if (txt_key == "name" || txt_key == "device_name")
                 partial.printer.name = txt_val;
-            else if (txt_key == "ip" || txt_key == "address" || txt_key == "ipv4")
-                apply_ip_to_printer(partial, txt_val, true);
+            else if (txt_key == "ip" || txt_key == "address" || txt_key == "ipv4") {
+                if (!ip_owned_by_other(ctx, txt_val, key))
+                    apply_ip_to_printer(partial, txt_val, partial.printer.ip.empty());
+            }
         }
         if (ttl > 0)
             publish_if_ready(ctx, partial, false);

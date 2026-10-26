@@ -2885,18 +2885,6 @@ bool PrinterWebView::finish_add_moonraker_printer(const BBLocalMachine &machine,
             machine_to_add.dev_name = detected_machine.dev_name;
         if (!detected_machine.printer_type.empty())
             machine_to_add.printer_type = detected_machine.printer_type;
-        if (!detected_machine.dev_id.empty()) {
-            std::string sanitized_id;
-            std::string unused;
-            if (sanitize_moonraker_address(detected_machine.dev_id, sanitized_id, unused))
-                machine_to_add.dev_id = sanitized_id;
-        }
-        if (!detected_machine.dev_ip.empty()) {
-            std::string sanitized_ip;
-            std::string unused;
-            if (sanitize_moonraker_address(detected_machine.dev_ip, sanitized_ip, unused))
-                machine_to_add.dev_ip = sanitized_ip;
-        }
     }
 
     // Final hostname / type fallback if probe only returned a Moonraker placeholder.
@@ -3023,19 +3011,15 @@ void PrinterWebView::add_moonraker_printer_async(const BBLocalMachine &machine, 
         BBLocalMachine detected;
         const MoonrakerProbeStatus probed = probe_moonraker_host(work.dev_ip, detected);
         if (probed == MoonrakerProbeStatus::Ok) {
-            if (!detected.dev_name.empty())
+            const bool keep_advertised_name = !work.dev_name.empty() &&
+                !is_placeholder_printer_name(work.dev_name) &&
+                !is_generic_coprint_product_name(work.dev_name);
+            if (!detected.dev_name.empty() && !keep_advertised_name)
                 resolved.dev_name = detected.dev_name;
             if (!detected.printer_type.empty())
                 resolved.printer_type = detected.printer_type;
-            std::string sanitized_detected;
-            std::string unused;
-            if (!detected.dev_ip.empty() && sanitize_moonraker_address(detected.dev_ip, sanitized_detected, unused)) {
-                resolved.dev_ip = sanitized_detected;
-                resolved.dev_id = sanitized_detected;
-            } else if (!detected.dev_id.empty() && sanitize_moonraker_address(detected.dev_id, sanitized_detected, unused)) {
-                resolved.dev_ip = sanitized_detected;
-                resolved.dev_id = sanitized_detected;
-            }
+            // Keep the address the user clicked / typed. Probe identity can
+            // resolve CO-PRINT.local to the other clone on the same LAN.
         }
 
         wxGetApp().CallAfter([this, lifetime, resolved, use_ssl, probed, finish_ui]() {

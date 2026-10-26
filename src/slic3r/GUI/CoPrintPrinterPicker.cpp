@@ -20,6 +20,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -383,37 +384,18 @@ bool machine_matches_mdns(const MachineObject* machine, const CoprintMdnsPrinter
 {
     if (machine == nullptr)
         return false;
+    // Identity is the advertised address / unique id. Matching by compact
+    // product name hid the other clone after Add saved the wrong IP.
+    const std::string discovered_ip = host_without_port(printer.ip);
+    if (!discovered_ip.empty() &&
+        (host_without_port(machine->get_dev_ip()) == discovered_ip ||
+         host_without_port(machine->get_dev_id()) == discovered_ip))
+        return true;
     if (!printer.id.empty() &&
+        printer.id != printer.ip &&
         (machine->get_dev_id() == printer.id || machine->get_dev_ip() == printer.id))
         return true;
-    // Do not treat a shared/wrong IP as identity when the advertisement
-    // has a stable id — two Quadros on the same LAN used to collapse here.
-    if (!printer.id.empty())
-        return false;
-    if (printer.ip.empty())
-        return false;
-    const std::string discovered = host_without_port(printer.ip);
-    if (discovered.empty())
-        return false;
-    return host_without_port(machine->get_dev_ip()) == discovered ||
-           host_without_port(machine->get_dev_id()) == discovered;
-}
-
-bool is_already_added_mdns_printer(const CoprintMdnsPrinter& printer)
-{
-    auto* dev = wxGetApp().getDeviceManager();
-    if (dev == nullptr)
-        return false;
-    auto matches_any = [&](const std::map<std::string, MachineObject*>& machines) {
-        for (const auto& entry : machines) {
-            if (machine_matches_mdns(entry.second, printer))
-                return true;
-        }
-        return false;
-    };
-    return matches_any(dev->get_my_machine_list()) ||
-           matches_any(dev->get_local_machinelist()) ||
-           machine_matches_mdns(dev->get_selected_machine(), printer);
+    return false;
 }
 
 bool same_machine(const MachineObject* a, const MachineObject* b)
@@ -1051,7 +1033,7 @@ void CoPrintPrinterPicker::on_mdns_printer(const CoprintMdnsPrinter& printer, bo
         if (it == m_mdns_printers.end())
             return;
         m_mdns_printers.erase(it, m_mdns_printers.end());
-        rebuild_auto_list(true);
+        schedule_rebuild_auto_list(true);
         return;
     }
 
@@ -1069,7 +1051,38 @@ void CoPrintPrinterPicker::on_mdns_printer(const CoprintMdnsPrinter& printer, bo
                 return a.name < b.name;
             return a.ip < b.ip;
         });
-    rebuild_auto_list(true);
+    schedule_rebuild_auto_list(true);
+}
+
+bool CoPrintPrinterPicker::is_already_added_mdns_printer(const CoprintMdnsPrinter& printer) const
+{
+    auto* dev = wxGetApp().getDeviceManager();
+    if (dev == nullptr)
+        return false;
+    auto matches_any = [&](const std::map<std::string, MachineObject*>& machines) {
+        for (const auto& entry : machines) {
+            if (machine_matches_mdns(entry.second, printer))
+                return true;
+        }
+        return false;
+    };
+    return matches_any(dev->get_my_machine_list()) ||
+           matches_any(dev->get_local_machinelist()) ||
+           machine_matches_mdns(dev->get_selected_machine(), printer);
+}
+
+void CoPrintPrinterPicker::schedule_rebuild_auto_list(bool force)
+{
+    m_auto_rebuild_force = m_auto_rebuild_force || force;
+    if (m_auto_rebuild_queued)
+        return;
+    m_auto_rebuild_queued = true;
+    CallAfter([this]() {
+        const bool force_rebuild = m_auto_rebuild_force;
+        m_auto_rebuild_queued = false;
+        m_auto_rebuild_force = false;
+        rebuild_auto_list(force_rebuild);
+    });
 }
 
 void CoPrintPrinterPicker::add_discovered_printer(const CoprintMdnsPrinter& printer)
@@ -1082,17 +1095,19 @@ void CoPrintPrinterPicker::add_discovered_printer(const CoprintMdnsPrinter& prin
     BBLocalMachine machine;
     // `_coprintagent._tcp` advertises the CoPrint agent HTTP port (werkzeug),
     // not Moonraker. Probe Moonraker on 7125, same as IP Connect.
+    // Keep the clicked card's address — never rebuild the list in this
+    // click handler; destroying the Add button mid wxEVT_LEFT_DOWN SIGILLs.
     machine.dev_ip = printer.ip;
-    machine.dev_id = printer.id.empty() ? machine.dev_ip : printer.id;
+    machine.dev_id = printer.ip;
     machine.dev_name = printer.name.empty() ? host_without_port(printer.ip) : printer.name;
     machine.printer_type = printer.model.empty() ? std::string("Moonraker") : printer.model;
 
     std::weak_ptr<int> lifetime = m_lifetime_token;
     m_backend->add_moonraker_printer_async(machine, false,
-        [this, lifetime](bool ok, const wxString&) {
-            if (lifetime.expired() || !ok)
+        [this, lifetime](bool, const wxString&) {
+            if (lifetime.expired())
                 return;
-            hide_add_printer();
+            schedule_rebuild_auto_list(true);
         });
 }
 
@@ -1305,7 +1320,7 @@ MachineObject* CoPrintPrinterPicker::live_machine(const std::string& dev_id) con
 void CoPrintPrinterPicker::refresh_list(bool force)
 {
     if (m_add_mode)
-        rebuild_auto_list(force);
+        schedule_rebuild_auto_list(force);
     if (!force) {
         const std::string signature = list_signature();
         if (signature == m_list_signature)

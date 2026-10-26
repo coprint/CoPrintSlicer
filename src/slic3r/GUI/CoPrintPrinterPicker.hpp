@@ -60,6 +60,7 @@ private:
     MachineObject* live_machine(const std::string& dev_id) const;
     void apply_add_tab(int idx);
     void rebuild_auto_list(bool force = false);
+    void schedule_rebuild_auto_list(bool force = false);
     void fill_auto_list_cards();
     void update_auto_scrollbar();
     int  auto_list_width() const;
@@ -70,6 +71,7 @@ private:
     void stop_mdns_discovery();
     void on_mdns_printer(const CoprintMdnsPrinter& printer, bool lost);
     void add_discovered_printer(const CoprintMdnsPrinter& printer);
+    bool is_already_added_mdns_printer(const CoprintMdnsPrinter& printer) const;
 
     PrinterWebView*         m_backend{nullptr};
     std::function<void()>   m_open_status;
@@ -100,6 +102,8 @@ private:
     bool                    m_rebuild_queued{false};
     bool                    m_filling_auto_cards{false};
     bool                    m_ip_add_busy{false};
+    bool                    m_auto_rebuild_queued{false};
+    bool                    m_auto_rebuild_force{false};
     int                     m_add_tab{0};
     std::shared_ptr<int>    m_lifetime_token{std::make_shared<int>(1)};
     std::string             m_list_signature;
