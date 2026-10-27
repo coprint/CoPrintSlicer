@@ -12,6 +12,7 @@
 		"6000"
 	],
 	"sparse_infill_pattern": "alignedrectilinear",
+	"wipe_tower_extra_spacing": "120%",
 	"compatible_printers": [
 		"Co Print Quadro 0.2 nozzle"
 	]

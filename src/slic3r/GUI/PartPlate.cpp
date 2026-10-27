@@ -4280,7 +4280,7 @@ void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool ini
 
     // Quadro: left edge with a small inset, Y = bed max − 50 mm (e.g. 300 → 250).
     // Skip brim/depth clamping — the rib-wall size estimate shoves the tower around.
-    constexpr float kQuadroMarginMm = 8.f;
+    constexpr float kQuadroMarginMm = 15.f;
     constexpr float kQuadroTowerMm  = 25.f;
     constexpr float kQuadroYFromMaxMm = 50.f;
     const float     place_w = is_quadro ? kQuadroTowerMm : static_cast<float>(wipe_tower_size(0));

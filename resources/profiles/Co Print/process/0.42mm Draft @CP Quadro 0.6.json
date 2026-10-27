@@ -43,6 +43,7 @@
     "travel_speed":  [
                          "700"
                      ],
+    "wipe_tower_extra_spacing": "120%",
     "compatible_printers":  [
                                 "Co Print Quadro 0.6 nozzle"
                             ],

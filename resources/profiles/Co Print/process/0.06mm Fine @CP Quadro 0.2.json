@@ -48,6 +48,7 @@
 		"700"
 	],
 	"wall_loops": "4",
+	"wipe_tower_extra_spacing": "120%",
 	"compatible_printers": [
 		"Co Print Quadro 0.2 nozzle"
 	]

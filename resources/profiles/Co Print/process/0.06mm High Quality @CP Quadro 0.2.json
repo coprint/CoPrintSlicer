@@ -18,6 +18,7 @@
 		"60"
 	],
 	"sparse_infill_pattern": "gyroid",
+	"wipe_tower_extra_spacing": "120%",
 	"compatible_printers": [
 		"Co Print Quadro 0.2 nozzle"
 	]
