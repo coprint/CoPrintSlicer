@@ -60,6 +60,7 @@ public:
     void load_url(wxString &url, wxString apikey);
     void set_webui_mode(bool webui);
     bool is_webui_mode() const { return m_webui_mode; }
+    void show_native_status_page();
     bool Show(bool show) override;
     void reload();
     void update_mode();

@@ -380,7 +380,7 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
         if (mode == DeviceUiMode::CoPrintLegacy)
             load_host_webui();
         else if (mode == DeviceUiMode::CoPrint)
-            refresh_coprint_printer_names();
+            restore_quadro_device_shell();
         return;
     }
 
@@ -452,6 +452,8 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
 
     if (legacy) {
         load_host_webui();
+    } else if (quadro) {
+        restore_quadro_device_shell();
     } else if (m_coprint_backend != nullptr) {
         m_coprint_backend->set_webui_mode(false);
     }
@@ -461,8 +463,6 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
             if (dev->get_selected_machine() == nullptr)
                 dev->load_last_machine();
         }
-        if (!legacy)
-            refresh_coprint_printer_names();
     }
 
     {
@@ -472,6 +472,50 @@ void MonitorPanel::configure_device_ui(DeviceUiMode mode)
     if (m_coprint_session_overlay != nullptr)
         m_coprint_session_overlay->layout_over_parent();
     update_all();
+}
+
+void MonitorPanel::restore_quadro_device_shell()
+{
+    if (!m_initialized)
+        return;
+    ensure_coprint_backend();
+    if (m_coprint_backend == nullptr)
+        return;
+
+    m_coprint_backend->set_webui_mode(false);
+    sync_coprint_page_hosting(true);
+    m_coprint_backend->show_native_status_page();
+
+    if (m_main_sizer != nullptr) {
+        if (m_tabpanel != nullptr)
+            m_main_sizer->Show(m_tabpanel, true);
+        m_main_sizer->Show(m_coprint_backend, false);
+    } else {
+        if (m_tabpanel != nullptr)
+            m_tabpanel->Show(true);
+        m_coprint_backend->Show(false);
+    }
+
+    if (m_coprint_printer_picker != nullptr)
+        m_coprint_printer_picker->Show(true);
+    if (m_coprint_status_panel != nullptr)
+        m_coprint_status_panel->Show(true);
+
+    if (m_tabpanel != nullptr && m_coprint_status_tab_index >= 0) {
+        m_tabpanel->SetSelection(m_coprint_status_tab_index);
+        if (m_coprint_printer_picker != nullptr)
+            m_coprint_printer_picker->set_status_page_active(true);
+    }
+
+    {
+        wxWindowUpdateLocker freeze(this);
+        Layout();
+    }
+    if (m_coprint_status_panel != nullptr)
+        m_coprint_status_panel->Layout();
+    if (m_coprint_session_overlay != nullptr)
+        m_coprint_session_overlay->layout_over_parent();
+    refresh_coprint_printer_names();
 }
 
 void MonitorPanel::show_coprint_status_page()
@@ -672,8 +716,13 @@ void MonitorPanel::force_refresh_device()
         return;
 
     if (is_coprint_device_ui()) {
-        if (m_coprint_backend != nullptr)
+        if (is_quadro_device_ui())
+            restore_quadro_device_shell();
+        if (m_coprint_backend != nullptr) {
             m_coprint_backend->invalidate_device_cache_and_refresh();
+            if (!is_quadro_device_ui())
+                m_coprint_backend->reload();
+        }
         if (is_quadro_device_ui()) {
             if (m_coprint_print_models_page != nullptr)
                 m_coprint_print_models_page->invalidate_media_cache_and_reload();
@@ -684,7 +733,6 @@ void MonitorPanel::force_refresh_device()
                 m_coprint_printer_picker->update_selection();
             }
         }
-        refresh_coprint_printer_names();
         return;
     }
 
@@ -834,6 +882,21 @@ bool MonitorPanel::Show(bool show)
         m_refresh_timer->SetOwner(this);
         m_refresh_timer->Start(REFRESH_INTERVAL);
         if (update_flag) { update_all(); }
+        if (is_quadro_device_ui()) {
+            wxPanel *host = m_coprint_backend != nullptr ? m_coprint_backend->coprint_status_host() : nullptr;
+            const bool tabpanel_hidden = m_tabpanel != nullptr && !m_tabpanel->IsShown();
+            const bool host_hidden = host == nullptr || !host->IsShown();
+            const bool host_empty = host != nullptr && host->GetClientSize().GetWidth() <= 1;
+            const bool on_media = m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_print_models_page;
+            const bool on_system = m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_update_page;
+            if (tabpanel_hidden || host_hidden || (host_empty && !on_media && !on_system))
+                restore_quadro_device_shell();
+            else {
+                Layout();
+                if (m_coprint_status_panel != nullptr)
+                    m_coprint_status_panel->Layout();
+            }
+        }
         if (is_coprint_device_ui() && m_coprint_controller &&
             (is_quadro_device_ui() ? (m_tabpanel != nullptr && m_tabpanel->GetCurrentPage() == m_coprint_status_panel)
                                    : true))

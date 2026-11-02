@@ -2642,6 +2642,20 @@ void PrinterWebView::set_webui_mode(bool webui)
     Layout();
 }
 
+void PrinterWebView::show_native_status_page()
+{
+    if (m_destroying)
+        return;
+    set_webui_mode(false);
+    select_tab(PrinterWebViewTab::Status);
+    if (m_status_page != nullptr) {
+        m_status_page->Show();
+        if (wxWindow *parent = m_status_page->GetParent())
+            parent->Layout();
+    }
+    Layout();
+}
+
 void PrinterWebView::load_url(wxString& url, wxString apikey)
 {
     m_apikey = apikey;
@@ -9438,7 +9452,8 @@ void PrinterWebView::invalidate_device_cache_and_refresh()
     m_sidebar_printer_list_signature.clear();
     rebuild_sidebar_printer_list();
 
-    const bool dashboard_visible = m_dashboard_page != nullptr && m_dashboard_page->IsShownOnScreen();
+    const bool dashboard_visible = m_dashboard_page != nullptr &&
+        (m_status_page == nullptr || m_status_page->IsShown());
     refresh_moonraker_status_from_selected_machine();
 
     if (dashboard_visible) {

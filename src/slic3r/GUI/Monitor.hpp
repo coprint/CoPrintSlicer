@@ -154,6 +154,7 @@ public:
     void init_timer();
     void init_tabpanel();
     void configure_device_ui(DeviceUiMode mode);
+    void restore_quadro_device_shell();
     void ensure_coprint_backend();
     void sync_coprint_page_hosting(bool embedded);
     void load_host_webui();
