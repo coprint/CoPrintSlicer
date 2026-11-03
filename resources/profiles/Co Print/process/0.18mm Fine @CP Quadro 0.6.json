@@ -29,7 +29,7 @@
                                     ],
     "layer_height":  "0.18",
     "default_acceleration":  [
-                                 "6000"
+                                 "7000"
                              ],
     "outer_wall_speed":  [
                              "200"
@@ -53,9 +53,18 @@
     "top_color_penetration_layers":  "5",
     "top_shell_thickness":  "0.9",
     "travel_speed":  [
-                         "700"
+                         "300"
                      ],
     "wipe_tower_extra_spacing": "120%",
+    "outer_wall_acceleration": "2000",
+    "inner_wall_acceleration": "7000",
+    "bridge_acceleration": "125%",
+    "sparse_infill_acceleration": "100%",
+    "internal_solid_infill_acceleration": "100%",
+    "initial_layer_acceleration": "500",
+    "initial_layer_travel_acceleration": "1000",
+    "top_surface_acceleration": "2000",
+    "travel_acceleration": "7000",
     "compatible_printers":  [
                                 "Co Print Quadro 0.6 nozzle"
                             ]

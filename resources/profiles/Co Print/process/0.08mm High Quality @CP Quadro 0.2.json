@@ -12,7 +12,7 @@
 	"bottom_color_penetration_layers": "5",
 	"bridge_flow": "1",
 	"default_acceleration": [
-		"4000"
+		"7000"
 	],
 	"elefant_foot_compensation": "0.075",
 	"initial_layer_infill_speed": [
@@ -52,10 +52,18 @@
 		"150"
 	],
 	"travel_speed": [
-		"700"
+		"300"
 	],
 	"wall_loops": "4",
 	"wipe_tower_extra_spacing": "120%",
+	"inner_wall_acceleration": "7000",
+	"bridge_acceleration": "125%",
+	"sparse_infill_acceleration": "100%",
+	"internal_solid_infill_acceleration": "100%",
+	"initial_layer_acceleration": "500",
+	"initial_layer_travel_acceleration": "1000",
+	"top_surface_acceleration": "2000",
+	"travel_acceleration": "7000",
 	"compatible_printers": [
 		"Co Print Quadro 0.2 nozzle"
 	]

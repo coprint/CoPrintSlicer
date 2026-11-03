@@ -12,6 +12,17 @@
 	"support_bottom_z_distance": "0.1",
 	"support_top_z_distance": "0.1",
 	"wipe_tower_extra_spacing": "120%",
+	"default_acceleration": "7000",
+	"outer_wall_acceleration": "2000",
+	"inner_wall_acceleration": "7000",
+	"bridge_acceleration": "125%",
+	"sparse_infill_acceleration": "100%",
+	"internal_solid_infill_acceleration": "100%",
+	"initial_layer_acceleration": "500",
+	"initial_layer_travel_acceleration": "1000",
+	"top_surface_acceleration": "2000",
+	"travel_acceleration": "7000",
+	"travel_speed": "300",
 	"compatible_printers": [
 		"Co Print Quadro 0.2 nozzle"
 	]
